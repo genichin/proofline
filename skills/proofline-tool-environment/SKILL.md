@@ -1,7 +1,7 @@
 ---
 name: proofline-tool-environment
 description: Use when installing or verifying one shared user-level ProofLine uv tool environment without modifying an application project's dependencies or virtual environment.
-version: 1.2.0
+version: 1.3.0
 author: ProofLine
 license: MIT
 metadata:
@@ -40,6 +40,20 @@ Main과 모든 Line worktree 및 모든 적용 project의 ProofLine governance c
 6. Credential, token과 connection string 값을 출력하거나 보존하지 않는다. 필요한 값은 `[REDACTED]`로 표시한다.
 
 ## Bootstrap
+
+Official v0.2.2 fresh install의 기본 사용자 경로는 exact immutable tag의 installer다. Script가 wheel과 `SHA256SUMS`를 temporary directory에서 strict 검증한 뒤 non-editable user-level uv tool로 설치한다.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.2.2/install.sh | sh
+```
+
+Existing installation을 명시적으로 verified wheel로 교체할 때만 force를 전달한다.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.2.2/install.sh | sh -s -- --force
+```
+
+다음 v0.1.0 절차는 installer를 사용하지 않는 manual strict verification 예시로 유지한다.
 
 Official `v0.1.0` fresh install은 적용 project 밖의 unique temporary directory에서 asset bytes를 먼저 검증한다.
 
@@ -110,7 +124,7 @@ Git working tree status
 
 GitHub Issue #9와 Line 0008에서 승인한 explicit maintenance boundary다.
 
-Official `v0.2.1` 이상에서는 다음을 사용한다.
+Official `v0.2.1` 이상에서는 다음을 사용한다. 현재 stable target은 v0.2.2다.
 
 ```bash
 proofline update --check

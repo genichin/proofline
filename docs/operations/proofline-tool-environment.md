@@ -15,7 +15,23 @@ Worktree마다 ProofLine 전용 `.venv`를 생성하지 않는다. Application p
 
 ## 현재 설치 계약
 
-공식 stable channel은 GitHub Release `v0.1.0`의 checksum-verified wheel이다. Fresh installation은 wheel과 `SHA256SUMS`를 unique temporary directory에 내려받아 검증한 뒤 non-editable 방식으로 수행한다.
+Official v0.2.2 fresh install의 기본 UX는 exact immutable tag installer 한 줄이다.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.2.2/install.sh | sh
+```
+
+Installer는 temporary directory에서 v0.2.2 wheel·`SHA256SUMS`를 내려받아 strict 검증하고 non-editable user-level uv tool로 설치한다. Existing installation은 자동 overwrite하지 않으며 명시적으로 교체할 때만 다음을 사용한다.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.2.2/install.sh | sh -s -- --force
+```
+
+Installer는 tagged source에 포함되고 GitHub Release upload asset allowlist는 updater 호환성을 위해 wheel·`SHA256SUMS` 두 개를 유지한다.
+
+### Manual strict verification
+
+다음 v0.1.0 절차는 installer를 사용하지 않는 기존 manual workflow 예시다. 실제 설치 version에는 selected stable tag와 wheel filename을 사용한다.
 
 ```bash
 gh release download v0.1.0 \
