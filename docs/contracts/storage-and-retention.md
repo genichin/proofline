@@ -8,6 +8,8 @@ ProofLine이 관리하는 manifest, contracts, templates와 skills는 user home�
 
 Project `.proofline/`은 Lines와 criteria의 canonical artifact root로만 사용한다. `proofline init`은 user-level harness만 초기화하며 current project의 `.proofline/`, `proofline.yaml` 또는 Git state를 변경하지 않는다.
 
+`proofline update`는 selected checksum-verified official wheel의 CLI/package와 해당 wheel에 포함된 user-level harness resource를 같은 target version으로 함께 갱신한다. Existing `~/.proofline/`은 current manifest의 exact managed path와 checksum에 일치해야 하며, user modification, unexpected entry, malformed manifest 또는 symlink가 있으면 project와 user resource를 변경하지 않고 실패한다. `proofline update --check`는 package와 harness 상태를 읽기만 하고 staging, download, install 또는 filesystem mutation을 수행하지 않는다.
+
 ## 정본과 파생 산출물
 
 [산출물 디렉터리 구조](../artifact-layout.md)가 canonical path로 정의한 `.proofline/` 산출물은 Git으로 추적하는 정본이다.

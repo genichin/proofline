@@ -12,6 +12,9 @@ import sys
 import tempfile
 from typing import Any, Protocol
 from urllib import request
+from urllib.parse import unquote, urlparse
+
+from proofline import home_writer
 
 
 REPOSITORY = "genichin/proofline"
@@ -166,6 +169,66 @@ def _uv_tool_paths(uv: str, cwd: Path) -> tuple[Path, Path]:
     return Path(tool.stdout.strip()).resolve(), Path(bins.stdout.strip()).resolve()
 
 
+def packaged_home_payload() -> dict[str, bytes]:
+    return home_writer._payload()
+
+
+def _download_verified(release: Release, root: Path) -> Path:
+    directory = root / release.version
+    directory.mkdir()
+    wheel = directory / release.wheel_name
+    checksum = directory / "SHA256SUMS"
+    _download(release.checksum_url, checksum)
+    _download(release.wheel_url, wheel)
+    expected_digest = parse_checksum(checksum.read_text(), release.wheel_name)
+    actual_digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    if not _SHA256.fullmatch(actual_digest) or actual_digest != expected_digest:
+        raise UpdateError("wheel checksum mismatch")
+    return wheel
+
+
+def _source_rollback_path(distribution: DistributionLike) -> Path:
+    raw = distribution.read_text("direct_url.json")
+    try:
+        value = json.loads(raw or "")
+        url = value["url"]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise UpdateError("source rollback provenance is invalid") from exc
+    parsed = urlparse(url)
+    if parsed.scheme != "file" or parsed.netloc not in {"", "localhost"}:
+        raise UpdateError("source rollback path is not local")
+    path = Path(unquote(parsed.path))
+    if not path.is_dir():
+        raise UpdateError("source rollback path is unavailable")
+    return path
+
+
+def _install(uv: str, artifact: Path, *, cwd: Path) -> None:
+    installed = _run([uv, "tool", "install", "--force", "--no-config", str(artifact)], cwd=cwd)
+    if installed.returncode:
+        raise UpdateError("uv tool installation failed")
+
+
+def _verify_install(version: str, expected_env: Path, executable: Path, *, cwd: Path) -> None:
+    tool_python = expected_env / "bin" / "python"
+    probe = _run(
+        [
+            str(tool_python),
+            "-I",
+            "-c",
+            "from importlib.metadata import version; from pathlib import Path; import proofline; "
+            "print(version('proofline')); print(Path(proofline.__file__).resolve())",
+        ],
+        cwd=cwd,
+    )
+    cli = _run([str(executable), "--no-home-reconcile", "--version"], cwd=cwd)
+    lines = probe.stdout.splitlines()
+    if probe.returncode or len(lines) != 2 or lines[0] != version or "site-packages" not in Path(lines[1]).parts:
+        raise UpdateError("installed package post-verification failed")
+    if cli.returncode or cli.stdout.strip() != f"proofline {version}":
+        raise UpdateError("installed console post-verification failed")
+
+
 def is_uv_tool_process(tool_dir: Path, *, prefix: Path | None = None) -> bool:
     active_prefix = Path(sys.prefix) if prefix is None else prefix
     return active_prefix.absolute() == (tool_dir / "proofline").absolute()
@@ -173,10 +236,39 @@ def is_uv_tool_process(tool_dir: Path, *, prefix: Path | None = None) -> bool:
 
 def run_update(*, check: bool = False, version: str | None = None, adopt: bool = False) -> UpdateResult:
     current = metadata.version("proofline")
-    provenance = detect_provenance(metadata.distribution("proofline"))
+    distribution = metadata.distribution("proofline")
+    provenance = detect_provenance(distribution)
     release = discover_release(version)
     decision = decide_update(current, release.version, provenance, check=check, adopt=adopt)
+    current_payload = packaged_home_payload()
+    try:
+        home_state = home_writer.preflight_home(current_payload)
+    except home_writer.HomeInitError as exc:
+        raise UpdateError(f"home preflight failed: {exc}") from exc
+
+    if decision.status == "adoption-required":
+        return decision
+
+    if home_state == "absent" and not decision.mutate:
+        if check:
+            return UpdateResult(current, release.version, provenance, "update-available", 0, False)
+        if current == release.version:
+            decision = UpdateResult(current, release.version, provenance, "updated", 0, True)
     if not decision.mutate:
+        return decision
+
+    package_mutation = current != release.version or provenance == "source"
+    if not package_mutation:
+        try:
+            transaction = home_writer.prepare_home_update(
+                current_payload,
+                current_payload=None if home_state == "absent" else current_payload,
+            )
+            transaction.commit()
+            home_writer.verify_home(current_payload)
+            transaction.finalize()
+        except home_writer.HomeInitError as exc:
+            raise UpdateError(f"home update failed: {exc}") from exc
         return decision
 
     uv = shutil.which("uv")
@@ -190,35 +282,58 @@ def run_update(*, check: bool = False, version: str | None = None, adopt: bool =
         if not is_uv_tool_process(tool_dir):
             raise UpdateError("current process is not owned by the ProofLine uv tool environment")
 
-        wheel = temp / release.wheel_name
-        checksum = temp / "SHA256SUMS"
-        _download(release.checksum_url, checksum)
-        _download(release.wheel_url, wheel)
-        expected_digest = parse_checksum(checksum.read_text(), release.wheel_name)
-        actual_digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
-        if not _SHA256.fullmatch(actual_digest) or actual_digest != expected_digest:
-            raise UpdateError("wheel checksum mismatch")
+        wheel = _download_verified(release, temp)
+        try:
+            target_payload = home_writer.payload_from_wheel(wheel, release.version)
+            transaction = home_writer.prepare_home_update(
+                target_payload,
+                current_payload=None if home_state == "absent" else current_payload,
+            )
+        except home_writer.HomeInitError as exc:
+            raise UpdateError(f"target home preparation failed: {exc}") from exc
 
-        installed = _run([uv, "tool", "install", "--force", "--no-config", str(wheel)], cwd=temp)
-        if installed.returncode:
-            raise UpdateError("uv tool installation failed")
+        if provenance == "archive":
+            rollback_release = discover_release(current)
+            rollback_artifact = _download_verified(rollback_release, temp)
+        else:
+            rollback_artifact = _source_rollback_path(distribution)
 
-        tool_python = expected_env / "bin" / "python"
         executable = bin_dir / "proofline"
-        probe = _run(
-            [
-                str(tool_python),
-                "-I",
-                "-c",
-                "from importlib.metadata import version; from pathlib import Path; import proofline; "
-                "print(version('proofline')); print(Path(proofline.__file__).resolve())",
-            ],
-            cwd=temp,
-        )
-        cli = _run([str(executable), "--version"], cwd=temp)
-        lines = probe.stdout.splitlines()
-        if probe.returncode or len(lines) != 2 or lines[0] != release.version or "site-packages" not in Path(lines[1]).parts:
-            raise UpdateError("installed package post-verification failed")
-        if cli.returncode or cli.stdout.strip() != f"proofline {release.version}":
-            raise UpdateError("installed console post-verification failed")
+        target_installed = False
+        try:
+            _install(uv, wheel, cwd=temp)
+            target_installed = True
+            _verify_install(release.version, expected_env, executable, cwd=temp)
+            transaction.commit()
+            home_writer.verify_home(target_payload)
+        except Exception as exc:
+            failures: list[str] = []
+            home_rolled_back = False
+            try:
+                transaction.rollback()
+                home_rolled_back = True
+            except Exception as rollback_exc:
+                failures.append(f"home rollback failed: {rollback_exc}")
+            if target_installed and home_rolled_back:
+                try:
+                    _install(uv, rollback_artifact, cwd=temp)
+                    _verify_install(current, expected_env, executable, cwd=temp)
+                except Exception as rollback_exc:
+                    failures.append(f"package rollback failed: {rollback_exc}")
+            elif target_installed:
+                try:
+                    _verify_install(release.version, expected_env, executable, cwd=temp)
+                    home_writer.verify_home(target_payload)
+                except Exception as coherence_exc:
+                    failures.append(f"target coherence verification failed: {coherence_exc}")
+            detail = f"update transaction failed: {exc}"
+            if failures:
+                detail += "; " + "; ".join(failures)
+            raise UpdateError(detail) from exc
+        try:
+            transaction.finalize()
+        except Exception as exc:
+            raise UpdateError(
+                f"update committed but old harness cleanup failed: {exc}"
+            ) from exc
     return decision

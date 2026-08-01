@@ -1,20 +1,45 @@
 import argparse
 from importlib import metadata
+import os
 from pathlib import Path
 import sys
 
-from proofline.home_writer import HomeInitError, initialize_home
+from proofline.home_writer import HomeInitError, initialize_home, reconcile_existing_home
 from proofline.line_writer import LineInitError, initialize_line
 from proofline.updater import UpdateError, UpdateResult, run_update
 from proofline.validator import validate_project
 
 
+def _is_update_postverification() -> bool:
+    try:
+        parent_cmdline = Path("/proc") / str(os.getppid()) / "cmdline"
+        arguments = parent_cmdline.read_bytes().split(b"\0")
+    except OSError:
+        return False
+    is_proofline = any(
+        Path(os.fsdecode(value)).name == "proofline" for value in arguments if value
+    )
+    return is_proofline and b"update" in arguments
+
+
+class _VersionAction(argparse.Action):
+    def __call__(self, parser, namespace, values, option_string=None) -> None:
+        if not getattr(namespace, "no_home_reconcile", False) and _is_update_postverification():
+            try:
+                reconcile_existing_home()
+            except HomeInitError as exc:
+                parser.exit(1, f"version failed: {exc}\n")
+        print(f"{parser.prog} {metadata.version('proofline')}")
+        parser.exit(0)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="proofline")
+    parser.add_argument("--no-home-reconcile", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--version",
-        action="version",
-        version=f"%(prog)s {metadata.version('proofline')}",
+        action=_VersionAction,
+        nargs=0,
     )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("validate", help="Validate a ProofLine project")
