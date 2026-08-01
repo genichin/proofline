@@ -15,6 +15,6 @@ ProofLine은 AI 에이전트, 특히 Hermes Agent의 소프트웨어 개발을 �
 
 - 프로젝트별 ProofLine 설정은 프로젝트 루트의 `proofline.yaml`에 기록한다.
 - ProofLine을 적용한 프로젝트의 영속 산출물은 기본적으로 프로젝트 루트의 `.proofline/` 아래에 저장한다.
-- 저장 위치, 디렉터리별 역할, 추적 정책의 기준은 [`docs/artifact-layout.md`](docs/artifact-layout.md)이다.
+- ProofLine contract의 진입점은 [`docs/artifact-layout.md`](docs/artifact-layout.md)이며, 작업별 상세 계약은 이 문서의 탐색표를 따라 선택적으로 읽는다.
 - 구현 코드, 스킬, 템플릿에서 경로를 정할 때 문서와 다른 구조를 임의로 만들지 않는다.
 - `temp/` 아래 자료는 참고용이며 ProofLine의 정본 산출물이나 검증 입력으로 취급하지 않는다.
