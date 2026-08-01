@@ -27,6 +27,30 @@ def test_update_cli_prints_contract_status(monkeypatch: pytest.MonkeyPatch, caps
     )
 
 
+def test_update_cli_does_not_require_a_live_current_directory(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def deleted_cwd() -> None:
+        raise FileNotFoundError(2, "No such file or directory")
+
+    monkeypatch.setattr(cli.Path, "cwd", deleted_cwd)
+    monkeypatch.setattr(
+        cli,
+        "run_update",
+        lambda **kwargs: cli.UpdateResult(
+            current="0.4.1",
+            target="0.4.1",
+            provenance="archive",
+            status="already-current",
+            exit_code=0,
+            mutate=False,
+        ),
+    )
+
+    assert cli.main(["update"]) == 0
+    assert capsys.readouterr().out.endswith("status: already-current\n")
+
+
 def test_update_cli_reports_operational_failure(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(cli, "run_update", lambda **kwargs: (_ for _ in ()).throw(cli.UpdateError("checksum mismatch")))
     assert cli.main(["update"]) == 1

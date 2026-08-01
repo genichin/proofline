@@ -70,8 +70,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    root = Path.cwd()
     if args.command == "validate":
+        root = Path.cwd()
         errors = validate_project(root)
         for error in errors:
             print(f"{error.path}: {error.code}: {error.message}", file=sys.stderr)
@@ -105,6 +105,7 @@ def main(argv: list[str] | None = None) -> int:
         return result.exit_code
 
     if args.command == "line" and args.line_command == "init":
+        root = Path.cwd()
         try:
             result = initialize_line(
                 root, args.line_id, args.title, dry_run=args.dry_run

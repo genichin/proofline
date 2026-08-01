@@ -17,7 +17,7 @@ README = ROOT / "README.md"
 def make_fixture(tmp_path: Path) -> tuple[Path, Path]:
     assets = tmp_path / "assets"
     assets.mkdir()
-    wheel = assets / "proofline-0.4.0-py3-none-any.whl"
+    wheel = assets / "proofline-0.4.1-py3-none-any.whl"
     wheel.write_bytes(b"fixture-wheel")
     digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
     (assets / "SHA256SUMS").write_text(f"{digest}  {wheel.name}\n")
@@ -32,7 +32,7 @@ def make_fixture(tmp_path: Path) -> tuple[Path, Path]:
         "done\n"
         "case \"$out\" in\n"
         "  */SHA256SUMS) cp \"$FAKE_ASSETS/SHA256SUMS\" \"$out\" ;;\n"
-        "  *) cp \"$FAKE_ASSETS/proofline-0.4.0-py3-none-any.whl\" \"$out\" ;;\n"
+        "  *) cp \"$FAKE_ASSETS/proofline-0.4.1-py3-none-any.whl\" \"$out\" ;;\n"
         "esac\n"
     )
     (fake_bin / "uv").write_text(
@@ -42,7 +42,7 @@ def make_fixture(tmp_path: Path) -> tuple[Path, Path]:
         "if [ \"$1 $2\" = 'tool install' ]; then\n"
         "  printf '%s\\n' \"$*\" >> \"$FAKE_UV_LOG\"\n"
         "  mkdir -p \"$FAKE_TOOL_BIN\"\n"
-        "  printf '%s\\n' '#!/bin/sh' 'echo proofline 0.4.0' > \"$FAKE_TOOL_BIN/proofline\"\n"
+        "  printf '%s\\n' '#!/bin/sh' 'echo proofline 0.4.1' > \"$FAKE_TOOL_BIN/proofline\"\n"
         "  chmod +x \"$FAKE_TOOL_BIN/proofline\"\n"
         "  exit 0\n"
         "fi\n"
@@ -89,7 +89,7 @@ def test_installer_is_valid_posix_shell() -> None:
 def test_installer_fresh_install_verifies_and_uses_uv_tool(tmp_path: Path) -> None:
     completed, env = run_installer(tmp_path)
     assert completed.returncode == 0, completed.stderr
-    assert "ProofLine 0.4.0 installed" in completed.stdout
+    assert "ProofLine 0.4.1 installed" in completed.stdout
     assert Path(env["FAKE_UV_LOG"]).read_text().strip().startswith("tool install --no-config ")
     assert not any(Path(env["TMPDIR"]).iterdir())
 
@@ -114,7 +114,7 @@ def test_installer_refuses_existing_proofline_before_download_or_uv_install(tmp_
 
 def test_installer_wrong_checksum_never_invokes_uv(tmp_path: Path) -> None:
     assets, fake_bin = make_fixture(tmp_path)
-    (assets / "SHA256SUMS").write_text("0" * 64 + "  proofline-0.4.0-py3-none-any.whl\n")
+    (assets / "SHA256SUMS").write_text("0" * 64 + "  proofline-0.4.1-py3-none-any.whl\n")
     env = installer_env(tmp_path, fake_bin, assets)
     completed = subprocess.run(["sh", str(INSTALLER)], cwd=tmp_path, env=env, text=True, capture_output=True)
     assert completed.returncode != 0
@@ -145,7 +145,7 @@ def test_installer_fails_before_download_when_uv_is_missing(tmp_path: Path) -> N
 
 def test_readme_leads_with_versioned_one_line_installer_and_keeps_manual_verification() -> None:
     text = README.read_text()
-    command = "curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.4.0/install.sh | sh"
+    command = "curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.4.1/install.sh | sh"
     assert command in text
     assert text.index(command) < text.index("sha256sum --check --strict SHA256SUMS")
     assert "sh -s -- --force" in text
