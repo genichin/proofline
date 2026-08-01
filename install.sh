@@ -36,6 +36,11 @@ for command in curl sha256sum uv mktemp; do
     command -v "$command" >/dev/null 2>&1 || fail "required command not found: $command"
 done
 
+TOOL_DIR="$(uv tool dir)" || fail "cannot resolve uv tool directory"
+if [ "$FORCE" = "false" ] && [ -d "${TOOL_DIR}/proofline" ]; then
+    fail "ProofLine is already installed; rerun with --force to replace it explicitly"
+fi
+
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/proofline-install.XXXXXX")"
 cleanup() {
     rm -rf "$TEMP_DIR"

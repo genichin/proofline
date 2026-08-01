@@ -37,6 +37,7 @@ def make_fixture(tmp_path: Path) -> tuple[Path, Path]:
     )
     (fake_bin / "uv").write_text(
         "#!/bin/sh\n"
+        "if [ \"$1 $2\" = 'tool dir' ] && [ \"$#\" -eq 2 ]; then echo \"$FAKE_TOOL_DIR\"; exit 0; fi\n"
         "if [ \"$1 $2 $3\" = 'tool dir --bin' ]; then echo \"$FAKE_TOOL_BIN\"; exit 0; fi\n"
         "if [ \"$1 $2\" = 'tool install' ]; then\n"
         "  printf '%s\\n' \"$*\" >> \"$FAKE_UV_LOG\"\n"
@@ -58,6 +59,7 @@ def installer_env(tmp_path: Path, fake_bin: Path, assets: Path) -> dict[str, str
         PATH=f"{fake_bin}:{env['PATH']}",
         FAKE_ASSETS=str(assets),
         FAKE_TOOL_BIN=str(tmp_path / "tool-bin"),
+        FAKE_TOOL_DIR=str(tmp_path / "tools"),
         FAKE_UV_LOG=str(tmp_path / "uv.log"),
         TMPDIR=str(tmp_path / "tmp"),
     )
@@ -96,6 +98,18 @@ def test_installer_force_is_explicit_in_uv_command(tmp_path: Path) -> None:
     completed, env = run_installer(tmp_path, "--force")
     assert completed.returncode == 0, completed.stderr
     assert Path(env["FAKE_UV_LOG"]).read_text().strip().startswith("tool install --force --no-config ")
+
+
+def test_installer_refuses_existing_proofline_before_download_or_uv_install(tmp_path: Path) -> None:
+    assets, fake_bin = make_fixture(tmp_path)
+    env = installer_env(tmp_path, fake_bin, assets)
+    (Path(env["FAKE_TOOL_DIR"]) / "proofline").mkdir(parents=True)
+    completed = subprocess.run(["sh", str(INSTALLER)], cwd=tmp_path, env=env, text=True, capture_output=True)
+    assert completed.returncode != 0
+    assert "already installed" in completed.stderr
+    assert "--force" in completed.stderr
+    assert not Path(env["FAKE_UV_LOG"]).exists()
+    assert not any(Path(env["TMPDIR"]).iterdir())
 
 
 def test_installer_wrong_checksum_never_invokes_uv(tmp_path: Path) -> None:
