@@ -138,8 +138,9 @@ def test_repository_ignores_worktree_container() -> None:
     assert "/.worktrees/" in patterns
 
 
-def test_worktree_script_creates_exact_baseline_without_changing_main(tmp_path: Path) -> None:
+def test_worktree_script_accepts_direct_approval_without_draft_parent(tmp_path: Path) -> None:
     repo, approval = make_approved_repo(tmp_path)
+    assert len(git(repo, "rev-list", "--parents", "-n", "1", approval).stdout.split()) == 1
 
     result = run_script(repo, approval)
 

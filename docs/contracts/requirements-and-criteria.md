@@ -149,14 +149,17 @@ draft ───────→ approved
 
 규칙은 다음과 같다.
 
-- `draft → approved` transition을 기록한 main governance commit이 specification baseline을 생성한다.
+- 사용자가 REQ와 대상 AC exact bytes를 명시적으로 승인한 commit이 specification baseline을 생성한다.
+- `draft → approved`와 대상 AC의 status-only transition을 별도 main governance commit으로 기록하는 것은 권장 감사 경로이다.
+- Prior draft commit 없이 REQ를 `approved`, create 대상 신규 AC를 `active`로 처음 기록한 direct approval commit도 유효한 specification baseline이다.
+- Draft transition 존재 여부는 선택적인 `transition evidence`이며 `recorded` 또는 `not recorded`로 진단할 수 있다. `not recorded`는 approval이나 implementation을 차단하지 않는다.
 - `approved` REQ의 의미 또는 대상 AC의 PASS/FAIL 결과를 바꾸려면 영향받는 구현을 중단하고 REQ를 먼저 `draft`로 전환해야 한다.
 - 변경된 REQ와 `draft` AC는 함께 검토한다. REQ가 `draft → approved` transition을 거치면 대상 AC는 변경 종류에 따라 `active` 또는 `retired`로 확정되고, 해당 commit이 새로운 specification baseline이 된다.
 - 재승인 전까지 이전 `approved` Git revision은 마지막 승인 baseline으로 보존되지만, 변경 중인 `draft` revision을 구현 기준으로 사용할 수 없다.
 - `draft` 또는 `approved` REQ는 `withdrawn`으로 전환할 수 있다.
 - `withdrawn`은 terminal status이다. 같은 변경을 다시 진행하려면 독립적인 새 Line과 새 Discovery/REQ를 만든다.
 - `approved` 상태를 유지한 채 REQ 또는 대상 AC의 의미를 변경하는 것은 허용하지 않는다.
-- implementation branch는 `approved` transition을 기록한 exact main commit에서만 생성할 수 있다.
+- implementation branch는 REQ `approved`와 대상 AC의 승인 상태를 포함한 exact main commit에서 생성한다. Prior draft transition history는 요구하지 않는다.
 - 구현·검증·delivery 진행 상태는 REQ `status`에 기록하지 않는다.
 
 다음 값은 REQ `status`가 아니다.
