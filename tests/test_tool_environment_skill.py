@@ -25,7 +25,7 @@ def test_tool_environment_skill_defines_shared_non_editable_bootstrap() -> None:
     for required in [
         "proofline update --check",
         "proofline update --adopt-official",
-        "v0.2.0",
+        "v0.2.1",
         "gh release download v0.1.0",
         "sha256sum --check --strict SHA256SUMS",
         "proofline-0.1.0-py3-none-any.whl",

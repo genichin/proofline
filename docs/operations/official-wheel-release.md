@@ -139,7 +139,7 @@ Remote publication은 local rollback으로 원상복구할 수 없다.
 - License 선택, signing, SBOM
 - Application dependency 또는 canonical artifact migration
 
-## v0.2.0 Update Release
+## v0.2.0 Update Release와 v0.2.1 Corrective Release
 
 `v0.2.0`은 동일한 prepare·approval·publish·remote read-back 절차를 사용한다.
 
@@ -150,3 +150,13 @@ Checksum: SHA256SUMS
 ```
 
 Fresh installed wheel에서 `proofline update --help`와 `proofline update --check`를 추가 검증한다. Source installation은 `--adopt-official` 없이는 전환되지 않아야 하며 `v0.1.0` 사용자의 one-time verified wheel install 절차를 tool-environment 문서와 skill에 기록한다.
+
+Remote v0.2.0 adoption에서 virtualenv Python symlink ownership 판정 결함이 발견됐다. Existing v0.2.0 tag·Release·assets는 보존하고 overwrite·삭제하지 않는다. Corrective release identity는 다음과 같다.
+
+```text
+Tag:      v0.2.1
+Wheel:    proofline-0.2.1-py3-none-any.whl
+Checksum: SHA256SUMS
+```
+
+v0.2.1 DQC는 source-provenance uv tool에서 public release를 대상으로 `update --adopt-official`을 실제 실행하고 후속 `update --check`가 `already-current`인지 확인한다.

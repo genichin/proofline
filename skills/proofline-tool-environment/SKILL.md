@@ -110,12 +110,12 @@ Git working tree status
 
 GitHub Issue #9와 Line 0008에서 승인한 explicit maintenance boundary다.
 
-Official `v0.2.0` 이상에서는 다음을 사용한다.
+Official `v0.2.1` 이상에서는 다음을 사용한다.
 
 ```bash
 proofline update --check
 proofline update
-proofline update --version 0.2.0
+proofline update --version 0.2.1
 ```
 
 Source checkout provenance는 기본 update에서 보존된다. Official wheel 전환 의도가 명시된 경우에만 실행한다.
@@ -124,7 +124,7 @@ Source checkout provenance는 기본 update에서 보존된다. Official wheel �
 proofline update --adopt-official
 ```
 
-`v0.1.0`에는 update command가 없으므로 최초 한 번은 `v0.2.0` wheel·`SHA256SUMS`를 내려받아 strict 검증한 뒤 `uv tool install --force <verified-v0.2.0-wheel>`로 전환한다.
+`v0.1.0`에는 update command가 없고 `v0.2.0` updater에는 uv-tool ownership defect가 있으므로 최초 한 번은 `v0.2.1` wheel·`SHA256SUMS`를 내려받아 strict 검증한 뒤 `uv tool install --force <verified-v0.2.1-wheel>`로 전환한다. Existing `v0.2.0` release bytes는 overwrite하지 않는다.
 
 ## Failure and Recovery
 

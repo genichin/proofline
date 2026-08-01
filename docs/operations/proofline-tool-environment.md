@@ -68,18 +68,18 @@ proofline line init line-NNNN --title "TITLE" --dry-run
 
 공용 설치와 validation은 application dependency를 변경하지 않는 no-mutation 작업이어야 한다.
 
-## Explicit update와 v0.1.0 migration
+## Explicit update와 v0.1.0·v0.2.0 migration
 
-Official `v0.2.0` 이상에서는 다음 명령을 사용한다.
+Official `v0.2.1` 이상에서는 다음 명령을 사용한다.
 
 ```bash
 proofline update --check
 proofline update
-proofline update --version 0.2.0
+proofline update --version 0.2.1
 ```
 
 Source checkout installation은 기본 update에서 `adoption-required`로 중단된다. Official wheel로 명시적으로 전환할 때만 `proofline update --adopt-official`을 사용한다.
 
-`v0.1.0` executable에는 update command가 없으므로 `v0.2.0` wheel·`SHA256SUMS`를 직접 download·strict verify한 뒤 한 번만 `uv tool install --force <verified-v0.2.0-wheel>`를 실행한다. 이후에는 `proofline update`를 사용한다.
+`v0.1.0` executable에는 update command가 없고 `v0.2.0` updater에는 uv-tool ownership defect가 있다. 두 version에서는 `v0.2.1` wheel·`SHA256SUMS`를 직접 download·strict verify한 뒤 한 번만 `uv tool install --force <verified-v0.2.1-wheel>`를 실행한다. 이후에는 `proofline update`를 사용한다. Published `v0.2.0` objects는 보존하며 사용을 권장하지 않는다.
 
 Update는 application cwd를 install cwd로 사용하지 않고 `.venv`, `pyproject.toml`, lockfile, Git state와 `.proofline/`을 변경하지 않는다. Background update, automatic rollback과 PyPI는 이 계약에 포함하지 않는다.
