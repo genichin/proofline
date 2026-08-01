@@ -25,3 +25,6 @@ testpaths = ["tests"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/proofline"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"templates/schema-v1" = "proofline_schema_v1_templates"
