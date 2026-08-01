@@ -1,7 +1,5 @@
 # ProofLine 산출물 디렉터리 구조
 
-> 상태: 초안
-
 이 문서는 ProofLine을 적용한 프로젝트에서 ProofLine이 생성하고 관리하는 영속 산출물의 저장 위치, identity, source of truth 및 canonical directory 구조를 정의한다.
 
 ## 1. 기본 원칙
