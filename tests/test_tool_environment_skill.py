@@ -15,7 +15,7 @@ def test_tool_environment_skill_has_valid_frontmatter() -> None:
     metadata = yaml.safe_load(frontmatter)
     assert metadata["name"] == "proofline-tool-environment"
     assert metadata["description"].startswith("Use when ")
-    assert metadata["version"] == "1.1.0"
+    assert metadata["version"] == "1.2.0"
     assert "## When to Use" in body
     assert body.strip()
 
@@ -23,6 +23,9 @@ def test_tool_environment_skill_has_valid_frontmatter() -> None:
 def test_tool_environment_skill_defines_shared_non_editable_bootstrap() -> None:
     text = SKILL.read_text()
     for required in [
+        "proofline update --check",
+        "proofline update --adopt-official",
+        "v0.2.0",
         "gh release download v0.1.0",
         "sha256sum --check --strict SHA256SUMS",
         "proofline-0.1.0-py3-none-any.whl",

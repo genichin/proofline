@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from importlib import metadata
+from pathlib import Path
+import tomllib
 
 import pytest
 
@@ -19,5 +20,6 @@ def test_global_version_uses_installed_distribution_metadata(
     assert capsys.readouterr().out == "proofline 9.8.7\n"
 
 
-def test_distribution_metadata_matches_manifest_version() -> None:
-    assert metadata.version("proofline") == "0.1.0"
+def test_manifest_version_is_v020() -> None:
+    manifest = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text())
+    assert manifest["project"]["version"] == "0.2.0"

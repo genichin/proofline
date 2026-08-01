@@ -1,7 +1,7 @@
 ---
 name: proofline-tool-environment
 description: Use when installing or verifying one shared user-level ProofLine uv tool environment without modifying an application project's dependencies or virtual environment.
-version: 1.1.0
+version: 1.2.0
 author: ProofLine
 license: MIT
 metadata:
@@ -16,7 +16,7 @@ metadata:
 
 Main과 모든 Line worktree 및 모든 적용 project의 ProofLine governance command는 OS user가 소유하는 하나의 공용 `uv tool` environment와 `proofline` executable을 사용한다. Application `.venv`에 ProofLine을 설치하지 않고 worktree마다 ProofLine 전용 `.venv`를 생성하지 않는다.
 
-공식 stable GitHub Release의 checksum-verified wheel을 non-editable 방식으로 설치한다. 사용자가 명시한 clean source checkout 설치도 개발·복구 경로로 유지한다. 이 skill은 fresh install과 현재 installation 검증만 담당하며 `update`, version pinning과 rollback 정책은 Issue #9의 후속 Discovery 범위다.
+공식 stable GitHub Release의 checksum-verified wheel을 non-editable 방식으로 설치·명시적으로 update한다. 사용자가 명시한 clean source checkout 설치도 개발·복구 경로로 유지한다.
 
 ## When to Use
 
@@ -26,7 +26,7 @@ Main과 모든 Line worktree 및 모든 적용 project의 ProofLine governance c
 
 다음에는 사용하지 않는다.
 
-- ProofLine update, rollback, release publication 또는 version pinning을 수행할 때
+- Background update, rollback 또는 release publication을 수행할 때
 - Application project의 source build·test dependency를 설치할 때
 - Worktree별 ProofLine environment를 만들 때
 
@@ -101,16 +101,37 @@ Git working tree status
 
 - Main과 모든 Line worktree 및 적용 project의 governance: 공용 `proofline ...`
 - 구현 대상 project의 source build·test: 해당 project가 정의한 command와 environment
-- ProofLine update·rollback·version compatibility: Issue #9와 후속 승인 Line
+- ProofLine explicit update: 공용 `proofline update ...`
+- Rollback·schema compatibility: 별도 승인 Line
 
 공용 tool environment는 모든 적용 project가 동일한 installed ProofLine version을 사용한다. Project별 environment에 별도 ProofLine을 설치해 우회하지 않는다.
+
+## Explicit Update
+
+GitHub Issue #9와 Line 0008에서 승인한 explicit maintenance boundary다.
+
+Official `v0.2.0` 이상에서는 다음을 사용한다.
+
+```bash
+proofline update --check
+proofline update
+proofline update --version 0.2.0
+```
+
+Source checkout provenance는 기본 update에서 보존된다. Official wheel 전환 의도가 명시된 경우에만 실행한다.
+
+```bash
+proofline update --adopt-official
+```
+
+`v0.1.0`에는 update command가 없으므로 최초 한 번은 `v0.2.0` wheel·`SHA256SUMS`를 내려받아 strict 검증한 뒤 `uv tool install --force <verified-v0.2.0-wheel>`로 전환한다.
 
 ## Failure and Recovery
 
 - Install 실패 시 application project나 canonical artifact를 수정하지 않는다.
 - 기존 정상 tool environment를 자동 삭제하지 않는다.
-- `--force`, `--editable`, mutable remote main 또는 checksum 미검증 asset을 자동 선택하지 않는다.
-- Version 변경, update와 rollback은 이 workflow에서 수행하지 않고 Issue #9로 보낸다.
+- Bootstrap에서는 `--force`·`--editable`을 사용하지 않는다. Explicit updater만 verified local wheel에 `uv tool install --force`를 사용하며 mutable remote main 또는 checksum 미검증 asset을 선택하지 않는다.
+- Update 실패를 success로 보고하지 않으며 자동 rollback은 수행하지 않는다.
 
 ## Verification Checklist
 
@@ -122,4 +143,4 @@ Git working tree status
 - [ ] Checkout 밖 적용 project에서 `proofline validate`가 통과한다.
 - [ ] Application `pyproject.toml`, lockfile와 `.venv`가 변하지 않았다.
 - [ ] Worktree마다 ProofLine 전용 `.venv`를 만들지 않았다.
-- [ ] Update와 rollback을 수행하지 않았다.
+- [ ] Update는 사용자가 명시적으로 요청했고 source 전환에는 `--adopt-official`을 사용했다.
