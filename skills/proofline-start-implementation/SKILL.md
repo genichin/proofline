@@ -82,10 +82,14 @@ git worktree list --porcelain
 
 ### 2. Worktree 생성
 
-Main checkout에서 exact REQ approval commit을 base로 linked worktree와 branch를 한 번 생성한다.
+Main checkout에서 repository-owned supporting script를 실행한다. Script는 위 preflight를 다시 수행한 뒤에만 내부적으로 `git worktree add`를 호출한다.
 
 ```bash
-git worktree add "$WORKTREE_PATH" -b "$BRANCH" "$APPROVAL_COMMIT"
+python skills/proofline-start-implementation/scripts/create_worktree.py \
+  --repo "$PWD" \
+  --line-id "$LINE_ID" \
+  --branch "$BRANCH" \
+  --approval-commit "$APPROVAL_COMMIT"
 ```
 
 Canonical target은 `.worktrees/line-NNNN/`이다. Clone을 만들거나 main checkout을 implementation branch로 전환하지 않는다.
