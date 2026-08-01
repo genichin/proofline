@@ -57,6 +57,9 @@ status: draft
 - AC 하나는 독립적으로 변경하고 검증할 수 있는 하나의 criterion을 표현한다.
 - 새로운 독립 조건은 기존 AC에 누적하지 않고 새 AC identity로 분리한다.
 - 같은 사양 축의 값이나 조건을 변경하는 경우 stable AC 파일을 같은 경로에서 수정한다.
+- `active` AC는 프로젝트가 현재 지속적으로 만족해야 하는 version-independent product behavior 또는 constraint를 표현한다.
+- 특정 release version, tag, candidate commit, wheel filename, checksum, publication transaction과 remote read-back 결과는 AC가 아니다. 해당 delivery의 Micro-SPEC implementation parameter와 IQC·DQC·release evidence에 기록한다.
+- 새 version publication만으로 새 AC를 만들지 않는다. 외부에서 관찰 가능한 product behavior나 acceptance condition 자체가 새로 생기거나 변경될 때만 AC를 생성·수정한다.
 - 승인 전의 AC 내용은 candidate 사양이며 구현 기준인 canonical specification baseline이 아니다.
 - REQ 승인 Git revision의 AC 내용이 해당 Line의 canonical specification baseline이 된다.
 - 승인된 AC는 구현 완료 여부와 관계없이 구현이 따라야 할 사양으로 효력을 갖는다.

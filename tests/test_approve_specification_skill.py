@@ -144,6 +144,16 @@ def test_contract_accepts_exact_direct_approval_as_baseline() -> None:
     assert "implementation branch는 `approved` transition을 기록한 exact main commit에서만" not in text
 
 
+def test_contract_separates_durable_acceptance_from_release_evidence() -> None:
+    text = CONTRACT.read_text(encoding="utf-8")
+    for required in [
+        "version-independent product behavior",
+        "새 version publication만으로 새 AC를 만들지 않는다",
+        "Micro-SPEC implementation parameter와 IQC·DQC·release evidence",
+    ]:
+        assert required in text
+
+
 def test_audit_reports_recorded_transition_without_mutation(tmp_path: Path) -> None:
     repo, approval = make_repo(tmp_path, mode="recorded")
     before = snapshot(repo)
