@@ -1,0 +1,41 @@
+---
+id: "{{DISCOVERY_ID}}"
+status: draft
+---
+
+# {{TITLE}}
+
+## Problem
+
+{{TODO: 해결해야 할 문제, 영향을 받는 사용자 또는 시스템, 현재 상태와 기대 상태를 작성한다}}
+
+## Evidence
+
+- {{NEEDS_EVIDENCE: 문제와 현재 상태를 입증하는 저장소 경로, 실행 결과, 관찰 또는 외부 근거를 기록한다}}
+
+## Scope
+
+- {{TODO: 이번 Discovery에서 다룰 동작과 경계를 작성한다}}
+
+## Out of Scope
+
+- {{TODO: 의도적으로 제외하는 범위를 작성하거나 제외 범위가 없으면 `없음`으로 교체한다}}
+
+## Risks and Unknowns
+
+### Risks
+
+- {{TODO: 주요 위험·제약·의존성과 영향 및 완화 방향을 작성하거나 이 H3를 제거한다}}
+
+### Assumptions
+
+- {{UNKNOWN: 현재 판단의 전제와 확인 방법을 작성하거나 이 H3를 제거한다}}
+
+### Open Questions
+
+- `OQ-001`
+  - Type: `DECIDE`
+  - Status: {{TODO: 결정이 필요한 질문이 아직 해소되지 않음}}
+  - Question: {{TODO: REQ 작성 전에 결정하거나 확인해야 할 질문을 작성한다}}
+  - Owner: {{TODO: 질문을 해소할 책임 주체 또는 단계를 작성한다}}
+  - Exit Condition: {{TODO: 답을 반영할 canonical section과 구체적인 해소 조건을 작성한다}}
