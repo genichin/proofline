@@ -11,6 +11,10 @@ dependencies = [
   "PyYAML>=6.0",
 ]
 
+[project.urls]
+Repository = "https://github.com/genichin/proofline"
+Releases = "https://github.com/genichin/proofline/releases"
+
 [project.scripts]
 proofline = "proofline.cli:main"
 

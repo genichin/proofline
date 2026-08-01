@@ -47,3 +47,49 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
         check=False,
     )
     assert check.returncode == 0, check.stderr
+
+    venv = tmp_path / "venv"
+    create_venv = subprocess.run(
+        ["uv", "venv", "--python", sys.executable, str(venv)],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert create_venv.returncode == 0, create_venv.stderr
+    python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    proofline = venv / ("Scripts/proofline.exe" if os.name == "nt" else "bin/proofline")
+    install = subprocess.run(
+        ["uv", "pip", "install", "--python", str(python), str(wheel)],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert install.returncode == 0, install.stderr
+    provenance = subprocess.run(
+        [
+            str(python),
+            "-I",
+            "-c",
+            "from importlib.metadata import version; "
+            "from pathlib import Path; import proofline; "
+            "p=Path(proofline.__file__).resolve(); "
+            "assert 'site-packages' in p.parts; "
+            "assert version('proofline') == '0.1.0'",
+        ],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert provenance.returncode == 0, provenance.stderr
+    installed_version = subprocess.run(
+        [str(proofline), "--version"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert installed_version.returncode == 0, installed_version.stderr
+    assert installed_version.stdout == "proofline 0.1.0\n"

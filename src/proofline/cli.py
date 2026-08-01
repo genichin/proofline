@@ -1,4 +1,5 @@
 import argparse
+from importlib import metadata
 from pathlib import Path
 import sys
 
@@ -8,6 +9,11 @@ from proofline.validator import validate_project
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="proofline")
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {metadata.version('proofline')}",
+    )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("validate", help="Validate a ProofLine project")
 

@@ -15,7 +15,7 @@ def test_tool_environment_skill_has_valid_frontmatter() -> None:
     metadata = yaml.safe_load(frontmatter)
     assert metadata["name"] == "proofline-tool-environment"
     assert metadata["description"].startswith("Use when ")
-    assert metadata["version"] == "1.0.0"
+    assert metadata["version"] == "1.1.0"
     assert "## When to Use" in body
     assert body.strip()
 
@@ -23,10 +23,14 @@ def test_tool_environment_skill_has_valid_frontmatter() -> None:
 def test_tool_environment_skill_defines_shared_non_editable_bootstrap() -> None:
     text = SKILL.read_text()
     for required in [
+        "gh release download v0.1.0",
+        "sha256sum --check --strict SHA256SUMS",
+        "proofline-0.1.0-py3-none-any.whl",
         "uv tool install <proofline-checkout>",
         "uv tool dir",
         "uv tool dir --bin",
         "proofline validate",
+        "proofline --version",
         "non-editable",
         "Main과 모든 Line worktree",
         "application `.venv`",
@@ -54,6 +58,8 @@ def test_tool_environment_skill_preserves_application_and_scope_boundaries() -> 
 def test_tool_environment_operation_doc_matches_skill_contract() -> None:
     text = DOC.read_text()
     for required in [
+        "gh release download v0.1.0",
+        "sha256sum --check --strict SHA256SUMS",
         "uv tool install <proofline-checkout>",
         "~/.local/share/uv/tools/proofline/",
         "~/.local/bin/proofline",
