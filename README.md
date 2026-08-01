@@ -11,18 +11,18 @@ ProofLine은 프로젝트의 Discovery, Requirement, Acceptance Criterion, Micro
 
 ## 설치
 
-ProofLine은 PyPI가 아니라 [GitHub Releases](https://github.com/genichin/proofline/releases)에서 공식 wheel을 배포합니다. 현재 권장 stable version은 `v0.2.2`입니다.
+ProofLine은 PyPI가 아니라 [GitHub Releases](https://github.com/genichin/proofline/releases)에서 공식 wheel을 배포합니다. 현재 권장 stable version은 `v0.3.0`입니다.
 
 다음 한 줄로 설치합니다. Versioned installer가 임시 디렉터리에서 wheel과 `SHA256SUMS`를 내려받아 strict 검증한 뒤 user-level `uv tool` environment에 설치합니다.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.2.2/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.3.0/install.sh | sh
 ```
 
-기존 ProofLine installation을 verified v0.2.2 wheel로 명시적으로 교체하려면 `--force`를 전달합니다.
+기존 ProofLine installation을 verified v0.3.0 wheel로 명시적으로 교체하려면 `--force`를 전달합니다.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.2.2/install.sh | sh -s -- --force
+curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.3.0/install.sh | sh -s -- --force
 ```
 
 Installer는 application project의 `.venv`, `pyproject.toml`, lockfile, Git state 또는 `.proofline/`을 변경하지 않습니다.
@@ -32,7 +32,7 @@ Installer는 application project의 `.venv`, `pyproject.toml`, lockfile, Git sta
 Installer를 사용하지 않으려면 동일한 검증·설치를 직접 수행할 수 있습니다.
 
 ```bash
-RELEASE_VERSION="0.2.2"
+RELEASE_VERSION="0.3.0"
 RELEASE_DIR="$(mktemp -d)"
 BASE_URL="https://github.com/genichin/proofline/releases/download/v${RELEASE_VERSION}"
 
@@ -53,7 +53,7 @@ uv tool install \
   "${RELEASE_DIR}/proofline-${RELEASE_VERSION}-py3-none-any.whl"
 ```
 
-기존 ProofLine tool installation이 있으면 `uv tool install`이 자동으로 덮어쓰지 않습니다. 기존 version에서 `v0.2.2`로 전환하려면 checksum 검증이 성공한 뒤 마지막 명령에 `--force --no-config`를 명시합니다.
+기존 ProofLine tool installation이 있으면 `uv tool install`이 자동으로 덮어쓰지 않습니다. 기존 version에서 `v0.3.0`로 전환하려면 checksum 검증이 성공한 뒤 마지막 명령에 `--force --no-config`를 명시합니다.
 
 ```bash
 uv tool install --force --no-config \
@@ -69,12 +69,12 @@ proofline --version
 proofline update --check
 ```
 
-정상적인 v0.2.2 official wheel 설치는 다음과 같이 표시됩니다.
+정상적인 v0.3.0 official wheel 설치는 다음과 같이 표시됩니다.
 
 ```text
-proofline 0.2.2
-current: 0.2.2
-target: 0.2.2
+proofline 0.3.0
+current: 0.3.0
+target: 0.3.0
 provenance: archive
 status: already-current
 ```
@@ -108,7 +108,7 @@ v0.2.1 이상에서는 다음 명령으로 최신 stable official wheel을 확�
 ```bash
 proofline update --check
 proofline update
-proofline update --version 0.2.2
+proofline update --version 0.3.0
 ```
 
 Source checkout 기반 설치는 자동으로 official wheel로 바뀌지 않습니다. 명시적으로 전환하려는 경우에만 다음을 실행합니다.
