@@ -1,7 +1,7 @@
 ---
 name: proofline-approve-specification
 description: Use when presenting, approving, or auditing a ProofLine REQ and newly created AC specification without turning optional transition evidence into an implementation gate.
-version: 1.0.0
+version: 1.1.0
 author: ProofLine
 license: MIT
 metadata:
@@ -58,7 +58,7 @@ Git commit, branch, worktree, merge와 push는 ProofLine CLI 책임이 아니다
 Repository root에서 full approval SHA를 지정한다.
 
 ```bash
-python3 skills/proofline-approve-specification/scripts/audit_transition.py \
+python3 ~/.proofline/skills/proofline-approve-specification/scripts/audit_transition.py \
   --repo "$PWD" \
   --line-id line-NNNN \
   --approval-commit "$APPROVAL_COMMIT"

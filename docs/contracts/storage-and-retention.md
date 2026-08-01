@@ -2,6 +2,12 @@
 
 이 문서는 canonical artifact와 파생 산출물의 경계, 보존·폐기 규칙 및 프로젝트 설정을 정의한다. Canonical 경로는 [산출물 디렉터리 구조](../artifact-layout.md)가 소유한다.
 
+## User-level harness resource
+
+ProofLine이 관리하는 manifest, contracts, templates와 skills는 user home의 `~/.proofline/`에 저장한다. 이 resource는 project lifecycle artifact가 아니며 project `.proofline/` 아래에 복제하지 않는다.
+
+Project `.proofline/`은 Lines와 criteria의 canonical artifact root로만 사용한다. `proofline init`은 user-level harness만 초기화하며 current project의 `.proofline/`, `proofline.yaml` 또는 Git state를 변경하지 않는다.
+
 ## 정본과 파생 산출물
 
 [산출물 디렉터리 구조](../artifact-layout.md)가 canonical path로 정의한 `.proofline/` 산출물은 Git으로 추적하는 정본이다.

@@ -3,6 +3,7 @@ from importlib import metadata
 from pathlib import Path
 import sys
 
+from proofline.home_writer import HomeInitError, initialize_home
 from proofline.line_writer import LineInitError, initialize_line
 from proofline.updater import UpdateError, UpdateResult, run_update
 from proofline.validator import validate_project
@@ -17,6 +18,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("validate", help="Validate a ProofLine project")
+    init = commands.add_parser("init", help="Initialize ~/.proofline user resources")
+    init.add_argument(
+        "--dry-run", action="store_true", help="Preflight without writing user resources"
+    )
 
     update = commands.add_parser("update", help="Update the ProofLine uv tool")
     update.add_argument("--check", action="store_true", help="Check without changing the installed tool")
@@ -46,6 +51,17 @@ def main(argv: list[str] | None = None) -> int:
         for error in errors:
             print(f"{error.path}: {error.code}: {error.message}", file=sys.stderr)
         return 1 if errors else 0
+
+    if args.command == "init":
+        try:
+            result = initialize_home(dry_run=args.dry_run)
+        except HomeInitError as exc:
+            print(f"init failed: {exc}", file=sys.stderr)
+            return 1
+        prefix = "would create" if result.dry_run else result.status
+        for path in result.paths:
+            print(f"{prefix}: {path}")
+        return 0
 
     if args.command == "update":
         try:

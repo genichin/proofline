@@ -26,6 +26,10 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
         assert "proofline_schema_v1_templates/artifacts/line.md" in names
         assert "proofline_schema_v1_templates/artifacts/discovery.md" in names
         assert "proofline_schema_v1_templates/artifacts/dqc.md" in names
+        assert "proofline_home/contracts/storage-and-retention.md" in names
+        assert "proofline_home/templates/schema-v1/artifacts/line.md" in names
+        assert "proofline_home/skills/proofline-start-line/SKILL.md" in names
+        assert "proofline_home/agent-context.md" in names
         unpacked = tmp_path / "wheel"
         archive.extractall(unpacked)
 
@@ -76,7 +80,7 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
             "from pathlib import Path; import proofline; "
             "p=Path(proofline.__file__).resolve(); "
             "assert 'site-packages' in p.parts; "
-            "assert version('proofline') == '0.2.2'",
+            "assert version('proofline') == '0.3.0'",
         ],
         cwd=tmp_path,
         text=True,
@@ -92,4 +96,27 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
         check=False,
     )
     assert installed_version.returncode == 0, installed_version.stderr
-    assert installed_version.stdout == "proofline 0.2.2\n"
+    assert installed_version.stdout == "proofline 0.3.0\n"
+
+    isolated_home = tmp_path / "home"
+    isolated_home.mkdir()
+    project = tmp_path / "project"
+    project.mkdir()
+    marker = project / ".proofline-marker"
+    marker.write_text("canonical\n", encoding="utf-8")
+    init_env = os.environ.copy()
+    init_env["HOME"] = str(isolated_home)
+    initialized = subprocess.run(
+        [str(proofline), "init"],
+        cwd=project,
+        env=init_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert initialized.returncode == 0, initialized.stderr
+    assert (isolated_home / ".proofline/manifest.yaml").is_file()
+    assert (isolated_home / ".proofline/contracts").is_dir()
+    assert (isolated_home / ".proofline/templates").is_dir()
+    assert (isolated_home / ".proofline/skills").is_dir()
+    assert marker.read_text(encoding="utf-8") == "canonical\n"

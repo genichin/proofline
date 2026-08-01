@@ -1,7 +1,7 @@
 ---
 name: proofline-start-implementation
 description: Use when starting implementation for an approved ProofLine Line in an exact-baseline Git linked worktree while preserving main as the governance checkout.
-version: 1.0.0
+version: 1.1.0
 author: ProofLine
 license: MIT
 metadata:
@@ -85,7 +85,7 @@ git worktree list --porcelain
 Main checkout에서 repository-owned supporting script를 실행한다. Script는 위 preflight를 다시 수행한 뒤에만 내부적으로 `git worktree add`를 호출한다.
 
 ```bash
-python skills/proofline-start-implementation/scripts/create_worktree.py \
+python ~/.proofline/skills/proofline-start-implementation/scripts/create_worktree.py \
   --repo "$PWD" \
   --line-id "$LINE_ID" \
   --branch "$BRANCH" \

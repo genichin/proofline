@@ -81,6 +81,26 @@ status: already-current
 
 `proofline` 명령을 찾지 못하면 `uv tool dir --bin`으로 executable 경로를 확인하고 해당 경로가 `PATH`에 포함됐는지 확인하세요.
 
+### User-level ProofLine resources
+
+ProofLine 0.3.0 이상에서는 설치 후 다음 명령으로 user-level harness를 초기화합니다. 이 명령은 current project를 변경하지 않습니다.
+
+```bash
+proofline init --dry-run
+proofline init
+```
+
+```text
+~/.proofline/
+├── manifest.yaml
+├── agent-context.md
+├── contracts/
+├── templates/
+└── skills/
+```
+
+Project의 `.proofline/`은 Lines와 criteria 같은 canonical artifact 전용이며 harness resource를 저장하지 않습니다.
+
 ## 업데이트
 
 v0.2.1 이상에서는 다음 명령으로 최신 stable official wheel을 확인하거나 설치할 수 있습니다.
