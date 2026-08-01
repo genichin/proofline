@@ -116,6 +116,36 @@ blocked
 - `passed`는 해당 `candidate_commit`이 main 통합 gate를 요청할 수 있음을 의미하며 아직 main 통합이나 delivery를 의미하지 않는다.
 - 재검증할 때 같은 DQC 파일을 갱신하고 과거 결과는 Git history로 보존한다.
 
+### DQC 항상 필수 검사
+
+DQC는 다음 Line-level 신호를 candidate마다 확인한다.
+
+1. 모든 non-withdrawn Micro-SPEC과 IQC의 coverage·exact commit binding
+2. Exact candidate의 전체 regression test
+3. Candidate canonical `proofline validate`
+4. Micro-SPEC 간 충돌, integration risk와 Line 전체 REQ 범위
+5. 통합 대상 main의 ancestor·fast-forward 가능성
+6. DQC candidate 이후 제품 source 불변
+
+이 검사는 여러 구현 단위가 합쳐진 candidate와 main integration readiness를 판정하므로 IQC evidence만으로 생략할 수 없다.
+
+### IQC evidence 재사용과 조건부 재검사
+
+IQC는 exact Micro-SPEC·implementation commit에서 focused behavior, component-specific safety, package·wheel, skill 형식, compile, lock과 설치 검사를 소유한다. Passed IQC의 exact binding이 candidate ancestry에 포함되고 아래 trigger가 없으면 DQC는 그 evidence를 재사용하며 동일 검사를 기본적으로 반복하지 않는다.
+
+대표 trigger는 source-after-IQC, uncovered integration risk, invalid IQC evidence와 explicit Line-level requirement이다. DQC는 재사용 또는 실행 결정을 exact binding과 skip rationale로 설명한다.
+
+| Trigger ID | 조건 | DQC action |
+| --- | --- | --- |
+| `source_after_iqc` | IQC implementation commit 이후 candidate에서 관련 component source가 변경됨 | 영향받은 component 검사 재실행 |
+| `uncovered_integration_risk` | 여러 Micro-SPEC 결합이 focused IQC가 다루지 않은 integration risk를 만듦 | 위험별 integration 검사 실행 |
+| `invalid_iqc_evidence` | IQC가 누락·stale·failed·blocked이거나 exact binding이 불명확함 | 유효 IQC 전까지 DQC passed 차단 |
+| `explicit_line_level_requirement` | REQ·AC가 특정 검사를 Line-level verification으로 요구함 | 명시된 검사 실행 |
+
+Trigger가 없으면 component-specific 검사의 not applicable은 실패가 아니다. DQC artifact에는 재사용한 Exact IQC binding과 Skip 또는 실행 rationale을 기록한다. Trigger가 있으면 필요한 검사 결과 없이 DQC를 `passed`로 판정할 수 없다.
+
+이 책임 분리는 canonical DQC artifact를 작성하는 workflow 규칙이다. DQC command list나 transition history를 검사하도록 `proofline validate`의 validation scope를 확대하지 않는다.
+
 ## Line execution artifact와 status
 
 각 Line은 다음 canonical artifact를 정확히 하나 소유한다.

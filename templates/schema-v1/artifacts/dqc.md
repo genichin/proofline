@@ -9,19 +9,37 @@ result: draft
 
 ## Target
 
-{{TODO: 검증 대상 Line, integration candidate 및 전체 검증 경계를 설명한다}}
+{{TODO: 검증 대상 Line, exact integration candidate 및 전체 검증 경계를 설명한다}}
 
 ## IQC Results
 
-| Micro-SPEC | IQC | 판정 | Binding 확인 |
-| --- | --- | --- | --- |
-| `{{MICRO_SPEC_ID}}` | `{{IQC_ID}}` | {{TODO: passed, failed 또는 blocked}} | {{TODO: exact commit binding 확인 결과}} |
+| Micro-SPEC | IQC | 판정 | Micro-SPEC commit | Implementation commit | Exact IQC binding |
+| --- | --- | --- | --- | --- | --- |
+| `{{MICRO_SPEC_ID}}` | `{{IQC_ID}}` | {{TODO: passed, failed 또는 blocked}} | `{{MICRO_SPEC_COMMIT}}` | `{{IMPLEMENTATION_COMMIT}}` | {{TODO: candidate ancestry와 exact binding 확인 결과}} |
 
 ## Checks
 
-| 검사 | 실행 명령 또는 방법 | Exit code·판정 | 결과 요약 | Evidence |
+### Mandatory Line-Level Checks
+
+| Check ID | 실행 명령 또는 방법 | Exit code·판정 | 결과 요약 | Evidence |
 | --- | --- | --- | --- | --- |
-| {{TODO: Line 전체 검사 이름}} | {{TODO: 실제 실행한 명령 또는 검사 방법}} | {{TODO: exit code 또는 PASS/FAIL}} | {{TODO: 회귀·충돌·범위 검사 결과}} | {{NEEDS_EVIDENCE: 안정적인 저장소 경로 또는 외부 참조}} |
+| `iqc_coverage_binding` | {{TODO: REQ→AC→Micro-SPEC→IQC coverage와 binding 검사}} | {{TODO: exit code 또는 PASS/FAIL}} | {{TODO: coverage와 exact binding 결과}} | {{NEEDS_EVIDENCE: canonical artifact 또는 command output}} |
+| `full_regression` | {{TODO: candidate 전체 regression 명령}} | {{TODO: exit code 또는 PASS/FAIL}} | {{TODO: 전체 test 결과}} | {{NEEDS_EVIDENCE: test output 또는 stable report}} |
+| `canonical_validation` | `proofline validate` | {{TODO: exit code 또는 PASS/FAIL}} | {{TODO: canonical validation 결과}} | {{NEEDS_EVIDENCE: validator output}} |
+| `cross_spec_integration_scope` | {{TODO: Micro-SPEC 충돌·결합 위험·REQ 범위 검사}} | {{TODO: PASS/FAIL}} | {{TODO: integration·scope 결과}} | {{NEEDS_EVIDENCE: diff, test 또는 review evidence}} |
+| `main_fast_forward` | {{TODO: main ancestor와 fast-forward 검사}} | {{TODO: exit code 또는 PASS/FAIL}} | {{TODO: integration readiness}} | {{NEEDS_EVIDENCE: exact main과 candidate commit}} |
+| `post_candidate_source_immutability` | {{TODO: candidate 이후 제품 source diff 검사}} | {{TODO: exit code 또는 PASS/FAIL}} | {{TODO: DQC 기록 외 제품 source 불변 결과}} | {{NEEDS_EVIDENCE: candidate 대비 diff}} |
+
+### Conditional Component Checks
+
+| Trigger | Observed | Decision | 검사·결과 | Exact IQC binding | Skip 또는 실행 rationale |
+| --- | --- | --- | --- | --- | --- |
+| `source_after_iqc` | {{TODO: yes/no}} | {{TODO: reuse/rerun/blocked}} | {{TODO: 실행 검사와 결과 또는 not applicable}} | {{TODO: 관련 IQC·implementation commit}} | {{TODO: source diff와 decision 근거}} |
+| `uncovered_integration_risk` | {{TODO: yes/no}} | {{TODO: reuse/rerun/blocked}} | {{TODO: risk-specific 검사와 결과 또는 not applicable}} | {{TODO: 관련 IQC binding}} | {{TODO: 결합 위험 검토 근거}} |
+| `invalid_iqc_evidence` | {{TODO: yes/no}} | {{TODO: reuse/rerun/blocked}} | {{TODO: IQC 보완 결과 또는 not applicable}} | {{TODO: IQC 상태·commit binding}} | {{TODO: evidence 유효성 근거}} |
+| `explicit_line_level_requirement` | {{TODO: yes/no}} | {{TODO: reuse/rerun/blocked}} | {{TODO: 명시 검사와 결과 또는 not applicable}} | {{TODO: 관련 IQC binding}} | {{TODO: REQ·AC verification 근거}} |
+
+Conditional trigger가 없고 passed IQC가 exact-bound이면 component-specific 검사는 반복하지 않아도 된다. 이 경우 decision은 `reuse`, 검사·결과는 `not applicable`, 마지막 두 열에는 재사용한 binding과 skip rationale을 기록한다.
 
 ## Criteria Results
 
