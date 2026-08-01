@@ -1,4 +1,5 @@
 /.venv/
+/.worktrees/
 /temp/
 __pycache__/
 *.py[cod]

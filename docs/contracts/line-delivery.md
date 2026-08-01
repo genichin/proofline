@@ -35,6 +35,22 @@ main integration
 - 검증을 통과한 implementation 결과만 main 통합 대상으로 삼는다.
 - REQ approval, 그에 따른 AC lifecycle transition 및 implementation branch 생성은 구현·검증 또는 delivery 완료를 의미하지 않는다.
 
+### Implementation linked worktree
+
+Main repository checkout은 `main`의 직렬화된 governance workspace로 유지한다. Implementation branch는 같은 Line의 exact REQ approval commit에서 다음 deterministic repository-local path에 Git linked worktree로 생성한다.
+
+```text
+.worktrees/line-NNNN/
+```
+
+Worktree 생성 전에 main checkout cleanliness, approval commit과 canonical Line·Discovery·REQ 상태, target path, branch 및 기존 worktree registration 충돌을 모두 확인한다. Preflight 실패는 Git ref, worktree registration과 filesystem target을 변경하지 않는 no-mutation failure여야 한다. 생성 후에는 linked worktree의 HEAD와 branch base가 exact REQ approval commit인지, main checkout이 `main`과 clean state를 유지하는지 검증한다.
+
+Main과 모든 Line worktree의 ProofLine governance command는 user-level `uv tool`에 설치된 공용 `proofline` executable을 사용한다. Line worktree에는 ProofLine 전용 `.venv`를 생성하지 않는다. 구현 대상 project가 source build·test에 사용하는 environment는 해당 project의 개발 계약이 소유하며 ProofLine governance environment가 아니다.
+
+Micro-SPEC, implementation source, test와 IQC artifact는 해당 linked worktree에서 작성하고 commit한다. Worktree 사용은 REQ approval, DQC, fast-forward main integration 또는 delivery authority를 변경하지 않는다. 생성·검증·사용·정리는 repository-owned Hermes workflow가 담당하며 ProofLine CLI는 Git branch, worktree, commit, merge, push 또는 lifecycle transition을 수행하지 않는다.
+
+Delivery 후 worktree는 clean state를 확인한 뒤 명시적으로 제거한다. Dirty 또는 untracked file이 있거나 registration이 예상과 다르면 자동으로 강제 삭제하지 않는다.
+
 구현 중 승인된 AC의 의미를 변경할 필요가 발견되면 implementation branch에서 그 변경을 승인하거나 구현과 함께 main에 통합하지 않는다. 다음 순서를 따른다.
 
 ```text
