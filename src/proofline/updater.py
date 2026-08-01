@@ -166,6 +166,11 @@ def _uv_tool_paths(uv: str, cwd: Path) -> tuple[Path, Path]:
     return Path(tool.stdout.strip()).resolve(), Path(bins.stdout.strip()).resolve()
 
 
+def is_uv_tool_process(tool_dir: Path, *, prefix: Path | None = None) -> bool:
+    active_prefix = Path(sys.prefix) if prefix is None else prefix
+    return active_prefix.absolute() == (tool_dir / "proofline").absolute()
+
+
 def run_update(*, check: bool = False, version: str | None = None, adopt: bool = False) -> UpdateResult:
     current = metadata.version("proofline")
     provenance = detect_provenance(metadata.distribution("proofline"))
@@ -181,8 +186,8 @@ def run_update(*, check: bool = False, version: str | None = None, adopt: bool =
     with tempfile.TemporaryDirectory(prefix="proofline-update-") as temporary:
         temp = Path(temporary)
         tool_dir, bin_dir = _uv_tool_paths(uv, temp)
-        expected_env = (tool_dir / "proofline").resolve()
-        if not Path(sys.executable).resolve().is_relative_to(expected_env):
+        expected_env = (tool_dir / "proofline").absolute()
+        if not is_uv_tool_process(tool_dir):
             raise UpdateError("current process is not owned by the ProofLine uv tool environment")
 
         wheel = temp / release.wheel_name

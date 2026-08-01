@@ -10,6 +10,7 @@ from proofline.updater import (
     UpdateError,
     decide_update,
     detect_provenance,
+    is_uv_tool_process,
     parse_checksum,
     parse_release,
     parse_version,
@@ -90,3 +91,10 @@ def test_detect_provenance_distinguishes_source_archive_and_unknown() -> None:
     assert detect_provenance(Dist({"url": "file:///src", "dir_info": {}})) == "source"  # type: ignore[arg-type]
     assert detect_provenance(Dist({"url": "file:///x.whl", "archive_info": {}})) == "archive"  # type: ignore[arg-type]
     assert detect_provenance(Dist(None)) == "unknown"  # type: ignore[arg-type]
+
+
+def test_uv_tool_ownership_uses_virtualenv_prefix_not_resolved_python(tmp_path: Path) -> None:
+    tool_dir = tmp_path / "tools"
+    prefix = tool_dir / "proofline"
+    assert is_uv_tool_process(tool_dir, prefix=prefix)
+    assert not is_uv_tool_process(tool_dir, prefix=tmp_path / "application-venv")
