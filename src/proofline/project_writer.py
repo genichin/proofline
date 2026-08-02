@@ -17,7 +17,8 @@ from .validator import validate_project
 
 _TEMPLATE_PACKAGE = "proofline_schema_v1_templates"
 _SOURCE_PROJECT = Path(__file__).resolve().parents[2] / "templates/schema-v1/project"
-
+AT_FDCWD = -100
+RENAME_NOREPLACE = 1
 
 
 @dataclass(frozen=True)
@@ -221,11 +222,12 @@ def _preflight(project_root: Path, payload: dict[str, bytes]) -> str:
     return "exact"
 
 
-def _commit_path(source: Path, target: Path) -> None:
-    libc = ctypes.CDLL(None, use_errno=True)
-    renameat2 = getattr(libc, "renameat2", None)
-    if renameat2 is None:
-        raise OSError(errno.ENOSYS, "renameat2 is unavailable")
+def _commit_path_at(source: Path, target_dir_fd: int, target_name: str) -> None:
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        renameat2 = libc.renameat2
+    except (AttributeError, OSError) as exc:
+        raise OSError(errno.ENOSYS, "renameat2 is unavailable") from exc
     renameat2.argtypes = [
         ctypes.c_int,
         ctypes.c_char_p,
@@ -235,16 +237,19 @@ def _commit_path(source: Path, target: Path) -> None:
     ]
     renameat2.restype = ctypes.c_int
     result = renameat2(
-        -100,
+        AT_FDCWD,
         os.fsencode(source),
-        -100,
-        os.fsencode(target),
-        1,
+        target_dir_fd,
+        os.fsencode(target_name),
+        RENAME_NOREPLACE,
     )
     if result != 0:
-        error = ctypes.get_errno()
-        raise OSError(error, os.strerror(error), target)
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), target_name)
 
+
+def _commit_path(source: Path, target: Path) -> None:
+    _commit_path_at(source, AT_FDCWD, os.fspath(target))
 
 def _require_commit_capability(project_root: Path) -> None:
     libc = ctypes.CDLL(None, use_errno=True)

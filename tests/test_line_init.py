@@ -9,9 +9,25 @@ from pathlib import Path
 import pytest
 import yaml
 
+from proofline import line_writer
 from proofline.line_writer import LineInitError, initialize_line
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def tree_snapshot(root: Path) -> dict[str, tuple[str, bytes | str | None]]:
+    snapshot: dict[str, tuple[str, bytes | str | None]] = {}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            snapshot[relative] = ("symlink", os.readlink(path))
+        elif path.is_dir():
+            snapshot[relative] = ("directory", None)
+        else:
+            snapshot[relative] = ("file", path.read_bytes())
+    return snapshot
+
+
 def run(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT / "src")
@@ -33,6 +49,73 @@ def run(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
 def git(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", *args], cwd=cwd, text=True, capture_output=True, check=True
+    )
+
+
+def run_synchronized_writer_race(
+    project: Path, tmp_path: Path, competitor_script: str
+) -> tuple[subprocess.CompletedProcess[str], subprocess.CompletedProcess[str]]:
+    ready = tmp_path / "writer-ready.fifo"
+    release = tmp_path / "competitor-ready.fifo"
+    os.mkfifo(ready)
+    os.mkfifo(release)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT / "src")
+    writer_script = """
+import sys
+from pathlib import Path
+from proofline import line_writer
+from proofline.line_writer import LineInitError, initialize_line
+project, ready, release = map(Path, sys.argv[1:4])
+original = line_writer._commit_line_path
+def synchronized_commit(source, target, parent_fd):
+    with ready.open('w', encoding='utf-8') as stream:
+        stream.write('ready')
+    with release.open('r', encoding='utf-8') as stream:
+        assert stream.read() == 'release'
+    original(source, target, parent_fd)
+line_writer._commit_line_path = synchronized_commit
+try:
+    initialize_line(project, 'line-0013', 'Synchronized race')
+except LineInitError as exc:
+    print(f'{exc.code}|{exc.message}')
+    raise SystemExit(7)
+raise SystemExit(0)
+"""
+    writer = subprocess.Popen(
+        [sys.executable, "-c", writer_script, str(project), str(ready), str(release)],
+        cwd=project,
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    competitor = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            competitor_script,
+            str(project),
+            str(ready),
+            str(release),
+        ],
+        cwd=project,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    writer_stdout, writer_stderr = writer.communicate(timeout=30)
+    competitor_stdout, competitor_stderr = competitor.communicate(timeout=30)
+    return (
+        subprocess.CompletedProcess(
+            writer.args, writer.returncode, writer_stdout, writer_stderr
+        ),
+        subprocess.CompletedProcess(
+            competitor.args,
+            competitor.returncode,
+            competitor_stdout,
+            competitor_stderr,
+        ),
     )
 
 
@@ -185,13 +268,902 @@ def test_line_init_cleans_temporary_tree_when_atomic_rename_loses_race(
 ) -> None:
     project = make_project(tmp_path)
 
-    def lose_race(source: Path, target: Path) -> None:
+    def lose_race(source: Path, target: Path, _parent_fd: int) -> None:
         raise FileExistsError(target)
 
-    monkeypatch.setattr("proofline.line_writer.os.rename", lose_race)
+    monkeypatch.setattr("proofline.line_writer._commit_line_path", lose_race)
 
     with pytest.raises(LineInitError, match="line.path.exists"):
         initialize_line(project, "line-0013", "Concurrent writer")
 
     assert not (project / ".proofline/lines/line-0013").exists()
+    assert not list(project.glob(".line-0013-*"))
+
+
+@pytest.mark.parametrize("target_kind", ["file", "symlink", "empty_dir", "nonempty_dir"])
+def test_line_init_preserves_target_kind_created_by_process_at_commit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target_kind: str,
+) -> None:
+    project = make_project(tmp_path)
+    target = project / ".proofline/lines/line-0013"
+    external = tmp_path / "external.txt"
+    external.write_bytes(b"external")
+    original_commit = line_writer._commit_line_path
+
+    def create_target_then_commit(source: Path, destination: Path, parent_fd: int) -> None:
+        script = (
+            "import os,pathlib,sys; "
+            "target=pathlib.Path(sys.argv[1]); kind=sys.argv[2]; external=sys.argv[3]; "
+            "target.write_bytes(b'competitor') if kind=='file' else "
+            "os.symlink(external, target) if kind=='symlink' else "
+            "(target.mkdir(), (target/'sentinel').write_bytes(b'competitor')) if kind=='nonempty_dir' else "
+            "target.mkdir()"
+        )
+        subprocess.run(
+            [sys.executable, "-c", script, str(target), target_kind, str(external)],
+            check=True,
+        )
+        original_commit(source, destination, parent_fd)
+
+    monkeypatch.setattr(line_writer, "_commit_line_path", create_target_then_commit)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", f"Race {target_kind}")
+
+    assert exc_info.value.code == "line.path.exists"
+    if target_kind == "file":
+        assert target.read_bytes() == b"competitor"
+    elif target_kind == "symlink":
+        assert target.is_symlink()
+        assert os.readlink(target) == str(external)
+        assert external.read_bytes() == b"external"
+    elif target_kind == "nonempty_dir":
+        assert (target / "sentinel").read_bytes() == b"competitor"
+    else:
+        assert target.is_dir()
+        assert list(target.iterdir()) == []
+    assert not list(project.glob(".line-0013-*"))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink requires platform privileges")
+def test_line_init_rejects_parent_replaced_after_preflight_without_external_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    lines_root = project / ".proofline/lines"
+    target = lines_root / "line-0013"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_bytes(b"external")
+    displaced_lines = tmp_path / "displaced-lines"
+    original_exists = Path.exists
+    target_absence_checks = 0
+
+    def replace_parent_after_preflight(path: Path) -> bool:
+        nonlocal target_absence_checks
+        exists = original_exists(path)
+        if path == target and not exists:
+            target_absence_checks += 1
+            if target_absence_checks == 2:
+                lines_root.rename(displaced_lines)
+                lines_root.symlink_to(outside, target_is_directory=True)
+        return exists
+
+    monkeypatch.setattr(Path, "exists", replace_parent_after_preflight)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Parent race")
+
+    assert exc_info.value.code == "lines_root.changed"
+    assert lines_root.is_symlink()
+    assert displaced_lines.is_dir()
+    assert sentinel.read_bytes() == b"external"
+    assert sorted(path.name for path in outside.iterdir()) == ["sentinel.txt"]
+    assert not list(project.glob(".line-0013-*"))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink requires platform privileges")
+def test_line_init_rolls_back_when_parent_is_replaced_at_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    lines_root = project / ".proofline/lines"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_bytes(b"external")
+    displaced_lines = tmp_path / "displaced-lines"
+    original_commit = line_writer._commit_line_path
+
+    def replace_parent_then_commit(source: Path, destination: Path, parent_fd: int) -> None:
+        subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import os,sys; "
+                    "os.rename(sys.argv[1], sys.argv[2]); "
+                    "os.symlink(sys.argv[3], sys.argv[1], target_is_directory=True)"
+                ),
+                str(lines_root),
+                str(displaced_lines),
+                str(outside),
+            ],
+            check=True,
+        )
+        original_commit(source, destination, parent_fd)
+
+    monkeypatch.setattr(line_writer, "_commit_line_path", replace_parent_then_commit)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Commit race")
+
+    assert exc_info.value.code == "lines_root.changed"
+    assert lines_root.is_symlink()
+    assert displaced_lines.is_dir()
+    assert sentinel.read_bytes() == b"external"
+    assert sorted(path.name for path in outside.iterdir()) == ["sentinel.txt"]
+    assert not list(project.glob(".line-0013-*"))
+
+
+@pytest.mark.parametrize("failing_name", ["line-0013.md", "dcy-0013.md"])
+def test_line_init_write_failure_is_typed_and_preserves_recursive_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failing_name: str
+) -> None:
+    project = make_project(tmp_path)
+    (project / "notes.bin").write_bytes(b"\x00external\xff")
+    before = tree_snapshot(project)
+    original_write_text = Path.write_text
+
+    def fail_discovery_write(path: Path, data: str, **kwargs: str | None) -> int:
+        if path.name == failing_name and path.parent.name.startswith(".line-0013-"):
+            raise PermissionError("injected artifact write failure")
+        return original_write_text(path, data, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_discovery_write)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Write failure")
+
+    assert exc_info.value.code == "line.write.failed"
+    assert tree_snapshot(project) == before
+    assert not list(project.glob(".line-0013-*"))
+
+
+def test_line_init_stage_identity_failure_is_typed_and_cleans_empty_stage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    before = tree_snapshot(project)
+    original_identity = line_writer._directory_identity
+
+    def fail_stage_identity(path: Path) -> tuple[int, int]:
+        if path.name.startswith(".line-0013-"):
+            raise PermissionError("injected stage identity failure")
+        return original_identity(path)
+
+    monkeypatch.setattr(line_writer, "_directory_identity", fail_stage_identity)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Identity failure")
+
+    assert exc_info.value.code == "line.prepare.failed"
+    assert tree_snapshot(project) == before
+    assert not list(project.glob(".line-0013-*"))
+
+
+def test_line_init_preserves_primary_error_and_reports_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    before = tree_snapshot(project)
+    original_write_text = Path.write_text
+    original_unlink = Path.unlink
+    cleanup_failures = 0
+
+    def fail_discovery_write(path: Path, data: str, **kwargs: str | None) -> int:
+        if path.name == "dcy-0013.md" and path.parent.name.startswith(".line-0013-"):
+            raise PermissionError("injected primary write failure")
+        return original_write_text(path, data, **kwargs)
+
+    def fail_first_cleanup(path: Path, missing_ok: bool = False) -> None:
+        nonlocal cleanup_failures
+        if path.name == "line-0013.md" and path.parent.name.startswith(".line-0013-") and cleanup_failures == 0:
+            cleanup_failures += 1
+            raise PermissionError("injected cleanup failure")
+        original_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "write_text", fail_discovery_write)
+    monkeypatch.setattr(Path, "unlink", fail_first_cleanup)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Cleanup failure")
+
+    assert exc_info.value.code == "line.write.failed"
+    assert "line.cleanup.failed" in exc_info.value.message
+    assert cleanup_failures == 1
+    assert tree_snapshot(project) == before
+
+
+def test_line_init_reports_persistent_stage_cleanup_failure_without_masking_primary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    original_write_text = Path.write_text
+    original_unlink = Path.unlink
+
+    def fail_discovery_write(path: Path, data: str, **kwargs: str | None) -> int:
+        if path.name == "dcy-0013.md" and path.parent.name.startswith(".line-0013-"):
+            raise PermissionError("injected primary write failure")
+        return original_write_text(path, data, **kwargs)
+
+    def fail_owned_stage_cleanup(path: Path, missing_ok: bool = False) -> None:
+        if path.parent.name.startswith(".line-0013-"):
+            raise PermissionError("injected persistent cleanup failure")
+        original_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(Path, "write_text", fail_discovery_write)
+    monkeypatch.setattr(Path, "unlink", fail_owned_stage_cleanup)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Persistent cleanup failure")
+
+    assert exc_info.value.code == "line.write.failed"
+    assert "secondary:" in exc_info.value.message
+    assert "line.cleanup.failed" in exc_info.value.message
+    assert len(list(project.glob(".line-0013-*"))) == 1
+
+
+def test_line_init_preserves_primary_when_cleanup_inspection_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    original_write_text = Path.write_text
+    original_stat = Path.stat
+    primary_failed = False
+
+    def fail_discovery_write(path: Path, data: str, **kwargs: str | None) -> int:
+        nonlocal primary_failed
+        if path.name == "dcy-0013.md" and path.parent.name.startswith(".line-0013-"):
+            primary_failed = True
+            raise PermissionError("injected primary write failure")
+        return original_write_text(path, data, **kwargs)
+
+    def fail_stage_inspection(path: Path, *, follow_symlinks: bool = True) -> os.stat_result:
+        if primary_failed and path.name.startswith(".line-0013-"):
+            raise PermissionError("injected persistent cleanup inspection failure")
+        return original_stat(path, follow_symlinks=follow_symlinks)
+
+    monkeypatch.setattr(Path, "write_text", fail_discovery_write)
+    monkeypatch.setattr(Path, "stat", fail_stage_inspection)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Cleanup inspection failure")
+
+    assert exc_info.value.code == "line.write.failed"
+    assert "secondary:" in exc_info.value.message
+    assert "line.cleanup.failed" in exc_info.value.message
+
+
+def test_line_init_reports_stage_identity_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    original_identity = line_writer._directory_identity
+    original_rmdir = Path.rmdir
+
+    def fail_stage_identity(path: Path) -> tuple[int, int]:
+        if path.name.startswith(".line-0013-"):
+            raise PermissionError("injected stage identity failure")
+        return original_identity(path)
+
+    def fail_stage_rmdir(path: Path) -> None:
+        if path.name.startswith(".line-0013-"):
+            raise PermissionError("injected stage cleanup failure")
+        original_rmdir(path)
+
+    monkeypatch.setattr(line_writer, "_directory_identity", fail_stage_identity)
+    monkeypatch.setattr(Path, "rmdir", fail_stage_rmdir)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Stage cleanup failure")
+
+    assert exc_info.value.code == "line.prepare.failed"
+    assert "line.cleanup.failed" in exc_info.value.message
+    assert "staging cleanup 실패" in exc_info.value.message
+    assert len(list(project.glob(".line-0013-*"))) == 1
+
+
+def test_line_init_rejects_missing_commit_capability_before_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    before = tree_snapshot(project)
+
+    def reject_capability(_project_root: Path) -> None:
+        raise LineInitError(
+            "line.commit.unsupported", ".", "atomic no-replace commit을 지원하지 않습니다."
+        )
+
+    def stage_must_not_start(_project_root: Path, _line_id: str) -> tuple[Path, tuple[int, int]]:
+        raise AssertionError("staging started before capability preflight")
+
+    monkeypatch.setattr(line_writer, "_require_commit_capability", reject_capability, raising=False)
+    monkeypatch.setattr(line_writer, "_new_stage", stage_must_not_start)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Unsupported commit")
+
+    assert exc_info.value.code == "line.commit.unsupported"
+    assert tree_snapshot(project) == before
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_line_init_rejects_unsupported_filesystem_before_staging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dry_run: bool,
+) -> None:
+    project = make_project(tmp_path)
+    before = tree_snapshot(project)
+
+    def unsupported_filesystem(_project_root: Path) -> str:
+        return "unsupported-test-fs"
+
+    def stage_must_not_start(
+        _project_root: Path, _line_id: str
+    ) -> tuple[Path, tuple[int, int]]:
+        raise AssertionError("staging started before filesystem capability preflight")
+
+    monkeypatch.setattr(line_writer, "_linux_filesystem_type", unsupported_filesystem)
+    monkeypatch.setattr(line_writer, "_new_stage", stage_must_not_start)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(
+            project,
+            "line-0013",
+            "Unsupported filesystem",
+            dry_run=dry_run,
+        )
+
+    assert exc_info.value.code == "line.commit.unsupported"
+    assert "unsupported-test-fs" in exc_info.value.message
+    assert tree_snapshot(project) == before
+
+
+def test_source_cli_reports_injected_write_failure_and_cleans_stage(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    before = tree_snapshot(project)
+    script = """
+from pathlib import Path
+from proofline.cli import main
+original = Path.write_text
+def fail_discovery(path, data, **kwargs):
+    if path.name == 'dcy-0013.md' and path.parent.name.startswith('.line-0013-'):
+        raise PermissionError('injected source CLI write failure')
+    return original(path, data, **kwargs)
+Path.write_text = fail_discovery
+raise SystemExit(main(['line', 'init', 'line-0013', '--title', 'CLI failure']))
+"""
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT / "src")
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=project,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert "line.write.failed" in result.stderr
+    assert ".proofline/lines/line-0013/line-0013.md" in result.stderr
+    assert tree_snapshot(project) == before
+
+
+def test_line_init_commit_failure_is_typed_and_preserves_recursive_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    before = tree_snapshot(project)
+
+    def fail_commit(_source: Path, _target: Path, _parent_fd: int) -> None:
+        raise OSError(5, "injected commit I/O failure")
+
+    monkeypatch.setattr(line_writer, "_commit_line_path", fail_commit)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Commit failure")
+
+    assert exc_info.value.code == "line.commit.failed"
+    assert tree_snapshot(project) == before
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlink requires platform privileges")
+def test_line_init_retries_owned_rollback_and_reports_secondary_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    lines_root = project / ".proofline/lines"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_bytes(b"external")
+    displaced_lines = tmp_path / "displaced-lines"
+    original_commit = line_writer._commit_line_path
+    original_unlink = os.unlink
+    rollback_failures = 0
+    commit_done = False
+
+    def replace_parent_then_commit(source: Path, destination: Path, parent_fd: int) -> None:
+        nonlocal commit_done
+        lines_root.rename(displaced_lines)
+        lines_root.symlink_to(outside, target_is_directory=True)
+        original_commit(source, destination, parent_fd)
+        commit_done = True
+
+    def fail_first_rollback(
+        path: str | bytes,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        nonlocal rollback_failures
+        if (
+            commit_done
+            and path == "line-0013.md"
+            and dir_fd is not None
+            and rollback_failures == 0
+        ):
+            rollback_failures += 1
+            raise PermissionError("injected rollback failure")
+        original_unlink(path, dir_fd=dir_fd)
+
+    monkeypatch.setattr(line_writer, "_commit_line_path", replace_parent_then_commit)
+    monkeypatch.setattr(os, "unlink", fail_first_rollback)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Rollback failure")
+
+    assert exc_info.value.code == "lines_root.changed"
+    assert "line.rollback.failed" in exc_info.value.message
+    assert rollback_failures == 1
+    assert sentinel.read_bytes() == b"external"
+    assert sorted(path.name for path in outside.iterdir()) == ["sentinel.txt"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="dirfd and symlink semantics are POSIX-specific")
+def test_line_init_reports_persistent_anchored_rollback_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    lines_root = project / ".proofline/lines"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_bytes(b"external")
+    displaced_lines = tmp_path / "displaced-lines"
+    original_commit = line_writer._commit_line_path
+    original_unlink = os.unlink
+    commit_done = False
+
+    def replace_parent_then_commit(source: Path, destination: Path, parent_fd: int) -> None:
+        nonlocal commit_done
+        lines_root.rename(displaced_lines)
+        lines_root.symlink_to(outside, target_is_directory=True)
+        original_commit(source, destination, parent_fd)
+        commit_done = True
+
+    def fail_owned_rollback(
+        path: str | bytes,
+        *,
+        dir_fd: int | None = None,
+    ) -> None:
+        if commit_done and dir_fd is not None and path == "line-0013.md":
+            raise PermissionError("injected persistent rollback failure")
+        original_unlink(path, dir_fd=dir_fd)
+
+    monkeypatch.setattr(line_writer, "_commit_line_path", replace_parent_then_commit)
+    monkeypatch.setattr(os, "unlink", fail_owned_rollback)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Persistent rollback failure")
+
+    assert exc_info.value.code == "lines_root.changed"
+    assert "secondary:" in exc_info.value.message
+    assert "line.rollback.failed" in exc_info.value.message
+    assert sentinel.read_bytes() == b"external"
+    assert sorted(path.name for path in outside.iterdir()) == ["sentinel.txt"]
+    assert (displaced_lines / "line-0013/line-0013.md").is_file()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="dirfd and symlink semantics are POSIX-specific")
+def test_line_init_rolls_back_through_original_parent_after_postcommit_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    lines_root = project / ".proofline/lines"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel.txt"
+    sentinel.write_bytes(b"external")
+    displaced_lines = tmp_path / "displaced-lines"
+    original_commit = line_writer._commit_line_path
+
+    def commit_then_replace_parent(source: Path, destination: Path, parent_fd: int) -> None:
+        original_commit(source, destination, parent_fd)
+        lines_root.rename(displaced_lines)
+        lines_root.symlink_to(outside, target_is_directory=True)
+
+    monkeypatch.setattr(line_writer, "_commit_line_path", commit_then_replace_parent)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Postcommit parent race")
+
+    assert exc_info.value.code == "lines_root.changed"
+    assert sorted(path.name for path in outside.iterdir()) == ["sentinel.txt"]
+    assert sorted(path.name for path in displaced_lines.iterdir()) == []
+
+
+@pytest.mark.skipif(os.name == "nt", reason="dirfd and symlink semantics are POSIX-specific")
+def test_line_init_detects_artifact_root_swap_that_preserves_lines_inode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    artifact_root = project / ".proofline"
+    displaced_artifact_root = tmp_path / "displaced-proofline"
+    original_commit = line_writer._commit_line_path
+
+    def replace_ancestor_then_commit(
+        source: Path, destination: Path, parent_fd: int
+    ) -> None:
+        artifact_root.rename(displaced_artifact_root)
+        artifact_root.symlink_to(displaced_artifact_root, target_is_directory=True)
+        original_commit(source, destination, parent_fd)
+
+    monkeypatch.setattr(line_writer, "_commit_line_path", replace_ancestor_then_commit)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Ancestor race")
+
+    assert exc_info.value.code == "artifact_root.changed"
+    assert artifact_root.is_symlink()
+    assert sorted(path.name for path in (displaced_artifact_root / "lines").iterdir()) == []
+
+
+@pytest.mark.parametrize(
+    ("helper_name", "expected_code"),
+    [("_render", "template.unavailable"), ("_validate_rendered", "render.unavailable")],
+)
+def test_line_init_preparation_oserror_is_typed_before_staging(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    helper_name: str,
+    expected_code: str,
+) -> None:
+    project = make_project(tmp_path)
+    before = tree_snapshot(project)
+
+    def fail_preparation(*_args: object, **_kwargs: object) -> None:
+        raise OSError(5, "injected preparation I/O failure")
+
+    def stage_must_not_start(_project_root: Path, _line_id: str) -> tuple[Path, tuple[int, int]]:
+        raise AssertionError("staging started after preparation failure")
+
+    monkeypatch.setattr(line_writer, helper_name, fail_preparation)
+    monkeypatch.setattr(line_writer, "_new_stage", stage_must_not_start)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Preparation failure")
+
+    assert exc_info.value.code == expected_code
+    assert tree_snapshot(project) == before
+
+
+def test_line_init_malformed_template_is_typed_before_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    before = tree_snapshot(project)
+
+    def fail_decode(_line_id: str, _title: str) -> tuple[str, str]:
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "injected malformed template")
+
+    def stage_must_not_start(_project_root: Path, _line_id: str) -> tuple[Path, tuple[int, int]]:
+        raise AssertionError("staging started after malformed template")
+
+    monkeypatch.setattr(line_writer, "_render", fail_decode)
+    monkeypatch.setattr(line_writer, "_new_stage", stage_must_not_start)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Malformed template")
+
+    assert exc_info.value.code == "template.malformed"
+    assert tree_snapshot(project) == before
+
+
+def test_line_init_rejects_arbitrary_unresolved_template_variable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    before = tree_snapshot(project)
+    original_read_template = line_writer._read_template
+
+    def template_with_unknown_variable(name: str) -> str:
+        text = original_read_template(name)
+        if name == "line.md":
+            return f"{text}\n{{{{UNKNOWN_VARIABLE}}}}\n"
+        return text
+
+    monkeypatch.setattr(line_writer, "_read_template", template_with_unknown_variable)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Unresolved variable")
+
+    assert exc_info.value.code == "template.variable.unresolved"
+    assert "{{UNKNOWN_VARIABLE}}" in exc_info.value.message
+    assert tree_snapshot(project) == before
+
+
+def test_line_init_close_failure_rolls_back_owned_commit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    before = tree_snapshot(project)
+    original_open_child = line_writer._open_verified_child
+    original_close = os.close
+    lines_fd: int | None = None
+    close_failures = 0
+
+    def record_lines_fd(
+        parent_fd: int,
+        name: str,
+        expected: tuple[int, int],
+        code: str,
+        display_path: str,
+    ) -> int:
+        nonlocal lines_fd
+        descriptor = original_open_child(parent_fd, name, expected, code, display_path)
+        if name == "lines":
+            lines_fd = descriptor
+        return descriptor
+
+    def fail_first_lines_close(descriptor: int) -> None:
+        nonlocal close_failures
+        if descriptor == lines_fd and close_failures == 0:
+            close_failures += 1
+            raise OSError(5, "injected descriptor close failure")
+        original_close(descriptor)
+
+    monkeypatch.setattr(line_writer, "_open_verified_child", record_lines_fd)
+    monkeypatch.setattr(os, "close", fail_first_lines_close)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Close failure")
+
+    assert exc_info.value.code == "line.finalize.failed"
+    assert close_failures == 1
+    assert tree_snapshot(project) == before
+
+
+def test_line_init_anchor_open_primary_survives_close_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    before = tree_snapshot(project)
+    original_open_child = line_writer._open_verified_child
+    original_close = os.close
+    artifact_fd: int | None = None
+    close_attempts: list[int] = []
+    failed = False
+
+    def fail_lines_open(
+        parent_fd: int,
+        name: str,
+        expected: tuple[int, int],
+        code: str,
+        display_path: str,
+    ) -> int:
+        nonlocal artifact_fd
+        if name == "lines":
+            raise LineInitError("lines_root.changed", display_path, "injected open failure")
+        artifact_fd = original_open_child(parent_fd, name, expected, code, display_path)
+        return artifact_fd
+
+    def fail_artifact_close(descriptor: int) -> None:
+        nonlocal failed
+        if artifact_fd is not None:
+            close_attempts.append(descriptor)
+        if descriptor == artifact_fd and not failed:
+            failed = True
+            raise OSError(5, "injected anchor close failure")
+        original_close(descriptor)
+
+    monkeypatch.setattr(line_writer, "_open_verified_child", fail_lines_open)
+    monkeypatch.setattr(os, "close", fail_artifact_close)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Anchor close")
+
+    assert exc_info.value.code == "lines_root.changed"
+    assert "line.finalize.failed" in exc_info.value.message
+    assert len(close_attempts) == 2
+    assert tree_snapshot(project) == before
+    assert artifact_fd is not None
+    original_close(artifact_fd)
+
+
+def test_line_init_stage_primary_survives_anchor_close_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    before = tree_snapshot(project)
+    original_open_directory = line_writer._open_verified_directory
+    original_open_child = line_writer._open_verified_child
+    original_close = os.close
+    opened: list[int] = []
+    close_attempts: list[int] = []
+    failed = False
+    stage_failed = False
+
+    def record_directory(*args: object, **kwargs: object) -> int:
+        descriptor = original_open_directory(*args, **kwargs)  # type: ignore[arg-type]
+        opened.append(descriptor)
+        return descriptor
+
+    def record_child(*args: object, **kwargs: object) -> int:
+        descriptor = original_open_child(*args, **kwargs)  # type: ignore[arg-type]
+        opened.append(descriptor)
+        return descriptor
+
+    def fail_stage(_root: Path, _line_id: str) -> tuple[Path, tuple[int, int]]:
+        nonlocal stage_failed
+        stage_failed = True
+        raise LineInitError("line.prepare.failed", ".", "injected stage failure")
+
+    def fail_first_close(descriptor: int) -> None:
+        nonlocal failed
+        if not stage_failed:
+            original_close(descriptor)
+            return
+        close_attempts.append(descriptor)
+        if not failed:
+            failed = True
+            raise OSError(5, "injected anchor close failure")
+        original_close(descriptor)
+
+    monkeypatch.setattr(line_writer, "_open_verified_directory", record_directory)
+    monkeypatch.setattr(line_writer, "_open_verified_child", record_child)
+    monkeypatch.setattr(line_writer, "_new_stage", fail_stage)
+    monkeypatch.setattr(os, "close", fail_first_close)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Stage close")
+
+    assert exc_info.value.code == "line.prepare.failed"
+    assert "line.finalize.failed" in exc_info.value.message
+    assert set(close_attempts) == set(opened)
+    assert tree_snapshot(project) == before
+    original_close(close_attempts[0])
+
+
+@pytest.mark.parametrize("close_kind", ["artifact", "target"])
+def test_line_init_rollback_primary_survives_internal_close_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, close_kind: str
+) -> None:
+    project = make_project(tmp_path)
+    lines_root = project / ".proofline/lines"
+    displaced = project / "displaced-lines"
+    original_commit = line_writer._commit_line_path
+    original_open = os.open
+    original_close = os.close
+    selected_fd: int | None = None
+    close_failed = False
+    committed = False
+
+    def swap_then_commit(source: Path, destination: Path, parent_fd: int) -> None:
+        nonlocal committed
+        original_commit(source, destination, parent_fd)
+        committed = True
+        lines_root.rename(displaced)
+        lines_root.mkdir()
+
+    def record_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
+        nonlocal selected_fd
+        descriptor = original_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+        name = os.fsdecode(path) if isinstance(path, (str, bytes)) else ""
+        if committed and (
+            (close_kind == "target" and name == "line-0013")
+            or (close_kind == "artifact" and name == "line-0013.md")
+        ):
+            selected_fd = descriptor
+        return descriptor
+
+    def fail_selected_close(descriptor: int) -> None:
+        nonlocal close_failed
+        if descriptor == selected_fd and not close_failed:
+            close_failed = True
+            raise OSError(5, "injected rollback close failure")
+        original_close(descriptor)
+
+    monkeypatch.setattr(line_writer, "_commit_line_path", swap_then_commit)
+    monkeypatch.setattr(os, "open", record_open)
+    monkeypatch.setattr(os, "close", fail_selected_close)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Rollback close")
+
+    assert exc_info.value.code == "lines_root.changed"
+    assert "line.rollback.failed" in exc_info.value.message
+    assert "line.finalize.failed" in exc_info.value.message
+    assert close_failed
+    assert selected_fd is not None
+    assert not (displaced / "line-0013").exists()
+    assert list(lines_root.iterdir()) == []
+    assert not list(project.glob(".line-0013-*"))
+    original_close(selected_fd)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux FIFO race contract")
+def test_line_init_synchronized_process_target_appearance_race(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    competitor_script = """
+import sys
+from pathlib import Path
+project, ready, release = map(Path, sys.argv[1:4])
+with ready.open('r', encoding='utf-8') as stream:
+    assert stream.read() == 'ready'
+target = project / '.proofline/lines/line-0013'
+target.mkdir()
+(target / 'competitor.txt').write_bytes(b'competitor')
+with release.open('w', encoding='utf-8') as stream:
+    stream.write('release')
+"""
+
+    writer, competitor = run_synchronized_writer_race(
+        project, tmp_path, competitor_script
+    )
+
+    assert competitor.returncode == 0, competitor.stderr
+    assert writer.returncode == 7, writer.stderr
+    assert writer.stdout.startswith("line.path.exists|")
+    target = project / ".proofline/lines/line-0013"
+    assert (target / "competitor.txt").read_bytes() == b"competitor"
+    assert not list(project.glob(".line-0013-*"))
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux FIFO race contract")
+def test_line_init_synchronized_process_parent_replacement_race(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "sentinel.txt").write_bytes(b"external")
+    competitor_script = """
+import os
+import sys
+from pathlib import Path
+project, ready, release = map(Path, sys.argv[1:4])
+with ready.open('r', encoding='utf-8') as stream:
+    assert stream.read() == 'ready'
+lines = project / '.proofline/lines'
+lines.rename(project / 'displaced-lines')
+os.symlink(project.parent / 'outside', lines, target_is_directory=True)
+with release.open('w', encoding='utf-8') as stream:
+    stream.write('release')
+"""
+
+    writer, competitor = run_synchronized_writer_race(
+        project, tmp_path, competitor_script
+    )
+
+    assert competitor.returncode == 0, competitor.stderr
+    assert writer.returncode == 7, writer.stderr
+    assert writer.stdout.startswith("lines_root.changed|")
+    assert (outside / "sentinel.txt").read_bytes() == b"external"
+    assert sorted(path.name for path in outside.iterdir()) == ["sentinel.txt"]
+    displaced = project / "displaced-lines"
+    assert not (displaced / "line-0013").exists()
     assert not list(project.glob(".line-0013-*"))

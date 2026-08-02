@@ -7,13 +7,15 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+from proofline.line_writer import _render
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_built_sdist_contains_project_schema_resources(tmp_path: Path) -> None:
     dist = tmp_path / "dist"
     build = subprocess.run(
-        ["uv", "build", "--sdist", "--out-dir", str(dist)],
+        ["uv", "build", "--refresh", "--sdist", "--out-dir", str(dist)],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -34,7 +36,7 @@ def test_built_sdist_contains_project_schema_resources(tmp_path: Path) -> None:
 def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Path) -> None:
     dist = tmp_path / "dist"
     build = subprocess.run(
-        ["uv", "build", "--wheel", "--out-dir", str(dist)],
+        ["uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -90,7 +92,15 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
     python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     proofline = venv / ("Scripts/proofline.exe" if os.name == "nt" else "bin/proofline")
     install = subprocess.run(
-        ["uv", "pip", "install", "--python", str(python), str(wheel)],
+        [
+            "uv",
+            "pip",
+            "install",
+            "--refresh",
+            "--python",
+            str(python),
+            str(wheel),
+        ],
         cwd=tmp_path,
         text=True,
         capture_output=True,
@@ -223,6 +233,27 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
     )
     assert validate.returncode == 0, validate.stderr  # ac-0001
 
+    line_dry_run = subprocess.run(
+        [
+            str(proofline),
+            "line",
+            "init",
+            "line-0001",
+            "--title",
+            "첫 Line",
+            "--dry-run",
+        ],
+        cwd=e2e_project,
+        env=project_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert line_dry_run.returncode == 0, line_dry_run.stderr
+    assert ".proofline/lines/line-0001/line-0001.md" in line_dry_run.stdout
+    assert ".proofline/lines/line-0001/dcy-0001.md" in line_dry_run.stdout
+    assert not (e2e_project / ".proofline/lines/line-0001").exists()
+
     line_init = subprocess.run(
         [str(proofline), "line", "init", "line-0001", "--title", "첫 Line"],
         cwd=e2e_project,
@@ -232,8 +263,70 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
         check=False,
     )
     assert line_init.returncode == 0, line_init.stderr  # ac-0004
-    assert (e2e_project / ".proofline/lines/line-0001/line-0001.md").is_file()
-    assert (e2e_project / ".proofline/lines/line-0001/dcy-0001.md").is_file()
+    expected_line, expected_discovery = _render("line-0001", "첫 Line")
+    assert (e2e_project / ".proofline/lines/line-0001/line-0001.md").read_bytes() == (
+        expected_line.encode("utf-8")
+    )
+    assert (e2e_project / ".proofline/lines/line-0001/dcy-0001.md").read_bytes() == (
+        expected_discovery.encode("utf-8")
+    )
+
+    collision = subprocess.run(
+        [str(proofline), "line", "init", "line-0001", "--title", "충돌"],
+        cwd=e2e_project,
+        env=project_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert collision.returncode != 0
+    assert "line.path.exists" in collision.stderr
+    assert not list(e2e_project.glob(".line-0001-*"))
+
+    failure_script = """
+import contextlib
+import io
+import sys
+from pathlib import Path
+from proofline.cli import main
+original = Path.write_text
+def fail_discovery(path, data, **kwargs):
+    if path.name == 'dcy-0002.md' and path.parent.name.startswith('.line-0002-'):
+        raise PermissionError('injected installed-wheel write failure')
+    return original(path, data, **kwargs)
+Path.write_text = fail_discovery
+stderr = io.StringIO()
+with contextlib.redirect_stderr(stderr):
+    result = main(['line', 'init', 'line-0002', '--title', '실패 정리'])
+assert result == 1, result
+diagnostic = stderr.getvalue()
+assert 'line.write.failed' in diagnostic, diagnostic
+assert '.proofline/lines/line-0002/line-0002.md' in diagnostic, diagnostic
+assert not Path('.proofline/lines/line-0002').exists()
+assert not list(Path('.').glob('.line-0002-*'))
+print(diagnostic, end='', file=sys.stderr)
+"""
+    failure_cleanup = subprocess.run(
+        [str(python), "-I", "-c", failure_script],
+        cwd=e2e_project,
+        env=project_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert failure_cleanup.returncode == 0, failure_cleanup.stderr
+    assert "line.write.failed" in failure_cleanup.stderr
+    assert ".proofline/lines/line-0002/line-0002.md" in failure_cleanup.stderr
+
+    post_line_validate = subprocess.run(
+        [str(proofline), "validate"],
+        cwd=e2e_project,
+        env=project_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert post_line_validate.returncode == 0, post_line_validate.stderr
     assert {
         path.relative_to(project_home): path.read_bytes()
         for path in project_home.rglob("*")
