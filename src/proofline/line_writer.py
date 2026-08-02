@@ -13,7 +13,6 @@ from pathlib import Path
 
 from .validator import validate_project
 
-
 LINE_ID_RE = re.compile(r"^line-(\d{4})$")
 TEMPLATE_PACKAGE = "proofline_schema_v1_templates"
 
@@ -185,8 +184,8 @@ def initialize_line(
         raise LineInitError(
             "artifact_root.symlink", ".proofline", "artifact root symlink는 허용하지 않습니다."
         )
-    _require_valid_project(project_root)
     target = _require_safe_paths(project_root, line_id)
+    _require_valid_project(project_root)
     _require_unused_history(project_root, line_id)
     line_text, discovery_text = _render(line_id, title)
     _validate_rendered(line_id, line_text, discovery_text)

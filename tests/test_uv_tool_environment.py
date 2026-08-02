@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import shutil
 import subprocess
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,7 +42,9 @@ def test_uv_tool_install_is_isolated_from_application_environment(tmp_path: Path
     )
     env.pop("PYTHONPATH", None)
 
-    installed = run("uv", "tool", "install", str(ROOT), cwd=tmp_path, env=env)
+    installed = run(
+        "uv", "tool", "install", "--refresh", str(ROOT), cwd=tmp_path, env=env
+    )
     assert installed.returncode == 0, installed.stderr
 
     executable = bin_dir / "proofline"

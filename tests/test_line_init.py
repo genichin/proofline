@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -10,15 +11,22 @@ import yaml
 
 from proofline.line_writer import LineInitError, initialize_line
 
-
 ROOT = Path(__file__).resolve().parents[1]
-PROOFLINE = shutil.which("proofline")
-
-
 def run(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
-    assert PROOFLINE is not None
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT / "src")
     return subprocess.run(
-        [PROOFLINE, *args], cwd=cwd, text=True, capture_output=True, check=False
+        [
+            sys.executable,
+            "-c",
+            "from proofline.cli import main; raise SystemExit(main())",
+            *args,
+        ],
+        cwd=cwd,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
     )
 
 
