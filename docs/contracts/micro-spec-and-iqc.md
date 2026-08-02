@@ -130,7 +130,7 @@ implementation_status
 ```
 
 - `criteria`에는 최소 하나의 AC가 있어야 한다.
-- `criteria`의 모든 AC는 parent REQ의 `create`, `update`, `retire` 합집합에 포함되어야 한다.
+- `criteria`의 모든 AC는 parent REQ의 `create`, `update`, `retire`, `satisfy` 합집합에 포함되어야 한다.
 - `parent_req`는 같은 Line의 유일한 REQ를 가리켜야 한다.
 
 ### Markdown 본문

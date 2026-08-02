@@ -1,7 +1,7 @@
 ---
 name: proofline-approve-specification
 description: Use when presenting, approving, or auditing a ProofLine REQ and newly created AC specification without turning optional transition evidence into an implementation gate.
-version: 1.1.0
+version: 1.2.0
 author: ProofLine
 license: MIT
 metadata:
@@ -19,6 +19,7 @@ metadata:
 ## When to Use
 
 - Confirmed Discovery에서 신규 REQ와 `criteria.create` AC를 승인할 때
+- `criteria.update`, `criteria.retire` 또는 `criteria.satisfy`가 포함된 REQ exact bytes를 승인할 때
 - 승인 commit에 draft transition evidence가 있는지 선택적으로 확인할 때
 - Exact approved commit을 implementation worktree에 전달하기 전에 specification 상태를 요약할 때
 
@@ -32,6 +33,8 @@ metadata:
 ## Authority Boundary
 
 Hermes는 REQ objective·scope·non-goals와 AC criterion·verification을 사용자에게 보여주고 명시적 approval을 기다린다. 사용자의 승인 없이 REQ를 `approved` 또는 AC를 `active`로 전환하지 않는다.
+
+`criteria.satisfy` 대상은 승인된 active AC의 의미를 변경하지 않는 binding이다. Approval 전후에 대상 AC body와 status를 변경하지 않으며 의미 변경이 필요하면 REQ를 `criteria.update`로 고쳐 다시 승인한다.
 
 Git commit, branch, worktree, merge와 push는 ProofLine CLI 책임이 아니다. Agent가 사용자의 결정 후 Git 명령을 실행하더라도 실제 상태와 exact commit을 보고한다.
 

@@ -1,7 +1,7 @@
 ---
 name: proofline-start-line
 description: Use when starting a new ProofLine Line and writing its evidence-grounded Discovery draft without granting the agent confirmation authority.
-version: 1.0.0
+version: 1.1.0
 author: ProofLine
 license: MIT
 metadata:
@@ -75,6 +75,12 @@ CLI는 Discovery의 실질적 내용을 판단하지 않는다. 생성 직후 `p
 
 Evidence가 부족하면 추측으로 채우지 않고 `{{NEEDS_EVIDENCE: ...}}` 또는 Open Question을 사용한다.
 
+### 4. AC admission을 분류한다
+
+REQ 작성 전에 변경을 `create`, `update`, `retire`, 기존 active AC를 변경하지 않는 `satisfy`, `release evidence`, 또는 Line 밖 `housekeeping`으로 분류한다. `create` 전에 가장 가까운 active AC, `update` 가능성, version-independent 동작인지, 독립 PASS/FAIL과 장기 active 가치가 있는지 확인한다.
+
+Version·tag·checksum 같은 release-specific 표현은 review warning으로 표시하되 validator hard error로 단정하지 않는다. `create/update/satisfy`가 불명확하면 사용자가 결정할 Open Question으로 남긴다.
+
 ## Discovery 작성
 
 ### `Problem`
@@ -146,6 +152,7 @@ Evidence가 부족하면 추측으로 채우지 않고 `{{NEEDS_EVIDENCE: ...}}`
 - [ ] Dry-run이 통과했다.
 - [ ] 두 canonical artifact만 생성됐다.
 - [ ] 직접 evidence를 확인한 뒤 Discovery를 작성했다.
+- [ ] create/update/retire/satisfy/release evidence/housekeeping 분류와 가장 가까운 active AC를 검토했다.
 - [ ] 필수 section이 실질적 내용을 갖거나 허용된 draft placeholder를 사용한다.
 - [ ] Blocking decision은 Owner와 Exit Condition을 가진 Open Question이다.
 - [ ] Credential 값이 없으며 필요한 값은 `[REDACTED]`다.

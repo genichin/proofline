@@ -15,7 +15,7 @@ def test_start_line_skill_has_valid_frontmatter_and_actionable_body() -> None:
     assert metadata["name"] == "proofline-start-line"
     assert metadata["description"].startswith("Use when ")
     assert len(metadata["description"]) <= 1024
-    assert metadata["version"] == "1.0.0"
+    assert metadata["version"] == "1.1.0"
     assert body.strip()
 
 

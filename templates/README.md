@@ -27,7 +27,7 @@ templates/
 - YAML scalar 전체가 variable이면 항상 따옴표로 감싼다.
 - 생성된 draft 본문에는 `{{TODO: ...}}`, `{{UNKNOWN: ...}}`, `{{NEEDS_EVIDENCE: ...}}`만 남길 수 있다.
 - 생성 결과의 frontmatter에는 어떤 placeholder도 남기지 않는다.
-- REQ의 `criteria` 세 목록은 writer가 생성 전에 확정하며 합집합에 최소 하나의 AC를 넣는다.
+- 새 REQ의 `criteria`는 `create`, `update`, `retire`, `satisfy` 네 목록을 생성 전에 확정하며 합집합에 최소 하나의 AC를 넣는다. Historical schema-v1 REQ의 세 목록 형태는 계속 유효하다.
 - 필요하지 않은 선택 section과 예시 행은 생성할 때 제거한다. 필수 H1·H2 section은 제거하지 않는다.
 - 템플릿은 lifecycle 권한을 부여하지 않는다. 상태 전환과 판정은 canonical artifact와 Git history가 소유한다.
 - 생성 결과는 `docs/contracts/`의 해당 artifact contract와 validator를 통과해야 한다.

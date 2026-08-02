@@ -48,7 +48,7 @@ def test_run_dqc_skill_has_valid_frontmatter() -> None:
     metadata = yaml.safe_load(frontmatter)
     assert metadata["name"] == "proofline-run-dqc"
     assert metadata["description"].startswith("Use when ")
-    assert metadata["version"] == "1.0.0"
+    assert metadata["version"] == "1.1.0"
     assert "## When to Use" in body
     assert body.strip()
 

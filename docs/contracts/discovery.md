@@ -159,6 +159,8 @@ atomic product behavior   → AC Criterion
 판정 방법                 → AC Verification
 ```
 
+REQ 작성 전에는 Scope에서 변경을 `create`, `update`, `retire`, 기존 active AC를 변경하지 않는 `satisfy`, release evidence 또는 Line 밖 housekeeping으로 분류한다. `create`를 선택할 때는 가장 가까운 active AC와 `update` 가능성, version independence, 독립 PASS/FAIL 및 장기 active 가치를 검토한다. 분류가 불명확하면 confirmation을 차단하는 Open Question으로 기록하며 사용자가 최종 semantic 판단을 소유한다.
+
 `answered`는 Discovery confirmation을 차단하지 않는다. 현재 상태 중심의 문서를 유지하려면 답의 반영을 검토한 뒤 해당 Open Question 항목을 제거할 수 있으며, 질문과 해소 이력은 Git history가 보존한다. 항목을 유지하더라도 답의 canonical source of truth는 `Evidence`, `Scope`, `Out of Scope` 또는 그 밖의 해당 owner section이며 Open Question에 답을 중복 기록하지 않는다.
 
 질문이 더 이상 유효하지 않으면 그에 따른 canonical owner section의 변경을 먼저 반영한 뒤 해당 list item을 제거한다. 별도의 `dropped` 상태는 두지 않으며 제거 이력은 Git history가 보존한다.

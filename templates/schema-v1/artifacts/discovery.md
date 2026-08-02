@@ -15,7 +15,7 @@ status: draft
 
 ## Scope
 
-- {{TODO: 이번 Discovery에서 다룰 동작과 경계를 작성한다}}
+- {{TODO: 이번 Discovery에서 다룰 동작과 경계 및 create/update/retire/satisfy/release evidence/housekeeping 분류를 작성한다}}
 
 ## Out of Scope
 

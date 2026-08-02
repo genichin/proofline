@@ -75,7 +75,7 @@ def test_start_implementation_skill_has_valid_frontmatter() -> None:
     metadata = yaml.safe_load(frontmatter)
     assert metadata["name"] == "proofline-start-implementation"
     assert metadata["description"].startswith("Use when ")
-    assert metadata["version"] == "1.1.0"
+    assert metadata["version"] == "1.2.0"
     assert "~/.proofline/skills/proofline-start-implementation/" in body
     assert "## When to Use" in body
     assert body.strip()

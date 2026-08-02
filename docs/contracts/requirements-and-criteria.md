@@ -17,6 +17,8 @@ criteria:
   update:
     - ac-0003
   retire: []
+  satisfy:
+    - ac-0004
 ---
 ```
 
@@ -25,6 +27,7 @@ criteria:
 - `create`는 이 Line에서 새로 도입하는 AC이다.
 - `update`는 같은 stable AC 파일의 현재 내용을 변경하는 AC이다.
 - `retire`는 더 이상 현재 사양으로 적용하지 않을 AC이다.
+- `satisfy`는 의미를 변경하지 않고 구현·복구·검증할 기존 `active` AC이다. 해당 AC의 body와 lifecycle status는 변경하지 않는다.
 - 같은 AC를 하나의 REQ 안에서 둘 이상의 변경 종류에 동시에 기록하지 않는다.
 - REQ에는 AC 본문을 복제하지 않는다.
 - REQ의 AC 변경 집합은 해당 Line의 모든 Micro-SPEC이 따라야 하는 승인 범위의 source of truth이다.
@@ -60,6 +63,7 @@ status: draft
 - `active` AC는 프로젝트가 현재 지속적으로 만족해야 하는 version-independent product behavior 또는 constraint를 표현한다.
 - 특정 release version, tag, candidate commit, wheel filename, checksum, publication transaction과 remote read-back 결과는 AC가 아니다. 해당 delivery의 Micro-SPEC implementation parameter와 IQC·DQC·release evidence에 기록한다.
 - 새 version publication만으로 새 AC를 만들지 않는다. 외부에서 관찰 가능한 product behavior나 acceptance condition 자체가 새로 생기거나 변경될 때만 AC를 생성·수정한다.
+- Version, tag, checksum 같은 release-specific 문구는 admission review warning 대상이지만 validator의 일반 hard error가 아니다. 최종 create/update/satisfy 판단은 사용자 confirmation이 소유한다.
 - 승인 전의 AC 내용은 candidate 사양이며 구현 기준인 canonical specification baseline이 아니다.
 - REQ 승인 Git revision의 AC 내용이 해당 Line의 canonical specification baseline이 된다.
 - 승인된 AC는 구현 완료 여부와 관계없이 구현이 따라야 할 사양으로 효력을 갖는다.
@@ -92,7 +96,7 @@ AC는 사양의 atomic unit이고 Micro-SPEC은 기술적 구현 unit이므로 �
 
 - `parent_req`는 같은 Line의 유일한 REQ여야 한다.
 - Micro-SPEC은 parent REQ가 선언한 AC 중 자신이 담당하는 하나 이상의 AC를 `criteria`에 명시해야 한다.
-- Micro-SPEC의 모든 AC는 parent REQ의 `create`, `update`, `retire` 합집합에 포함되어야 한다.
+- Micro-SPEC의 모든 AC는 parent REQ의 `create`, `update`, `retire`, `satisfy` 합집합에 포함되어야 한다.
 - Micro-SPEC은 REQ에 없는 AC나 제품 동작을 임의로 추가할 수 없다.
 - 하나의 AC를 여러 Micro-SPEC이 공동으로 담당할 수 있다.
 - 하나의 Micro-SPEC이 서로 관련된 여러 AC를 함께 담당할 수 있다.
@@ -105,10 +109,10 @@ AC는 사양의 atomic unit이고 Micro-SPEC은 기술적 구현 unit이므로 �
 
 ```text
 각 Micro-SPEC의 criteria
-⊆ parent REQ의 (create ∪ update ∪ retire)
+⊆ parent REQ의 (create ∪ update ∪ retire ∪ satisfy)
 
 해당 REQ에 속한 모든 Micro-SPEC criteria의 합집합
-= parent REQ의 (create ∪ update ∪ retire)
+= parent REQ의 (create ∪ update ∪ retire ∪ satisfy)
 ```
 
 관계 예시는 다음과 같다.
@@ -206,6 +210,7 @@ retired
 - 기존 `active` AC의 의미를 변경하려면 변경 REQ와 함께 AC를 `draft`로 전환하고 재검토해야 한다.
 - 변경 중인 AC가 `draft`인 동안 이전 `active` Git revision이 마지막 승인 baseline으로 유지된다.
 - REQ의 `retire` 대상인 `active` AC는 해당 REQ가 승인될 때 `retired`가 된다.
+- REQ의 `satisfy` 대상은 approval 전후에 `active`와 exact criterion·verification bytes를 유지한다. 의미 변경이 필요하면 `satisfy`가 아니라 `update`로 재분류한다.
 - 승인 전에 새 AC 도입을 철회하면 아직 승인된 적 없는 `draft` AC 파일을 제거한다.
 - 기존 AC 수정이 철회되면 candidate `draft` revision을 버리고 마지막 `active` revision을 복원한다.
 - `retired`는 terminal status이다. 같은 사양이 다시 필요하면 새 AC identity를 만든다.
@@ -224,6 +229,7 @@ criteria:
   create: []
   update: []
   retire: []
+  satisfy: []
 ---
 ```
 
@@ -237,11 +243,14 @@ criteria
 criteria.create
 criteria.update
 criteria.retire
+criteria.satisfy
 ```
 
-- `criteria.create`, `criteria.update`, `criteria.retire`는 각각 빈 list일 수 있지만 세 field를 모두 명시해야 한다.
-- 세 list의 합집합에는 최소 하나의 AC가 있어야 한다.
+- 새 REQ의 `criteria.create`, `criteria.update`, `criteria.retire`, `criteria.satisfy`는 각각 빈 list일 수 있지만 네 field를 모두 명시한다.
+- Schema version 1의 legacy REQ는 `criteria.satisfy`가 없는 기존 세 field 형태로 계속 유효하며 historical artifact를 migration하지 않는다.
+- 선언된 세 또는 네 list의 합집합에는 최소 하나의 AC가 있어야 한다.
 - 같은 AC를 둘 이상의 list에 중복해서 기록할 수 없다.
+- `criteria.satisfy`는 존재하는 `active` AC만 참조해야 한다.
 - `discovery`는 같은 Line의 유일한 Discovery를 가리켜야 한다.
 
 ### Markdown 본문

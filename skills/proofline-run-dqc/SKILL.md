@@ -1,7 +1,7 @@
 ---
 name: proofline-run-dqc
 description: Use when verifying a ProofLine integration candidate at DQC without repeating exact-bound component IQC checks unless a documented trigger requires them.
-version: 1.0.0
+version: 1.1.0
 author: ProofLine
 license: MIT
 metadata:
@@ -78,7 +78,7 @@ conditional_triggers:
 
 ### 2. Coverage와 IQC binding 확인
 
-- REQ의 create·update·retire AC가 non-withdrawn Micro-SPEC에 배정됐는지 확인한다.
+- REQ의 create·update·retire·satisfy AC가 non-withdrawn Micro-SPEC에 배정됐는지 확인한다.
 - 모든 대상 Micro-SPEC이 `approved`·`implemented`인지 확인한다.
 - 각 IQC가 올바른 Micro-SPEC을 가리키고 `passed`인지 확인한다.
 - `micro_spec_commit`과 `implementation_commit`이 실제 commit이며 candidate ancestry에 포함되는지 확인한다.

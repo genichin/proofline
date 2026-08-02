@@ -6,6 +6,7 @@ criteria:
   create: []
   update: []
   retire: []
+  satisfy: []
 ---
 
 # {{TITLE}}

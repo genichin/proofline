@@ -1,7 +1,7 @@
 ---
 name: proofline-start-implementation
 description: Use when starting implementation for an approved ProofLine Line in an exact-baseline Git linked worktree while preserving main as the governance checkout.
-version: 1.1.0
+version: 1.2.0
 author: ProofLine
 license: MIT
 metadata:
@@ -116,6 +116,7 @@ Worktree에서 공용 `proofline` executable을 사용해 canonical tree를 확�
 ### 4. Implementation handoff
 
 - 승인된 AC만 Micro-SPEC에 배정한다.
+- `criteria.satisfy` 대상은 exact approval commit에서 `active`여야 하며 implementation 중 body와 status를 변경하지 않는다.
 - Micro-SPEC, implementation source, test와 IQC는 Line worktree에서 작성하고 commit한다.
 - ProofLine governance command는 공용 `proofline`을 사용한다.
 - 구현 대상 project의 build·test command는 해당 project 계약을 따른다.

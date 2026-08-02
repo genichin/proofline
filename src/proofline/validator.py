@@ -1,6 +1,6 @@
+import re
 from dataclasses import dataclass
 from pathlib import Path
-import re
 
 import yaml
 
@@ -77,6 +77,9 @@ ARTIFACT_PATHS = {
     "dqc": re.compile(r"^\.proofline/lines/line-(\d{4})/dqc-\1\.md$"),
 }
 
+LEGACY_CRITERIA_KEYS = {"create", "update", "retire"}
+CURRENT_CRITERIA_KEYS = LEGACY_CRITERIA_KEYS | {"satisfy"}
+
 
 def _artifact_kind(path: Path) -> str | None:
     stem = path.stem
@@ -127,6 +130,23 @@ def _is_draft(kind: str, frontmatter: dict[str, object]) -> bool:
     return False
 
 
+def _criteria_lists(value: object) -> dict[str, list[str]] | None:
+    if not isinstance(value, dict) or set(value) not in {
+        frozenset(LEGACY_CRITERIA_KEYS),
+        frozenset(CURRENT_CRITERIA_KEYS),
+    }:
+        return None
+    result: dict[str, list[str]] = {}
+    for key, items in value.items():
+        if not isinstance(items, list) or not all(
+            isinstance(item, str) and re.fullmatch(r"ac-\d{4}", item)
+            for item in items
+        ):
+            return None
+        result[key] = items
+    return result
+
+
 def _reference_targets(
     kind: str, relative: str, frontmatter: dict[str, object]
 ) -> tuple[list[str], bool]:
@@ -149,12 +169,9 @@ def _reference_targets(
                 r"dcy-\d{4}",
                 f".proofline/lines/{line_id}/{{value}}.md",
             )
-        criteria = frontmatter.get("criteria")
-        if isinstance(criteria, dict) and set(criteria) == {"create", "update", "retire"}:
+        criteria = _criteria_lists(frontmatter.get("criteria"))
+        if criteria is not None:
             for values in criteria.values():
-                if not isinstance(values, list):
-                    valid = False
-                    continue
                 for value in values:
                     add(value, r"ac-\d{4}", ".proofline/criteria/{value}.md")
         elif "criteria" in frontmatter:
@@ -188,6 +205,7 @@ def _reference_targets(
 
 def _validate_artifacts(root: Path) -> list[ValidationError]:
     errors: list[ValidationError] = []
+    artifacts: dict[str, tuple[str, dict[str, object]]] = {}
     artifact_root = root / ".proofline"
     if not artifact_root.is_dir():
         return errors
@@ -244,6 +262,7 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
                 )
             )
             continue
+        artifacts[relative] = (kind, frontmatter)
         body = "\n".join(lines[closing + 1 :])
         missing = ARTIFACT_FIELDS[kind] - set(frontmatter)
         if missing:
@@ -262,6 +281,39 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
                     "정의되지 않은 YAML 머리말 항목이 있습니다.",
                 )
             )
+        if kind == "req" and "criteria" in frontmatter:
+            criteria = _criteria_lists(frontmatter["criteria"])
+            if criteria is None:
+                errors.append(
+                    ValidationError(
+                        relative,
+                        "criteria.invalid",
+                        "criteria는 create/update/retire와 optional satisfy AC ID list여야 합니다.",
+                    )
+                )
+            else:
+                values = [item for items in criteria.values() for item in items]
+                if not values:
+                    errors.append(
+                        ValidationError(
+                            relative,
+                            "criteria.empty",
+                            "criteria 대상 AC 합집합은 비어 있을 수 없습니다.",
+                        )
+                    )
+                memberships: dict[str, set[str]] = {}
+                for key, items in criteria.items():
+                    for item in set(items):
+                        memberships.setdefault(item, set()).add(key)
+                duplicates = sorted(item for item, keys in memberships.items() if len(keys) > 1)
+                if duplicates:
+                    errors.append(
+                        ValidationError(
+                            relative,
+                            "criteria.duplicate",
+                            f"AC ID를 둘 이상의 criteria list에 중복 기록했습니다: {', '.join(duplicates)}",
+                        )
+                    )
         for field, allowed in ARTIFACT_STATUSES[kind].items():
             if field in frontmatter and frontmatter[field] not in allowed:
                 errors.append(
@@ -323,6 +375,66 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
                         f"참조 대상 파일이 없습니다: {target}",
                     )
                 )
+    errors.extend(_validate_criteria_bindings(artifacts))
+    return errors
+
+
+def _validate_criteria_bindings(
+    artifacts: dict[str, tuple[str, dict[str, object]]],
+) -> list[ValidationError]:
+    errors: list[ValidationError] = []
+    for req_path, (kind, req) in artifacts.items():
+        if kind != "req":
+            continue
+        criteria = _criteria_lists(req.get("criteria"))
+        if criteria is None:
+            continue
+        targets = {item for items in criteria.values() for item in items}
+        for ac_id in criteria.get("satisfy", []):
+            ac_path = f".proofline/criteria/{ac_id}.md"
+            target = artifacts.get(ac_path)
+            if target is not None and target[1].get("status") != "active":
+                errors.append(
+                    ValidationError(
+                        req_path,
+                        "reference.inactive",
+                        f"criteria.satisfy 대상은 active AC여야 합니다: {ac_id}",
+                    )
+                )
+
+        line_dir = req_path.rsplit("/", 1)[0]
+        covered: set[str] = set()
+        for ms_path, (ms_kind, ms) in artifacts.items():
+            if (
+                ms_kind != "ms"
+                or not ms_path.startswith(f"{line_dir}/micro-specs/")
+                or ms.get("parent_req") != req.get("id")
+                or ms.get("spec_status") == "withdrawn"
+            ):
+                continue
+            ms_criteria = ms.get("criteria")
+            if not isinstance(ms_criteria, list):
+                continue
+            ms_ids = {item for item in ms_criteria if isinstance(item, str)}
+            outside = sorted(ms_ids - targets)
+            if outside:
+                errors.append(
+                    ValidationError(
+                        ms_path,
+                        "criteria.out-of-scope",
+                        f"Micro-SPEC criteria가 parent REQ 범위를 벗어났습니다: {', '.join(outside)}",
+                    )
+                )
+            covered.update(ms_ids & targets)
+        uncovered = sorted(targets - covered)
+        if req.get("status") != "withdrawn" and uncovered:
+            errors.append(
+                ValidationError(
+                    req_path,
+                    "criteria.uncovered",
+                    f"REQ 대상 AC가 non-withdrawn Micro-SPEC에 배정되지 않았습니다: {', '.join(uncovered)}",
+                )
+            )
     return errors
 
 
