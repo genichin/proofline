@@ -1,8 +1,7 @@
-from pathlib import Path
 import shutil
+from pathlib import Path
 
 from proofline.validator import validate_project
-
 
 FIXTURE = Path(__file__).parent / "fixtures" / "valid-minimal"
 
@@ -157,6 +156,14 @@ def test_unknown_markdown_path_under_artifact_root_is_rejected(tmp_path: Path) -
     artifact.write_text("---\nid: mystery\n---\n", encoding="utf-8")
 
     assert_error(project, artifact, "artifact.path")
+
+
+def test_non_utf8_artifact_is_reported(tmp_path: Path) -> None:
+    project = copy_valid_project(tmp_path)
+    artifact = project / ".proofline/criteria/ac-0001.md"
+    artifact.write_bytes(b"\xff")
+
+    assert_error(project, artifact, "artifact.read")
 
 
 def assert_error(project: Path, artifact: Path, code: str) -> None:

@@ -1,12 +1,17 @@
 import argparse
-from importlib import metadata
 import os
-from pathlib import Path
 import sys
+from importlib import metadata
+from pathlib import Path
 
-from proofline.home_writer import HomeInitError, initialize_home, reconcile_existing_home
+from proofline.home_writer import (
+    HomeInitError,
+    initialize_home,
+    reconcile_existing_home,
+)
 from proofline.line_writer import LineInitError, initialize_line
-from proofline.updater import UpdateError, UpdateResult, run_update
+from proofline.project_writer import ProjectInitError, initialize_project
+from proofline.updater import UpdateError, UpdateResult, run_update  # noqa: F401
 from proofline.validator import validate_project
 
 
@@ -57,6 +62,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Explicitly replace a source installation with the official wheel",
     )
 
+    project = commands.add_parser("project", help="Manage a ProofLine project")
+    project_commands = project.add_subparsers(dest="project_command", required=True)
+    project_init = project_commands.add_parser("init", help="Create the schema-v1 scaffold")
+    project_init.add_argument(
+        "--dry-run", action="store_true", help="Preflight without writing project files"
+    )
+
     line = commands.add_parser("line", help="Manage ProofLine Lines")
     line_commands = line.add_subparsers(dest="line_command", required=True)
     init = line_commands.add_parser("init", help="Create a Line and draft Discovery")
@@ -103,6 +115,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"provenance: {result.provenance}")
         print(f"status: {result.status}")
         return result.exit_code
+
+    if args.command == "project" and args.project_command == "init":
+        try:
+            result = initialize_project(Path.cwd(), dry_run=args.dry_run)
+        except ProjectInitError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        prefix = "would create" if result.status == "planned" else result.status
+        for path in result.paths:
+            print(f"{prefix}: {path}")
+        return 0
 
     if args.command == "line" and args.line_command == "init":
         root = Path.cwd()

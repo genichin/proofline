@@ -8,6 +8,10 @@ ProofLine이 관리하는 manifest, contracts, templates와 skills는 user home�
 
 Project `.proofline/`은 Lines와 criteria의 canonical artifact root로만 사용한다. `proofline init`은 user-level harness만 초기화하며 current project의 `.proofline/`, `proofline.yaml` 또는 Git state를 변경하지 않는다.
 
+`proofline project init [--dry-run]`은 current working directory가 정확한 Git repository root일 때만 package-owned schema-v1 resource로 project scaffold를 초기화한다. 생성 bytes는 `proofline.yaml`의 `schema_version: 1\nartifact_root: .proofline\n`과 zero-byte `.proofline/lines/.gitkeep`, `.proofline/criteria/.gitkeep`이다. Dry-run은 동일한 preflight와 planned path를 수행하되 쓰지 않으며, required path가 모두 exact한 재실행만 no-op으로 허용한다. Partial·mismatch·wrong type·symlink·resource·permission·write conflict는 기존 project와 user home을 변경하지 않고 실패하며 자동 repair·merge·overwrite하지 않는다. Concurrent target은 보존하고 invocation-owned staging과 partial write만 제거한다.
+
+Project init은 `~/.proofline/`의 존재 또는 manifest 일치 여부에 의존하지 않고 user home을 읽거나 변경하지 않는다. 또한 Git repository boundary 확인 외에 Git init, add, commit, branch, remote 또는 push를 수행하지 않는다. Project scaffold에는 user-level contracts, templates, skills 또는 agent context를 복제하지 않는다.
+
 `proofline update`는 selected checksum-verified official wheel의 CLI/package와 해당 wheel에 포함된 user-level harness resource를 같은 target version으로 함께 갱신한다. Existing `~/.proofline/`은 current manifest의 exact managed path와 checksum에 일치해야 하며, user modification, unexpected entry, malformed manifest 또는 symlink가 있으면 project와 user resource를 변경하지 않고 실패한다. `proofline update --check`는 package와 harness 상태를 읽기만 하고 staging, download, install 또는 filesystem mutation을 수행하지 않는다.
 
 ## 정본과 파생 산출물
@@ -164,6 +168,8 @@ artifact_root = .proofline
 - 프로젝트 root의 `.proofline` 자체가 symbolic link이면 validation error이다.
 - Writer와 validator는 `.proofline` 이외의 directory를 canonical artifact root 후보로 탐색하거나 생성하지 않는다.
 - `.proofline`과 다른 후보 directory가 함께 존재하더라도 `proofline.yaml` 설정으로 alternate root를 선택하거나 두 tree를 병합하지 않는다.
+- `.proofline`, `.proofline/lines`, `.proofline/criteria`는 모두 symbolic link가 아닌 실제 directory여야 한다.
+- Fresh clone의 두 canonical empty directory는 각각 zero-byte `.gitkeep` marker로 보존하며 이외 project support path는 허용하지 않는다.
 - `artifact_root` 값 변경은 일반 configuration 변경이나 artifact migration 방법이 아니다. 다른 값은 즉시 validation error로 처리한다.
 
 Monorepo에서 하나의 공통 delivery boundary를 관리하면 해당 repository root에 하나의 `proofline.yaml`과 `.proofline/`을 둔다. 독립적인 여러 ProofLine project boundary가 필요하면 각 boundary의 project-root 및 Git governance 계약을 별도로 정의해야 하며, schema version 1의 `artifact_root` 사용자 지정으로 이를 구현하지 않는다.

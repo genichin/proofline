@@ -90,6 +90,7 @@ line-0001/
 ├── proofline.yaml
 ├── .proofline/
 │   ├── lines/
+│   │   ├── .gitkeep
 │   │   ├── line-0001/
 │   │   │   ├── line-0001.md
 │   │   │   ├── dcy-0001.md
@@ -104,6 +105,7 @@ line-0001/
 │   │   │   └── ...
 │   │   └── ...
 │   └── criteria/
+│       ├── .gitkeep
 │       ├── ac-0001.md
 │       ├── ac-0002.md
 │       └── ac-0003.md
@@ -133,6 +135,8 @@ AC              .proofline/criteria/ac-<NNNN>.md
 ```
 
 AC는 특정 Line에 복사하거나 소유시키지 않고 프로젝트 전역의 `.proofline/criteria/`에 한 번만 저장한다.
+
+Schema version 1의 fresh project는 `.proofline/lines/.gitkeep`과 `.proofline/criteria/.gitkeep` 두 zero-byte regular file을 empty directory 보존용 support marker로 사용한다. 이 두 파일은 canonical lifecycle artifact가 아니며 artifact parser의 입력에서 제외한다. 다른 위치의 `.gitkeep`, non-zero marker, symlink 및 별도 support file·directory는 허용하지 않는다. Line이나 AC가 생성된 뒤에도 marker는 그대로 유지한다.
 
 현재 canonical topology에는 프로젝트 전역 policy directory를 두지 않는다. `.proofline/policies/`는 canonical path가 아니며 ProofLine writer와 validator는 이를 생성하거나 policy source로 해석하지 않는다.
 

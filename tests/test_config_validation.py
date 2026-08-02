@@ -4,6 +4,8 @@ from proofline.validator import validate_project
 
 
 def test_valid_project_config_has_no_errors(tmp_path: Path) -> None:
+    (tmp_path / ".proofline" / "lines").mkdir(parents=True)
+    (tmp_path / ".proofline" / "criteria").mkdir()
     (tmp_path / "proofline.yaml").write_text(
         "schema_version: 1\nartifact_root: .proofline\n",
         encoding="utf-8",
@@ -21,6 +23,8 @@ def test_missing_project_config_reports_the_file(tmp_path: Path) -> None:
 
 
 def test_unknown_project_config_field_is_rejected(tmp_path: Path) -> None:
+    (tmp_path / ".proofline" / "lines").mkdir(parents=True)
+    (tmp_path / ".proofline" / "criteria").mkdir()
     (tmp_path / "proofline.yaml").write_text(
         "schema_version: 1\nartifact_root: .proofline\nextra: true\n",
         encoding="utf-8",
@@ -34,6 +38,8 @@ def test_unknown_project_config_field_is_rejected(tmp_path: Path) -> None:
 
 
 def test_wrong_project_config_values_are_rejected(tmp_path: Path) -> None:
+    (tmp_path / ".proofline" / "lines").mkdir(parents=True)
+    (tmp_path / ".proofline" / "criteria").mkdir()
     (tmp_path / "proofline.yaml").write_text(
         "schema_version: 2\nartifact_root: artifacts\n",
         encoding="utf-8",
@@ -54,4 +60,14 @@ def test_malformed_project_config_is_reported(tmp_path: Path) -> None:
 
     assert [(error.path, error.code) for error in errors] == [
         ("proofline.yaml", "config.yaml")
+    ]
+
+
+def test_non_utf8_project_config_is_reported(tmp_path: Path) -> None:
+    (tmp_path / "proofline.yaml").write_bytes(b"\xff")
+
+    errors = validate_project(tmp_path)
+
+    assert [(error.path, error.code) for error in errors] == [
+        ("proofline.yaml", "config.read")
     ]

@@ -1,8 +1,11 @@
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
+
+from .project_schema import REQUIRED_DIRECTORIES, SUPPORT_MARKERS
 
 
 @dataclass(frozen=True, order=True)
@@ -203,13 +206,178 @@ def _reference_targets(
     return targets, valid
 
 
+def _validate_topology(root: Path) -> list[ValidationError]:
+    errors: list[ValidationError] = []
+    required = REQUIRED_DIRECTORIES
+    valid_directories = (
+        re.compile(r"^\.proofline$"),
+        re.compile(r"^\.proofline/(?:lines|criteria)$"),
+        re.compile(r"^\.proofline/lines/line-\d{4}$"),
+        re.compile(r"^\.proofline/lines/line-\d{4}/micro-specs$"),
+    )
+    markers = SUPPORT_MARKERS
+    artifact_root = root / ".proofline"
+    try:
+        initial_root_state = artifact_root.stat(follow_symlinks=False)
+    except OSError:
+        initial_root_state = None
+    if initial_root_state is not None and stat.S_ISLNK(initial_root_state.st_mode):
+        return [
+            ValidationError(
+                ".proofline",
+                "topology.directory.symlink",
+                "필수 project directory symlink는 허용하지 않습니다.",
+            )
+        ]
+    if initial_root_state is not None and not stat.S_ISDIR(initial_root_state.st_mode):
+        return [
+            ValidationError(
+                ".proofline",
+                "topology.directory.type",
+                "필수 project path는 directory여야 합니다.",
+            )
+        ]
+    for relative in required:
+        path = root / relative
+        try:
+            state = path.stat(follow_symlinks=False)
+        except FileNotFoundError:
+            errors.append(
+                ValidationError(
+                    relative,
+                    "topology.directory.missing",
+                    "필수 project directory가 없습니다.",
+                )
+            )
+            continue
+        except OSError:
+            errors.append(
+                ValidationError(
+                    relative,
+                    "topology.directory.type",
+                    "필수 project directory를 검사할 수 없습니다.",
+                )
+            )
+            continue
+        if stat.S_ISLNK(state.st_mode):
+            errors.append(
+                ValidationError(
+                    relative,
+                    "topology.directory.symlink",
+                    "필수 project directory symlink는 허용하지 않습니다.",
+                )
+            )
+        elif not stat.S_ISDIR(state.st_mode):
+            errors.append(
+                ValidationError(
+                    relative,
+                    "topology.directory.type",
+                    "필수 project path는 directory여야 합니다.",
+                )
+            )
+
+    artifact_root = root / ".proofline"
+    try:
+        root_state = artifact_root.stat(follow_symlinks=False)
+    except OSError:
+        return errors
+    if not stat.S_ISDIR(root_state.st_mode) or stat.S_ISLNK(root_state.st_mode):
+        return errors
+    try:
+        topology_paths = sorted(artifact_root.rglob("*"))
+    except OSError:
+        errors.append(
+            ValidationError(
+                ".proofline",
+                "topology.unavailable",
+                "project topology를 순회할 수 없습니다.",
+            )
+        )
+        return errors
+    for path in topology_paths:
+        relative = path.relative_to(root).as_posix()
+        try:
+            state = path.stat(follow_symlinks=False)
+        except OSError:
+            errors.append(
+                ValidationError(
+                    relative,
+                    "topology.path.unavailable",
+                    "project path를 검사할 수 없습니다.",
+                )
+            )
+            continue
+        if stat.S_ISLNK(state.st_mode):
+            if relative not in required:
+                errors.append(
+                    ValidationError(
+                        relative,
+                        "topology.support.unsupported",
+                        "project topology에서 symlink는 허용하지 않습니다.",
+                    )
+                )
+            continue
+        if stat.S_ISDIR(state.st_mode):
+            if not any(pattern.fullmatch(relative) for pattern in valid_directories):
+                errors.append(
+                    ValidationError(
+                        relative,
+                        "topology.support.unsupported",
+                        "허용되지 않은 project directory입니다.",
+                    )
+                )
+            continue
+        if relative in markers:
+            if not stat.S_ISREG(state.st_mode) or state.st_size != 0:
+                errors.append(
+                    ValidationError(
+                        relative,
+                        "topology.support.invalid",
+                        ".gitkeep marker는 regular zero-byte file이어야 합니다.",
+                    )
+                )
+            continue
+        if stat.S_ISREG(state.st_mode) and path.suffix == ".md":
+            continue
+        errors.append(
+            ValidationError(
+                relative,
+                "topology.support.unsupported",
+                "허용되지 않은 project support path입니다.",
+            )
+        )
+    return errors
+
+
 def _validate_artifacts(root: Path) -> list[ValidationError]:
     errors: list[ValidationError] = []
     artifacts: dict[str, tuple[str, dict[str, object]]] = {}
     artifact_root = root / ".proofline"
-    if not artifact_root.is_dir():
+    try:
+        root_state = artifact_root.stat(follow_symlinks=False)
+    except OSError:
         return errors
-    for path in sorted(artifact_root.rglob("*.md")):
+    if stat.S_ISLNK(root_state.st_mode) or not stat.S_ISDIR(root_state.st_mode):
+        return errors
+    try:
+        artifact_paths = sorted(artifact_root.rglob("*.md"))
+    except OSError:
+        return [
+            ValidationError(
+                ".proofline",
+                "artifact.unavailable",
+                "artifact root를 순회할 수 없습니다.",
+            )
+        ]
+    for path in artifact_paths:
+        try:
+            candidate_state = path.stat(follow_symlinks=False)
+        except OSError:
+            continue
+        if stat.S_ISLNK(candidate_state.st_mode) or not stat.S_ISREG(
+            candidate_state.st_mode
+        ):
+            continue
         kind = _artifact_kind(path)
         if kind is None:
             relative = path.relative_to(root).as_posix()
@@ -221,8 +389,18 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
                 )
             )
             continue
-        lines = path.read_text(encoding="utf-8").splitlines()
         relative = path.relative_to(root).as_posix()
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeError):
+            errors.append(
+                ValidationError(
+                    relative,
+                    "artifact.read",
+                    "artifact를 UTF-8 text로 읽을 수 없습니다.",
+                )
+            )
+            continue
         if not ARTIFACT_PATHS[kind].fullmatch(relative):
             errors.append(
                 ValidationError(
@@ -440,12 +618,38 @@ def _validate_criteria_bindings(
 
 def validate_project(root: Path) -> list[ValidationError]:
     config_path = root / "proofline.yaml"
-    if not config_path.is_file():
+    try:
+        config_state = config_path.stat(follow_symlinks=False)
+    except FileNotFoundError:
         return [
             ValidationError(
                 "proofline.yaml",
                 "config.missing",
                 "proofline.yaml 파일이 없습니다.",
+            )
+        ]
+    except OSError:
+        return [
+            ValidationError(
+                "proofline.yaml",
+                "config.type",
+                "proofline.yaml을 검사할 수 없습니다.",
+            )
+        ]
+    if stat.S_ISLNK(config_state.st_mode):
+        return [
+            ValidationError(
+                "proofline.yaml",
+                "config.symlink",
+                "proofline.yaml symlink는 허용하지 않습니다.",
+            )
+        ]
+    if not stat.S_ISREG(config_state.st_mode):
+        return [
+            ValidationError(
+                "proofline.yaml",
+                "config.type",
+                "proofline.yaml은 regular file이어야 합니다.",
             )
         ]
 
@@ -457,6 +661,14 @@ def validate_project(root: Path) -> list[ValidationError]:
                 "proofline.yaml",
                 "config.yaml",
                 "proofline.yaml을 해석할 수 없습니다.",
+            )
+        ]
+    except (OSError, UnicodeError):
+        return [
+            ValidationError(
+                "proofline.yaml",
+                "config.read",
+                "proofline.yaml을 UTF-8 text로 읽을 수 없습니다.",
             )
         ]
     if not isinstance(config, dict):
@@ -493,5 +705,6 @@ def validate_project(root: Path) -> list[ValidationError]:
                 "schema_version은 1이어야 합니다.",
             )
         )
+    errors.extend(_validate_topology(root))
     errors.extend(_validate_artifacts(root))
     return sorted(errors)

@@ -1,6 +1,5 @@
-from pathlib import Path
 import subprocess
-
+from pathlib import Path
 
 FIXTURE = Path(__file__).parent / "fixtures" / "valid-minimal"
 
@@ -16,6 +15,8 @@ def run_validate(root: Path) -> subprocess.CompletedProcess[str]:
 
 
 def test_cli_returns_zero_for_valid_project_config(tmp_path: Path) -> None:
+    (tmp_path / ".proofline" / "lines").mkdir(parents=True)
+    (tmp_path / ".proofline" / "criteria").mkdir()
     (tmp_path / "proofline.yaml").write_text(
         "schema_version: 1\nartifact_root: .proofline\n",
         encoding="utf-8",
