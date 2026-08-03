@@ -110,6 +110,36 @@ def test_authority_requires_attached_local_main(tmp_path: Path) -> None:
     assert detached_error.value.code == "ledger.authority.required"
 
 
+def test_authority_rejects_unborn_attached_main(tmp_path: Path) -> None:
+    project = tmp_path / "unborn"
+    project.mkdir()
+    git(project, "init", "-q", "-b", "main")
+
+    with pytest.raises(IdentityLedgerError) as raised:
+        require_allocation_authority(project)
+
+    assert raised.value.code == "ledger.authority.required"
+
+
+def test_bootstrap_history_failure_is_typed_and_fail_closed(tmp_path: Path) -> None:
+    project = init_repo(tmp_path)
+    head = git(project, "rev-parse", "HEAD").stdout.strip()
+    (project / ".git" / "objects" / head[:2] / head[2:]).unlink()
+
+    with pytest.raises(IdentityLedgerError) as raised:
+        bootstrap_allocation_ids(project)
+
+    assert raised.value.code == "ledger.history.unavailable"
+
+
+def test_validator_history_failure_is_typed_and_fail_closed(tmp_path: Path) -> None:
+    project = init_repo(tmp_path)
+    head = git(project, "rev-parse", "HEAD").stdout.strip()
+    (project / ".git" / "objects" / head[:2] / head[2:]).unlink()
+
+    assert codes(project) == {"ledger.history.unavailable"}
+
+
 def test_bootstrap_union_uses_current_and_main_first_parent_history_only(tmp_path: Path) -> None:
     project = init_repo(tmp_path)
     add_pair(project, "line-0001")
@@ -188,6 +218,54 @@ def test_post_bootstrap_candidate_and_commit_require_matching_new_pair(
     write_ledger(project, {"line-0002", "line-0003"})
     commit_all(project, "orphan committed delta")
     assert "ledger.orphan" in codes(project)
+
+
+def deleted_unledgered_line_history(tmp_path: Path, line_id: str) -> Path:
+    project = init_repo(tmp_path)
+    write_ledger(project, set())
+    commit_all(project, "adopt empty project")
+    add_pair(project, line_id)
+    commit_all(project, "add Line without ledger")
+    shutil.rmtree(project / ".proofline/lines" / line_id)
+    commit_all(project, "delete unledgered Line")
+    return project
+
+
+def test_post_bootstrap_candidate_rejects_recreated_line_seen_earlier_on_main(
+    tmp_path: Path,
+) -> None:
+    project = deleted_unledgered_line_history(tmp_path, "line-0004")
+    add_pair(project, "line-0004")
+    write_ledger(project, {"line-0004"})
+
+    assert "ledger.orphan" in codes(project)
+
+
+def test_post_bootstrap_commit_rejects_recreated_line_seen_earlier_on_main(
+    tmp_path: Path,
+) -> None:
+    project = deleted_unledgered_line_history(tmp_path, "line-0004")
+    add_pair(project, "line-0004")
+    write_ledger(project, {"line-0004"})
+    commit_all(project, "recreate Line with ledger")
+
+    assert "ledger.orphan" in codes(project)
+
+
+def test_repaired_working_ledger_reports_malformed_head_without_exception(
+    tmp_path: Path,
+) -> None:
+    project = init_repo(tmp_path)
+    ledger = project / ".proofline/line-identities.json"
+    ledger.write_text("{}\n", encoding="utf-8")
+    commit_all(project, "commit malformed ledger")
+    write_ledger(project, set())
+
+    assert codes(project) == {"ledger.malformed"}
+    assert {error.code for error in validate_project(project)} >= {"ledger.malformed"}
+    with pytest.raises(IdentityLedgerError) as raised:
+        require_allocation_preflight(project, "line-0005")
+    assert raised.value.code == "ledger.malformed"
 
 
 def test_ledger_rejects_symlink_and_wrong_type(tmp_path: Path) -> None:

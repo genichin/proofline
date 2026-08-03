@@ -81,8 +81,18 @@ def _git(project_root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
 
 def require_allocation_authority(project_root: Path) -> None:
     result = _git(project_root, "symbolic-ref", "-q", "HEAD")
-    symbolic = result.stdout.decode("utf-8", "strict").strip()
-    if result.returncode != 0 or symbolic != AUTHORITY_REF:
+    try:
+        symbolic = result.stdout.decode("utf-8", "strict").strip()
+    except UnicodeError:
+        symbolic = ""
+    authority = _git(
+        project_root, "rev-parse", "--verify", "--quiet", f"{AUTHORITY_REF}^{{commit}}"
+    )
+    if (
+        result.returncode != 0
+        or symbolic != AUTHORITY_REF
+        or authority.returncode != 0
+    ):
         raise IdentityLedgerError(
             "ledger.authority.required",
             message="allocation mutation은 attached refs/heads/main에서만 허용됩니다.",
@@ -140,8 +150,23 @@ def _history_line_ids(project_root: Path, revision: str) -> set[str]:
         ".proofline/lines",
     )
     if result.returncode != 0:
-        return set()
-    return _ids_from_paths(result.stdout.decode("utf-8", "strict"))
+        authority = _git(
+            project_root, "rev-parse", "--verify", "--quiet", revision
+        )
+        if authority.returncode != 0:
+            return set()
+        raise IdentityLedgerError(
+            "ledger.history.unavailable",
+            message="canonical main Line history를 확인할 수 없습니다.",
+        )
+    try:
+        paths = result.stdout.decode("utf-8", "strict")
+    except UnicodeError as exc:
+        raise IdentityLedgerError(
+            "ledger.history.unavailable",
+            message="canonical main Line history를 확인할 수 없습니다.",
+        ) from exc
+    return _ids_from_paths(paths)
 
 
 def bootstrap_allocation_ids(project_root: Path) -> tuple[str, ...]:
@@ -167,8 +192,22 @@ def _ledger_commits(project_root: Path) -> list[str]:
         LEDGER_PATH,
     )
     if result.returncode != 0:
-        return []
-    return result.stdout.decode().split()
+        authority = _git(
+            project_root, "rev-parse", "--verify", "--quiet", AUTHORITY_REF
+        )
+        if authority.returncode != 0:
+            return []
+        raise IdentityLedgerError(
+            "ledger.history.unavailable",
+            message="canonical main ledger history를 확인할 수 없습니다.",
+        )
+    try:
+        return result.stdout.decode("utf-8", "strict").split()
+    except UnicodeError as exc:
+        raise IdentityLedgerError(
+            "ledger.history.unavailable",
+            message="canonical main ledger history를 확인할 수 없습니다.",
+        ) from exc
 
 
 def _pair_paths(line_id: str) -> tuple[str, str]:
@@ -268,9 +307,13 @@ def _validate_committed_history(
                 errors.append(IdentityLedgerError("ledger.regressed"))
             if not _tree_line_ids(project_root, commit) <= ids:
                 errors.append(IdentityLedgerError("ledger.stale"))
+            prior_line_history = (
+                _history_line_ids(project_root, parent) if parent is not None else set()
+            )
             for line_id in ids - prior_ids:
                 if (
                     parent is None
+                    or line_id in prior_line_history
                     or not _pair_absent(project_root, parent, line_id)
                     or not _tree_pair_valid(project_root, commit, line_id)
                 ):
@@ -280,7 +323,10 @@ def _validate_committed_history(
 
 
 def validate_ledger(project_root: Path) -> list[IdentityLedgerError]:
-    commits = _ledger_commits(project_root)
+    try:
+        commits = _ledger_commits(project_root)
+    except IdentityLedgerError as exc:
+        return [exc]
     committed_errors, prior_main_ids = _validate_committed_history(project_root, commits)
     current = _current_ledger(project_root)
     if isinstance(current, IdentityLedgerError):
@@ -304,7 +350,14 @@ def validate_ledger(project_root: Path) -> list[IdentityLedgerError]:
     if not prior_main_ids <= current_ids:
         errors.append(IdentityLedgerError("ledger.regressed"))
 
-    head_ledger = _ledger_at(project_root, "HEAD")
+    try:
+        head_ledger = _ledger_at(project_root, "HEAD")
+    except IdentityLedgerError as exc:
+        if not any(
+            error.code == exc.code and error.path == exc.path for error in errors
+        ):
+            errors.append(exc)
+        return errors
     head_ids = set(head_ledger.allocated_line_ids) if head_ledger else set()
     head_lines = _tree_line_ids(project_root, "HEAD")
     if not head_lines <= head_ids:
@@ -312,9 +365,11 @@ def validate_ledger(project_root: Path) -> list[IdentityLedgerError]:
     if not _working_line_ids(project_root) <= current_ids:
         errors.append(IdentityLedgerError("ledger.stale"))
 
+    prior_line_history = _history_line_ids(project_root, "HEAD")
     for line_id in current_ids - head_ids:
         if (
-            not _pair_absent(project_root, "HEAD", line_id)
+            line_id in prior_line_history
+            or not _pair_absent(project_root, "HEAD", line_id)
             or not _working_pair_valid(project_root, line_id)
         ):
             errors.append(IdentityLedgerError("ledger.orphan"))

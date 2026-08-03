@@ -513,12 +513,27 @@ def test_source_checkout_outside_project_init_validate_and_line_init(
 
     initialized = run_cli("project", "init", cwd=root, home=home)
     validated = run_cli("validate", cwd=root, home=home)
+    assert initialized.returncode == 0, initialized.stderr  # ac-0020
+    assert validated.returncode == 0, validated.stderr  # ac-0001
+    assert (
+        git("symbolic-ref", "HEAD", cwd=root).stdout,
+        git("config", "--local", "--list", cwd=root).stdout,
+        git("for-each-ref", "--format=%(refname):%(objectname)", cwd=root).stdout,
+    ) == git_before
+
+    git("config", "user.email", "proofline@example.invalid", cwd=root)
+    git("config", "user.name", "ProofLine Test", cwd=root)
+    git("add", "-A", cwd=root)
+    git("commit", "-qm", "initialize project", cwd=root)
+    line_git_before = (
+        git("symbolic-ref", "HEAD", cwd=root).stdout,
+        git("config", "--local", "--list", cwd=root).stdout,
+        git("for-each-ref", "--format=%(refname):%(objectname)", cwd=root).stdout,
+    )
     line = run_cli(
         "line", "init", "line-0001", "--title", "첫 Line", cwd=root, home=home
     )
 
-    assert initialized.returncode == 0, initialized.stderr  # ac-0020
-    assert validated.returncode == 0, validated.stderr  # ac-0001
     assert line.returncode == 0, line.stderr  # ac-0004
     assert (root / ".proofline/lines/line-0001/line-0001.md").is_file()
     assert (root / ".proofline/lines/line-0001/dcy-0001.md").is_file()
@@ -526,4 +541,4 @@ def test_source_checkout_outside_project_init_validate_and_line_init(
         git("symbolic-ref", "HEAD", cwd=root).stdout,
         git("config", "--local", "--list", cwd=root).stdout,
         git("for-each-ref", "--format=%(refname):%(objectname)", cwd=root).stdout,
-    ) == git_before
+    ) == line_git_before

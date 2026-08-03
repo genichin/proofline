@@ -232,6 +232,39 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
         check=False,
     )
     assert validate.returncode == 0, validate.stderr  # ac-0001
+    assert subprocess.run(
+        ["git", "for-each-ref", "--format=%(refname):%(objectname)"],
+        cwd=e2e_project,
+        text=True,
+        capture_output=True,
+        check=False,
+    ).stdout == git_metadata_before
+
+    subprocess.run(
+        ["git", "add", "-A"], cwd=e2e_project, capture_output=True, check=True
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=proofline@example.invalid",
+            "-c",
+            "user.name=ProofLine Test",
+            "commit",
+            "-qm",
+            "initialize project",
+        ],
+        cwd=e2e_project,
+        capture_output=True,
+        check=True,
+    )
+    git_metadata_before = subprocess.run(
+        ["git", "for-each-ref", "--format=%(refname):%(objectname)"],
+        cwd=e2e_project,
+        text=True,
+        capture_output=True,
+        check=False,
+    ).stdout
 
     line_dry_run = subprocess.run(
         [
