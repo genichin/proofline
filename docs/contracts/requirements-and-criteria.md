@@ -209,6 +209,8 @@ retired
 - REQ의 `create` 또는 `update` 대상인 `draft` AC는 해당 REQ가 승인될 때 `active`가 된다.
 - 기존 `active` AC의 의미를 변경하려면 변경 REQ와 함께 AC를 `draft`로 전환하고 재검토해야 한다.
 - 변경 중인 AC가 `draft`인 동안 이전 `active` Git revision이 마지막 승인 baseline으로 유지된다.
+- 기존 `active` AC의 `active → draft → active` update 중에는 current canonical non-withdrawn draft `criteria.update` owner가 정확히 하나이고, exact `refs/heads/main` first-parent history에서 `active → draft` transition 직전 AC가 `active`였음이 확인되며, current `approved` satisfy-owning REQ의 exact bytes가 그 직전 revision에 동일한 binding으로 이미 존재한 경우에만 해당 과거 `criteria.satisfy` 참조를 계속 허용한다. 아직 commit하지 않은 working-tree draft에서는 current main `HEAD`를 proposed transition 직전 revision으로 사용한다.
+- Transition 이후 새로 만들거나 status·criteria·본문 등 어떤 bytes라도 변경한 approved REQ binding, draft·withdrawn satisfy-owning REQ, update owner가 0개 또는 2개 이상인 경우, prior active revision이 없는 create-only·unproven draft는 허용하지 않는다. Git 조회·read·decode·parse로 이력을 입증하지 못한 경우에도 permissive fallback 없이 `reference.inactive`로 거부한다.
 - REQ의 `retire` 대상인 `active` AC는 해당 REQ가 승인될 때 `retired`가 된다.
 - REQ의 `satisfy` 대상은 approval 전후에 `active`와 exact criterion·verification bytes를 유지한다. 의미 변경이 필요하면 `satisfy`가 아니라 `update`로 재분류한다.
 - 승인 전에 새 AC 도입을 철회하면 아직 승인된 적 없는 `draft` AC 파일을 제거한다.
@@ -250,7 +252,7 @@ criteria.satisfy
 - Schema version 1의 legacy REQ는 `criteria.satisfy`가 없는 기존 세 field 형태로 계속 유효하며 historical artifact를 migration하지 않는다.
 - 선언된 세 또는 네 list의 합집합에는 최소 하나의 AC가 있어야 한다.
 - 같은 AC를 둘 이상의 list에 중복해서 기록할 수 없다.
-- `criteria.satisfy`는 존재하는 `active` AC만 참조해야 한다.
+- `criteria.satisfy`는 존재하는 `active` AC를 참조해야 한다. 단, 위에서 정의한 update-in-progress의 exact last-active binding은 current AC가 `draft`인 동안에도 계속 유효하다. `retired` AC와 입증되지 않은 draft AC 참조는 `reference.inactive`로 거부한다.
 - `discovery`는 같은 Line의 유일한 Discovery를 가리켜야 한다.
 
 ### Markdown 본문

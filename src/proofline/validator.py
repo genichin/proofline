@@ -1,5 +1,6 @@
 import re
 import stat
+import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -556,11 +557,102 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
                         f"참조 대상 파일이 없습니다: {target}",
                     )
                 )
-    errors.extend(_validate_criteria_bindings(artifacts))
+    errors.extend(_validate_criteria_bindings(root, artifacts))
     return errors
 
 
+def _git_output(root: Path, *arguments: str) -> bytes | None:
+    try:
+        completed = subprocess.run(
+            ("git", *arguments),
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+    except OSError:
+        return None
+    return completed.stdout if completed.returncode == 0 else None
+
+
+def _historical_status(content: bytes) -> str | None:
+    try:
+        text = content.decode("utf-8")
+        lines = text.splitlines()
+        if not lines or lines[0] != "---" or "---" not in lines[1:]:
+            return None
+        closing = lines.index("---", 1)
+        frontmatter = yaml.safe_load("\n".join(lines[1:closing]))
+    except (UnicodeError, yaml.YAMLError):
+        return None
+    if not isinstance(frontmatter, dict):
+        return None
+    status = frontmatter.get("status")
+    return status if isinstance(status, str) else None
+
+
+def _git_file(root: Path, revision: str, path: str) -> bytes | None:
+    return _git_output(root, "show", f"{revision}:{path}")
+
+
+def _last_active_revision(root: Path, ac_path: str) -> str | None:
+    history = _git_output(root, "rev-list", "--first-parent", "refs/heads/main")
+    if history is None:
+        return None
+    try:
+        commits = history.decode("ascii").splitlines()
+    except UnicodeError:
+        return None
+    if not commits:
+        return None
+
+    head_status = _historical_status(_git_file(root, commits[0], ac_path) or b"")
+    if head_status == "active":
+        return commits[0]
+    if head_status != "draft":
+        return None
+
+    for index, commit in enumerate(commits[:-1]):
+        current = _git_file(root, commit, ac_path)
+        prior_commit = commits[index + 1]
+        prior = _git_file(root, prior_commit, ac_path)
+        if current is None or prior is None:
+            return None
+        if _historical_status(current) == "draft" and _historical_status(prior) == "active":
+            return prior_commit
+    return None
+
+
+def _draft_satisfy_uses_last_active_binding(
+    root: Path,
+    artifacts: dict[str, tuple[str, dict[str, object]]],
+    req_path: str,
+    req: dict[str, object],
+    ac_id: str,
+) -> bool:
+    owners = []
+    for _, (kind, candidate) in artifacts.items():
+        if kind != "req" or candidate.get("status") != "draft":
+            continue
+        criteria = _criteria_lists(candidate.get("criteria"))
+        if criteria is not None and ac_id in criteria.get("update", []):
+            owners.append(candidate)
+    if len(owners) != 1 or req.get("status") != "approved":
+        return False
+
+    prior_revision = _last_active_revision(root, f".proofline/criteria/{ac_id}.md")
+    if prior_revision is None:
+        return False
+    try:
+        current_req = (root / req_path).read_bytes()
+    except OSError:
+        return False
+    historical_req = _git_file(root, prior_revision, req_path)
+    return historical_req is not None and historical_req == current_req
+
+
 def _validate_criteria_bindings(
+    root: Path,
     artifacts: dict[str, tuple[str, dict[str, object]]],
 ) -> list[ValidationError]:
     errors: list[ValidationError] = []
@@ -574,12 +666,17 @@ def _validate_criteria_bindings(
         for ac_id in criteria.get("satisfy", []):
             ac_path = f".proofline/criteria/{ac_id}.md"
             target = artifacts.get(ac_path)
-            if target is not None and target[1].get("status") != "active":
+            target_status = target[1].get("status") if target is not None else None
+            allowed_draft = target_status == "draft" and _draft_satisfy_uses_last_active_binding(
+                root, artifacts, req_path, req, ac_id
+            )
+            if target is not None and target_status != "active" and not allowed_draft:
                 errors.append(
                     ValidationError(
                         req_path,
                         "reference.inactive",
-                        f"criteria.satisfy 대상은 active AC여야 합니다: {ac_id}",
+                        "criteria.satisfy 대상은 active AC 또는 입증된 update-in-progress last-active binding이어야 합니다: "
+                        f"{ac_id}",
                     )
                 )
 
