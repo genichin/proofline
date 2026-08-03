@@ -65,6 +65,19 @@ class LineInitResult:
     dry_run: bool
 
 
+@dataclass
+class _TransactionState:
+    line_committed: bool = False
+    ledger_mutated: bool = False
+
+
+@dataclass(frozen=True)
+class _LockReleaseResult:
+    unlocked: bool
+    closed: bool
+    detail: str | None = None
+
+
 def _with_secondary(primary: LineInitError, detail: str | None) -> LineInitError:
     if detail is None:
         return primary
@@ -280,11 +293,13 @@ def _commit_ledger_path(
     stage: Path,
     artifact_root_fd: int,
     plan: AllocationCandidate,
+    transaction: _TransactionState,
 ) -> None:
     name = "line-identities.json"
     if plan.prior_bytes is None:
         try:
             _commit_path_at(stage, artifact_root_fd, name)
+            transaction.ledger_mutated = True
         except FileExistsError as exc:
             raise LineInitError(
                 "ledger.concurrent.changed", ".proofline/line-identities.json", "ledger가 생성 중 나타났습니다."
@@ -292,18 +307,32 @@ def _commit_ledger_path(
         return
     try:
         _exchange_path_at(stage, artifact_root_fd, name)
+        transaction.ledger_mutated = True
+    except OSError as exc:
+        raise LineInitError(
+            "ledger.commit.failed", ".proofline/line-identities.json", f"ledger commit에 실패했습니다: {exc}"
+        ) from exc
+
+
+def _validate_displaced_ledger(
+    stage: Path,
+    artifact_root_fd: int,
+    plan: AllocationCandidate,
+    transaction: _TransactionState,
+) -> None:
+    assert plan.prior_bytes is not None
+    name = "line-identities.json"
+    try:
         displaced_identity = _directory_identity(stage)
         displaced_bytes = stage.read_bytes()
     except OSError as exc:
         raise LineInitError(
             "ledger.commit.failed", ".proofline/line-identities.json", f"ledger commit에 실패했습니다: {exc}"
         ) from exc
-    if (
-        displaced_identity != plan.prior_identity
-        or displaced_bytes != plan.prior_bytes
-    ):
+    if displaced_identity != plan.prior_identity or displaced_bytes != plan.prior_bytes:
         try:
             _exchange_path_at(stage, artifact_root_fd, name)
+            transaction.ledger_mutated = False
         except OSError as rollback_error:
             raise LineInitError(
                 "ledger.concurrent.changed",
@@ -315,6 +344,32 @@ def _commit_ledger_path(
             ".proofline/line-identities.json",
             "ledger가 preflight 이후 변경되어 외부 bytes를 보존했습니다.",
         )
+
+
+def _owned_transaction_is_exact(
+    target: Path,
+    target_identity: tuple[int, int],
+    expected: dict[str, bytes],
+    artifact_root_fd: int,
+    candidate_identity: tuple[int, int],
+    candidate_bytes: bytes,
+) -> bool:
+    try:
+        ledger_identity, ledger_bytes, close_detail = _read_regular_at(
+            artifact_root_fd, "line-identities.json"
+        )
+        state = target.stat(follow_symlinks=False)
+        return (
+            close_detail is None
+            and stat.S_ISDIR(state.st_mode)
+            and (state.st_dev, state.st_ino) == target_identity
+            and {path.name for path in target.iterdir()} == set(expected)
+            and ledger_identity == candidate_identity
+            and ledger_bytes == candidate_bytes
+            and all((target / name).read_bytes() == content for name, content in expected.items())
+        )
+    except OSError:
+        return False
 
 
 def _rollback_owned_ledger(
@@ -721,16 +776,21 @@ def _acquire_repository_lock(project_root: Path) -> int:
         raise _with_secondary(primary, detail) from exc
 
 
-def _release_repository_lock(descriptor: int) -> str | None:
-    details: list[str] = []
+def _release_repository_lock(descriptor: int) -> _LockReleaseResult:
     try:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
     except OSError as exc:
-        details.append(f"line.lock.release.failed: {exc}")
+        return _LockReleaseResult(
+            unlocked=False,
+            closed=False,
+            detail=f"line.lock.release.failed: {exc}",
+        )
     close_detail = _close_descriptors((descriptor,))
-    if close_detail:
-        details.append(close_detail)
-    return "; ".join(details) if details else None
+    return _LockReleaseResult(
+        unlocked=True,
+        closed=close_detail is None,
+        detail=close_detail,
+    )
 
 
 def _initialize_line_unlocked(
@@ -739,7 +799,7 @@ def _initialize_line_unlocked(
     title: str,
     *,
     dry_run: bool = False,
-    finalizer: Callable[[], str | None] | None = None,
+    finalizer: Callable[[], _LockReleaseResult] | None = None,
 ) -> LineInitResult:
     project_root = project_root.absolute()
     if LINE_ID_RE.fullmatch(line_id) is None:
@@ -853,8 +913,8 @@ def _initialize_line_unlocked(
         f"{line_id}.md": line_text.encode("utf-8"),
         f"dcy-{suffix}.md": discovery_text.encode("utf-8"),
     }
-    committed = False
-    ledger_committed = False
+    transaction = _TransactionState()
+    lock_release: _LockReleaseResult | None = None
     rollback_fd: int | None = None
     ledger_rollback_fd: int | None = None
     closed_fds: set[int] = set()
@@ -885,7 +945,7 @@ def _initialize_line_unlocked(
             ) from exc
         try:
             _commit_line_path(temp, target, lines_root_fd)
-            committed = True
+            transaction.line_committed = True
         except FileExistsError as exc:
             raise LineInitError(
                 "line.path.exists", paths[0], "대상 Line path가 생성 중 나타났습니다."
@@ -894,8 +954,11 @@ def _initialize_line_unlocked(
             raise LineInitError(
                 "line.commit.failed", paths[0], f"atomic Line commit에 실패했습니다: {exc}"
             ) from exc
-        _commit_ledger_path(ledger_stage, artifact_root_fd, allocation)
-        ledger_committed = True
+        _commit_ledger_path(ledger_stage, artifact_root_fd, allocation, transaction)
+        if allocation.prior_bytes is not None:
+            _validate_displaced_ledger(
+                ledger_stage, artifact_root_fd, allocation, transaction
+            )
         _require_directory_identity(
             artifact_root, artifact_root_identity, "artifact_root.changed", ".proofline"
         )
@@ -912,9 +975,11 @@ def _initialize_line_unlocked(
                     "line.finalize.failed", paths[0], f"directory anchor close에 실패했습니다: {exc}"
                 ) from exc
         if finalizer is not None:
-            detail = finalizer()
-            if detail:
-                raise LineInitError("line.finalize.failed", paths[0], detail)
+            lock_release = finalizer()
+            if lock_release.detail:
+                raise LineInitError(
+                    "line.finalize.failed", paths[0], lock_release.detail
+                )
         for descriptor in (rollback_fd, ledger_rollback_fd):
             try:
                 os.close(descriptor)
@@ -932,6 +997,13 @@ def _initialize_line_unlocked(
                 ) from exc
     except Exception as primary:
         details: list[str] = []
+        reacquired_lock_fd: int | None = None
+        preserve_advanced = False
+        if lock_release is not None and lock_release.unlocked:
+            try:
+                reacquired_lock_fd = _acquire_repository_lock(project_root)
+            except LineInitError as recovery_error:
+                details.append(str(recovery_error))
         ledger_anchor = (
             ledger_rollback_fd
             if ledger_rollback_fd is not None and ledger_rollback_fd not in closed_fds
@@ -943,7 +1015,7 @@ def _initialize_line_unlocked(
             else lines_root_fd if lines_root_fd not in closed_fds else None
         )
         recovered_fds: list[int] = []
-        if ledger_committed and ledger_anchor is None:
+        if transaction.ledger_mutated and ledger_anchor is None:
             try:
                 ledger_anchor = _open_verified_directory(
                     artifact_root,
@@ -954,7 +1026,7 @@ def _initialize_line_unlocked(
                 recovered_fds.append(ledger_anchor)
             except LineInitError as recovery_error:
                 details.append(str(recovery_error))
-        if committed and line_anchor is None:
+        if transaction.line_committed and line_anchor is None:
             try:
                 line_anchor = _open_verified_directory(
                     target.parent,
@@ -965,7 +1037,28 @@ def _initialize_line_unlocked(
                 recovered_fds.append(line_anchor)
             except LineInitError as recovery_error:
                 details.append(str(recovery_error))
-        if ledger_committed:
+        if (
+            lock_release is not None
+            and lock_release.unlocked
+            and reacquired_lock_fd is not None
+            and transaction.ledger_mutated
+            and transaction.line_committed
+            and ledger_anchor is not None
+        ):
+            if not _owned_transaction_is_exact(
+                target,
+                temp_identity,
+                expected,
+                ledger_anchor,
+                ledger_stage_identity,
+                allocation.candidate_bytes,
+            ):
+                try:
+                    _require_valid_project(project_root)
+                    preserve_advanced = True
+                except LineInitError as validation_error:
+                    details.append(str(validation_error))
+        if transaction.ledger_mutated and not preserve_advanced:
             if ledger_anchor is None:
                 details.append("ledger.rollback.failed: usable artifact anchor가 없습니다.")
             else:
@@ -978,22 +1071,26 @@ def _initialize_line_unlocked(
                 if detail:
                     details.append(detail)
         try:
-            if committed and line_anchor is not None:
+            if (
+                transaction.line_committed
+                and line_anchor is not None
+                and not preserve_advanced
+            ):
                 detail = _rollback_owned_target(
                     line_anchor, target.name, temp_identity, expected
                 )
                 if detail:
                     details.append(detail)
-            elif committed:
+            elif transaction.line_committed and not preserve_advanced:
                 details.append("line.rollback.failed: usable parent anchor가 없습니다.")
-            else:
+            elif not transaction.line_committed:
                 detail = _cleanup_stage(temp, temp_identity, tuple(expected))
                 if detail:
                     details.append(detail)
         except LineInitError as cleanup_error:
             details.append(str(cleanup_error))
         except OSError as cleanup_error:
-            code = "line.rollback.failed" if committed else "line.cleanup.failed"
+            code = "line.rollback.failed" if transaction.line_committed else "line.cleanup.failed"
             details.append(f"{code}: {cleanup_error}")
         if ledger_stage.exists():
             try:
@@ -1008,6 +1105,10 @@ def _initialize_line_unlocked(
                 closed_fds.add(descriptor)
             except OSError as close_error:
                 details.append(f"line.finalize.failed: {close_error}")
+        if reacquired_lock_fd is not None:
+            release = _release_repository_lock(reacquired_lock_fd)
+            if release.detail:
+                details.append(release.detail)
         if details and isinstance(primary, LineInitError):
             raise LineInitError(
                 primary.code, primary.path, f"{primary.message}; secondary: {'; '.join(details)}"
@@ -1024,19 +1125,23 @@ def initialize_line(
     absolute_root = project_root.absolute()
     _require_git_root(absolute_root)
     descriptor = _acquire_repository_lock(absolute_root)
-    lock_finalized = False
+    lock_release: _LockReleaseResult | None = None
 
-    def finalize_lock() -> str | None:
-        nonlocal lock_finalized
-        lock_finalized = True
-        return _release_repository_lock(descriptor)
+    def finalize_lock() -> _LockReleaseResult:
+        nonlocal lock_release
+        lock_release = _release_repository_lock(descriptor)
+        return lock_release
 
     try:
         result = _initialize_line_unlocked(
             project_root, line_id, title, finalizer=finalize_lock
         )
     except Exception as primary:
-        detail = None if lock_finalized else _release_repository_lock(descriptor)
+        detail: str | None = None
+        if lock_release is None or not lock_release.unlocked:
+            detail = _release_repository_lock(descriptor).detail
+        elif not lock_release.closed:
+            detail = _close_descriptors((descriptor,))
         if detail and isinstance(primary, LineInitError):
             raise _with_secondary(primary, detail) from primary
         raise

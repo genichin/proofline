@@ -1506,24 +1506,215 @@ def test_line_init_second_rollback_anchor_close_failure_restores_exact_tree(
     assert not list(project.glob(".proofline-ledger-*"))
 
 
-def test_line_init_repository_lock_release_failure_rolls_back_inner_success(
+def git_state_snapshot(project: Path) -> tuple[str, bytes, bytes]:
+    head = git("symbolic-ref", "-q", "HEAD", cwd=project).stdout.strip()
+    refs = git("show-ref", cwd=project).stdout.encode()
+    remotes = git("remote", "-v", cwd=project).stdout.encode()
+    return head, refs, remotes
+
+
+def assert_transaction_residue_absent(project: Path) -> None:
+    assert not list(project.glob(".line-*"))
+    assert not list(project.glob(".proofline-ledger-*"))
+    assert not list(project.glob(".proofline-transaction-*"))
+    assert not list(project.glob(".git/proofline-*"))
+
+
+def test_line_init_post_exchange_identity_failure_restores_exact_prior_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    ledger = project / ".proofline/line-identities.json"
+    prior = encode_ledger(set())
+    ledger.write_bytes(prior)
+    git("add", ".proofline/line-identities.json", cwd=project)
+    git("commit", "-qm", "Adopt ledger", cwd=project)
+    before = tree_snapshot(project)
+    git_before = git_state_snapshot(project)
+    original_exchange = line_writer._exchange_path_at
+    original_identity = line_writer._directory_identity
+    exchange_completed = False
+    failed = False
+
+    def exchange_and_arm(source: Path, target_dir_fd: int, target_name: str) -> None:
+        nonlocal exchange_completed
+        original_exchange(source, target_dir_fd, target_name)
+        exchange_completed = True
+
+    def fail_displaced_identity(path: Path) -> tuple[int, int]:
+        nonlocal failed
+        if exchange_completed and path.name.startswith(".proofline-ledger-") and not failed:
+            failed = True
+            raise OSError(5, "injected displaced ledger identity failure")
+        return original_identity(path)
+
+    monkeypatch.setattr(line_writer, "_exchange_path_at", exchange_and_arm)
+    monkeypatch.setattr(line_writer, "_directory_identity", fail_displaced_identity)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Post-exchange identity failure")
+
+    assert exc_info.value.code == "ledger.commit.failed"
+    assert "injected displaced ledger identity failure" in exc_info.value.message
+    assert "secondary:" not in exc_info.value.message
+    assert failed
+    assert ledger.read_bytes() == prior
+    assert decode_ledger(ledger.read_bytes()).allocated_line_ids == ()
+    assert tree_snapshot(project) == before
+    assert_transaction_residue_absent(project)
+    assert git_state_snapshot(project) == git_before
+
+
+def test_line_init_unlock_failure_rolls_back_while_repository_lock_is_retained(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project = make_project(tmp_path)
     before = tree_snapshot(project)
-    original_release = line_writer._release_repository_lock
+    git_before = git_state_snapshot(project)
+    original_acquire = line_writer._acquire_repository_lock
+    original_flock = fcntl.flock
+    original_close = os.close
+    original_rollback = line_writer._rollback_owned_ledger
+    repository_fd: int | None = None
+    unlock_attempts = 0
+    closed: list[int] = []
+    rollback_lock_retained: list[bool] = []
 
-    def release_then_report_failure(descriptor: int) -> str:
-        assert original_release(descriptor) is None
-        return "line.lock.release.failed: injected repository lock release failure"
+    def record_acquire(root: Path) -> int:
+        nonlocal repository_fd
+        descriptor = original_acquire(root)
+        if repository_fd is None:
+            repository_fd = descriptor
+        return descriptor
 
-    monkeypatch.setattr(line_writer, "_release_repository_lock", release_then_report_failure)
+    def fail_first_unlock(descriptor: int, operation: int) -> None:
+        nonlocal unlock_attempts
+        if descriptor == repository_fd and operation == fcntl.LOCK_UN:
+            unlock_attempts += 1
+            if unlock_attempts == 1:
+                raise OSError(5, "injected repository unlock failure")
+        original_flock(descriptor, operation)
+
+    def record_close(descriptor: int) -> None:
+        closed.append(descriptor)
+        original_close(descriptor)
+
+    def record_rollback(*args: object, **kwargs: object) -> str | None:
+        assert repository_fd is not None
+        rollback_lock_retained.append(repository_fd not in closed)
+        return original_rollback(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(line_writer, "_acquire_repository_lock", record_acquire)
+    monkeypatch.setattr(fcntl, "flock", fail_first_unlock)
+    monkeypatch.setattr(os, "close", record_close)
+    monkeypatch.setattr(line_writer, "_rollback_owned_ledger", record_rollback)
 
     with pytest.raises(LineInitError) as exc_info:
-        initialize_line(project, "line-0013", "Repository lock release")
+        initialize_line(project, "line-0013", "Repository unlock failure")
 
     assert exc_info.value.code == "line.finalize.failed"
     assert "line.lock.release.failed" in exc_info.value.message
+    assert "injected repository unlock failure" in exc_info.value.message
+    assert "secondary:" not in exc_info.value.message
+    assert unlock_attempts == 2
+    assert rollback_lock_retained == [True]
+    assert repository_fd is not None and closed.count(repository_fd) == 1
     assert tree_snapshot(project) == before
-    assert not list(project.glob(".line-0013-*"))
-    assert not list(project.glob(".proofline-ledger-*"))
+    assert_transaction_residue_absent(project)
+    assert git_state_snapshot(project) == git_before
+
+
+def test_line_init_unlock_success_close_failure_reacquires_before_exact_rollback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    before = tree_snapshot(project)
+    git_before = git_state_snapshot(project)
+    original_acquire = line_writer._acquire_repository_lock
+    original_close = os.close
+    acquired: list[int] = []
+    close_failed = False
+
+    def record_acquire(root: Path) -> int:
+        descriptor = original_acquire(root)
+        acquired.append(descriptor)
+        return descriptor
+
+    def fail_first_repository_close(descriptor: int) -> None:
+        nonlocal close_failed
+        if acquired and descriptor == acquired[0] and not close_failed:
+            close_failed = True
+            raise OSError(5, "injected repository descriptor close failure")
+        original_close(descriptor)
+
+    monkeypatch.setattr(line_writer, "_acquire_repository_lock", record_acquire)
+    monkeypatch.setattr(os, "close", fail_first_repository_close)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Repository close failure")
+
+    assert exc_info.value.code == "line.finalize.failed"
+    assert "line.finalize.failed" in exc_info.value.message
+    assert "injected repository descriptor close failure" in exc_info.value.message
+    assert "line.rollback" not in exc_info.value.message
+    assert close_failed
+    assert len(acquired) == 2
+    assert tree_snapshot(project) == before
+    assert_transaction_residue_absent(project)
+    assert git_state_snapshot(project) == git_before
+
+
+def test_line_init_close_failure_preserves_successor_advanced_whole_transaction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    git_before = git_state_snapshot(project)
+    original_acquire = line_writer._acquire_repository_lock
+    original_close = os.close
+    acquired: list[int] = []
+    close_failed = False
+    successor_result = None
+
+    def record_acquire(root: Path) -> int:
+        descriptor = original_acquire(root)
+        acquired.append(descriptor)
+        return descriptor
+
+    def commit_successor_then_fail_close(descriptor: int) -> None:
+        nonlocal close_failed, successor_result
+        if acquired and descriptor == acquired[0] and not close_failed:
+            close_failed = True
+            successor_result = initialize_line(project, "line-0014", "Cooperative successor")
+            raise OSError(5, "injected repository descriptor close failure")
+        original_close(descriptor)
+
+    monkeypatch.setattr(line_writer, "_acquire_repository_lock", record_acquire)
+    monkeypatch.setattr(os, "close", commit_successor_then_fail_close)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "First transaction")
+
+    assert exc_info.value.code == "line.finalize.failed"
+    assert "line.finalize.failed" in exc_info.value.message
+    assert "injected repository descriptor close failure" in exc_info.value.message
+    assert "line.rollback" not in exc_info.value.message
+    assert close_failed
+    assert successor_result is not None
+    assert len(acquired) == 3  # first, successor, first transaction rollback re-acquire
+    ledger = project / ".proofline/line-identities.json"
+    assert ledger.read_bytes() == encode_ledger({"line-0013", "line-0014"})
+    assert decode_ledger(ledger.read_bytes()).allocated_line_ids == (
+        "line-0013",
+        "line-0014",
+    )
+    for line_id in ("line-0013", "line-0014"):
+        suffix = line_id.removeprefix("line-")
+        target = project / ".proofline/lines" / line_id
+        assert sorted(path.name for path in target.iterdir()) == [
+            f"dcy-{suffix}.md",
+            f"{line_id}.md",
+        ]
+        assert f'id: "{line_id}"' in (target / f"{line_id}.md").read_text()
+        assert f'id: "dcy-{suffix}"' in (target / f"dcy-{suffix}.md").read_text()
+    assert_transaction_residue_absent(project)
+    assert git_state_snapshot(project) == git_before
