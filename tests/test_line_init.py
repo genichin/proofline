@@ -134,6 +134,82 @@ def make_project(tmp_path: Path) -> Path:
     return project
 
 
+def test_line_init_wraps_git_spawn_failure_as_typed_unavailable_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+
+    def fail_to_spawn(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise OSError("git executable unavailable")
+
+    monkeypatch.setattr(line_writer.subprocess, "run", fail_to_spawn)
+
+    with pytest.raises(LineInitError) as raised:
+        initialize_line(project, "line-0007", "Git unavailable")
+
+    assert raised.value.code == "git.repository.unavailable"
+    assert raised.value.path == "."
+    assert not (project / ".proofline/lines/line-0007").exists()
+
+
+def test_line_init_wraps_git_output_decode_failure_as_typed_unavailable_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+
+    def fail_to_decode(*args: object, **kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    monkeypatch.setattr(line_writer.subprocess, "run", fail_to_decode)
+
+    with pytest.raises(LineInitError) as raised:
+        initialize_line(project, "line-0007", "Git output unavailable")
+
+    assert raised.value.code == "git.repository.unavailable"
+    assert raised.value.path == "."
+    assert not (project / ".proofline/lines/line-0007").exists()
+
+
+def test_line_init_reports_unavailable_for_malformed_repository_marker(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / ".git").mkdir()
+
+    with pytest.raises(LineInitError) as raised:
+        initialize_line(project, "line-0007", "Malformed repository")
+
+    assert raised.value.code == "git.repository.unavailable"
+    assert raised.value.path == "."
+    assert not (project / ".proofline").exists()
+
+
+def test_line_init_requires_repository_when_git_marker_is_absent(tmp_path: Path) -> None:
+    project = tmp_path / "project"
+    project.mkdir()
+
+    with pytest.raises(LineInitError) as raised:
+        initialize_line(project, "line-0007", "Not a repository")
+
+    assert raised.value.code == "git.repository.required"
+    assert raised.value.path == "."
+    assert list(project.iterdir()) == []
+
+
+def test_line_init_preserves_git_root_mismatch_error(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    child = project / "child"
+    child.mkdir()
+
+    with pytest.raises(LineInitError) as raised:
+        initialize_line(child, "line-0007", "Wrong root")
+
+    assert raised.value.code == "git.root.mismatch"
+    assert raised.value.path == "."
+    assert list(child.iterdir()) == []
+
+
 def test_line_init_creates_valid_line_and_discovery(tmp_path: Path) -> None:
     project = make_project(tmp_path)
 

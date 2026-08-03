@@ -93,8 +93,17 @@ def _run_git(project_root: Path, *args: str) -> subprocess.CompletedProcess[str]
 
 
 def _require_git_root(project_root: Path) -> None:
-    result = _run_git(project_root, "rev-parse", "--show-toplevel")
+    try:
+        result = _run_git(project_root, "rev-parse", "--show-toplevel")
+    except (OSError, UnicodeError) as exc:
+        raise LineInitError(
+            "git.repository.unavailable", ".", "Git 저장소를 확인할 수 없습니다."
+        ) from exc
     if result.returncode != 0:
+        if os.path.lexists(project_root / ".git"):
+            raise LineInitError(
+                "git.repository.unavailable", ".", "Git 저장소를 확인할 수 없습니다."
+            )
         raise LineInitError("git.repository.required", ".", "Git 저장소가 아닙니다.")
     actual = Path(result.stdout.strip()).resolve()
     if actual != project_root.resolve():
