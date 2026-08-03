@@ -998,12 +998,14 @@ def _initialize_line_unlocked(
     except Exception as primary:
         details: list[str] = []
         reacquired_lock_fd: int | None = None
+        rollback_authorized = True
         preserve_advanced = False
         if lock_release is not None and lock_release.unlocked:
             try:
                 reacquired_lock_fd = _acquire_repository_lock(project_root)
             except LineInitError as recovery_error:
                 details.append(str(recovery_error))
+                rollback_authorized = False
         ledger_anchor = (
             ledger_rollback_fd
             if ledger_rollback_fd is not None and ledger_rollback_fd not in closed_fds
@@ -1015,7 +1017,7 @@ def _initialize_line_unlocked(
             else lines_root_fd if lines_root_fd not in closed_fds else None
         )
         recovered_fds: list[int] = []
-        if transaction.ledger_mutated and ledger_anchor is None:
+        if rollback_authorized and transaction.ledger_mutated and ledger_anchor is None:
             try:
                 ledger_anchor = _open_verified_directory(
                     artifact_root,
@@ -1026,7 +1028,7 @@ def _initialize_line_unlocked(
                 recovered_fds.append(ledger_anchor)
             except LineInitError as recovery_error:
                 details.append(str(recovery_error))
-        if transaction.line_committed and line_anchor is None:
+        if rollback_authorized and transaction.line_committed and line_anchor is None:
             try:
                 line_anchor = _open_verified_directory(
                     target.parent,
@@ -1058,7 +1060,7 @@ def _initialize_line_unlocked(
                     preserve_advanced = True
                 except LineInitError as validation_error:
                     details.append(str(validation_error))
-        if transaction.ledger_mutated and not preserve_advanced:
+        if rollback_authorized and transaction.ledger_mutated and not preserve_advanced:
             if ledger_anchor is None:
                 details.append("ledger.rollback.failed: usable artifact anchor가 없습니다.")
             else:
@@ -1074,6 +1076,7 @@ def _initialize_line_unlocked(
             if (
                 transaction.line_committed
                 and line_anchor is not None
+                and rollback_authorized
                 and not preserve_advanced
             ):
                 detail = _rollback_owned_target(
@@ -1081,7 +1084,11 @@ def _initialize_line_unlocked(
                 )
                 if detail:
                     details.append(detail)
-            elif transaction.line_committed and not preserve_advanced:
+            elif (
+                transaction.line_committed
+                and rollback_authorized
+                and not preserve_advanced
+            ):
                 details.append("line.rollback.failed: usable parent anchor가 없습니다.")
             elif not transaction.line_committed:
                 detail = _cleanup_stage(temp, temp_identity, tuple(expected))

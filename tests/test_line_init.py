@@ -5,6 +5,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -1716,5 +1717,100 @@ def test_line_init_close_failure_preserves_successor_advanced_whole_transaction(
         ]
         assert f'id: "{line_id}"' in (target / f"{line_id}.md").read_text()
         assert f'id: "dcy-{suffix}"' in (target / f"dcy-{suffix}.md").read_text()
+    assert_transaction_residue_absent(project)
+    assert git_state_snapshot(project) == git_before
+
+
+def test_line_init_close_failure_without_recovery_lock_preserves_both_transactions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    git_before = git_state_snapshot(project)
+    original_acquire = line_writer._acquire_repository_lock
+    original_release = line_writer._release_repository_lock
+    original_close = os.close
+    acquired: list[int] = []
+    acquisition_attempts = 0
+    acquisition_guard = threading.Lock()
+    successor_holds_lock = threading.Event()
+    recovery_attempted = threading.Event()
+    successor_errors: list[BaseException] = []
+    successor_result = None
+    successor_thread: threading.Thread | None = None
+    close_failed = False
+
+    def synchronized_acquire(root: Path) -> int:
+        nonlocal acquisition_attempts
+        with acquisition_guard:
+            acquisition_attempts += 1
+            attempt = acquisition_attempts
+        try:
+            descriptor = original_acquire(root)
+            acquired.append(descriptor)
+            return descriptor
+        finally:
+            if attempt == 3:
+                recovery_attempted.set()
+
+    def hold_successor_lock(descriptor: int) -> line_writer._LockReleaseResult:
+        if len(acquired) >= 2 and descriptor == acquired[1]:
+            successor_holds_lock.set()
+            assert recovery_attempted.wait(timeout=30)
+        return original_release(descriptor)
+
+    def run_successor() -> None:
+        nonlocal successor_result
+        try:
+            successor_result = initialize_line(
+                project, "line-0014", "Lock-holding cooperative successor"
+            )
+        except BaseException as exc:
+            successor_errors.append(exc)
+
+    def commit_successor_then_fail_close(descriptor: int) -> None:
+        nonlocal close_failed, successor_thread
+        if acquired and descriptor == acquired[0] and not close_failed:
+            close_failed = True
+            successor_thread = threading.Thread(target=run_successor)
+            successor_thread.start()
+            assert successor_holds_lock.wait(timeout=30)
+            raise OSError(5, "injected repository descriptor close failure")
+        original_close(descriptor)
+
+    monkeypatch.setattr(line_writer, "_acquire_repository_lock", synchronized_acquire)
+    monkeypatch.setattr(line_writer, "_release_repository_lock", hold_successor_lock)
+    monkeypatch.setattr(os, "close", commit_successor_then_fail_close)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "First transaction")
+
+    assert successor_thread is not None
+    successor_thread.join(timeout=30)
+    assert not successor_thread.is_alive()
+    assert successor_errors == []
+    assert successor_result is not None
+    assert exc_info.value.code == "line.finalize.failed"
+    assert "injected repository descriptor close failure" in exc_info.value.message
+    assert "secondary:" in exc_info.value.message
+    assert "line.lock.contended" in exc_info.value.message
+    assert close_failed
+    assert acquisition_attempts == 3
+    ledger = project / ".proofline/line-identities.json"
+    assert ledger.read_bytes() == encode_ledger({"line-0013", "line-0014"})
+    assert decode_ledger(ledger.read_bytes()).allocated_line_ids == (
+        "line-0013",
+        "line-0014",
+    )
+    successor = project / ".proofline/lines/line-0014"
+    assert successor.is_dir()
+    first = project / ".proofline/lines/line-0013"
+    assert first.is_dir(), "ledger A,B와 Line B만 남는 불일치 residue"
+    for line_id in ("line-0013", "line-0014"):
+        suffix = line_id.removeprefix("line-")
+        target = project / ".proofline/lines" / line_id
+        assert sorted(path.name for path in target.iterdir()) == [
+            f"dcy-{suffix}.md",
+            f"{line_id}.md",
+        ]
     assert_transaction_residue_absent(project)
     assert git_state_snapshot(project) == git_before
