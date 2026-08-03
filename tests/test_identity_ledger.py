@@ -227,6 +227,22 @@ def test_historical_pair_symlink_blob_is_rejected_despite_working_correction(
     assert codes(project) == {"ledger.history.unavailable"}
 
 
+def test_first_ledger_rejects_symlink_mode_line_despite_working_correction(
+    tmp_path: Path,
+) -> None:
+    project = init_repo(tmp_path)
+    add_pair(project, "line-0001")
+    write_ledger(project, {"line-0001"})
+    git(project, "add", "-A")
+    line_path = ".proofline/lines/line-0001/line-0001.md"
+    stage_as_symlink_blob(project, line_path)
+    git(project, "commit", "-qm", "bootstrap with symlink-mode Line")
+
+    assert git(project, "ls-tree", "HEAD", "--", line_path).stdout.startswith("120000 blob ")
+    assert (project / line_path).is_file()
+    assert codes(project) == {"ledger.history.unavailable"}
+
+
 def test_parent_lookup_failure_is_typed_while_root_parent_is_legitimately_absent(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

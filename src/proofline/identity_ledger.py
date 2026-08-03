@@ -201,11 +201,15 @@ def _tree_line_ids(project_root: Path, revision: str) -> set[str]:
     if result.returncode != 0:
         raise _history_unavailable("Git tree의 Line 목록을 확인할 수 없습니다.")
     paths = _decode_git_output(result, "Git tree의 Line 목록을 확인할 수 없습니다.")
-    return {
-        match.group(1)
-        for path in paths.splitlines()
-        if (match := re.fullmatch(r"\.proofline/lines/(line-\d{4})/\1\.md", path))
-    }
+    line_ids: set[str] = set()
+    for path in paths.splitlines():
+        match = re.fullmatch(r"\.proofline/lines/(line-\d{4})/\1\.md", path)
+        if match:
+            line_id = match.group(1)
+            data = _tree_file(project_root, revision, path)
+            if data is not None and _frontmatter_id(data, line_id):
+                line_ids.add(line_id)
+    return line_ids
 
 
 def _history_line_ids(project_root: Path, revision: str) -> set[str]:
