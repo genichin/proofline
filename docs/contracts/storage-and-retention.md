@@ -18,6 +18,8 @@ Project init은 `~/.proofline/`의 존재 또는 manifest 일치 여부에 의�
 
 [산출물 디렉터리 구조](../artifact-layout.md)가 canonical path로 정의한 `.proofline/` 산출물은 Git으로 추적하는 정본이다.
 
+`.proofline/line-identities.json`은 파생 index가 아니라 Line allocation 사실의 source of truth이다. Schema version 1에서는 `schema_version: 1`, `authority_ref: refs/heads/main`, strictly sorted unique `allocated_line_ids`만 canonical UTF-8 JSON과 trailing newline으로 기록한다. Allocation authority는 attached local `refs/heads/main` 하나뿐이며, ledger가 채택된 뒤에는 prior main ledger ID나 current canonical Line ID를 누락하도록 축소·재생성·자동 repair하지 않는다.
+
 ProofLine은 별도의 자동 생성 index 파일을 만들지 않는다. Writer, validator 및 agent는 이 문서의 deterministic canonical path를 직접 탐색해야 하며 index 파일을 discovery나 lifecycle gate의 입력으로 요구하지 않는다.
 
 사용자용 파생 문서는 프로젝트의 `docs/` 아래에 개별 고정 경로로 저장한다. `docs/` 전체를 ProofLine 전용 directory로 소유하지 않으며, 새로운 파생 문서를 추가하려면 이 문서에 정확한 output path와 생성 계약을 먼저 정의해야 한다.

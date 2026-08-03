@@ -126,7 +126,7 @@ def make_project(tmp_path: Path) -> Path:
     (project / "proofline.yaml").write_text(
         "schema_version: 1\nartifact_root: .proofline\n"
     )
-    git("init", "-q", cwd=project)
+    git("init", "-q", "-b", "main", cwd=project)
     git("config", "user.email", "proofline@example.invalid", cwd=project)
     git("config", "user.name", "ProofLine Test", cwd=project)
     git("add", ".", cwd=project)

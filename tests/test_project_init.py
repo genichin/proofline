@@ -29,7 +29,7 @@ def git(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
 def make_git_root(tmp_path: Path) -> Path:
     root = tmp_path / "project"
     root.mkdir()
-    git("init", "-q", cwd=root)
+    git("init", "-q", "-b", "main", cwd=root)
     return root
 
 

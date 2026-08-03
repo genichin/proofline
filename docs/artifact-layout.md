@@ -20,6 +20,7 @@ ProofLine artifact의 역할은 다음과 같이 구분한다.
 
 | Artifact | 역할 | 소유하는 canonical 사실 |
 | --- | --- | --- |
+| Line identity ledger | 프로젝트 전역 Line allocation 기록 | canonical main에 영구 예약된 `line-NNNN` 집합 |
 | Line | 독립적인 변경 및 delivery 단위 | Discovery, REQ 및 Micro-SPEC의 공통 identity와 Line execution 상태 |
 | Discovery | 변경이 필요한 이유와 범위 탐색 | 문제, 배경, 위험, 변경 의도 |
 | REQ | 해당 Line에서 승인한 전체 변경 계약 | 생성·수정·폐기할 AC 집합과 Line-level scope |
@@ -89,6 +90,7 @@ line-0001/
 ├── AGENTS.md
 ├── proofline.yaml
 ├── .proofline/
+│   ├── line-identities.json
 │   ├── lines/
 │   │   ├── .gitkeep
 │   │   ├── line-0001/
@@ -115,7 +117,8 @@ line-0001/
 일반 path 문법은 다음과 같다.
 
 ```text
-Line directory  .proofline/lines/line-<NNNN>/
+Line allocation ledger  .proofline/line-identities.json
+Line directory          .proofline/lines/line-<NNNN>/
 Line artifact   .proofline/lines/line-<NNNN>/line-<NNNN>.md
 Discovery       .proofline/lines/line-<NNNN>/dcy-<NNNN>.md
 REQ             .proofline/lines/line-<NNNN>/req-<NNNN>.md

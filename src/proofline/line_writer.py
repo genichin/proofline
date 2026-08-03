@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
 
+from .identity_ledger import IdentityLedgerError, require_allocation_preflight
 from .project_writer import (
     ProjectInitError,
     _commit_path_at,
@@ -475,21 +476,6 @@ def _cleanup_stage(
         return f"line.cleanup.failed: {first}"
 
 
-def _require_unused_history(project_root: Path, line_id: str) -> None:
-    relative = f".proofline/lines/{line_id}"
-    result = _run_git(
-        project_root, "log", "--all", "--format=%H", "--", relative
-    )
-    if result.returncode != 0:
-        raise LineInitError(
-            "git.history.failed", relative, result.stderr.strip() or "Git history 조회 실패"
-        )
-    if result.stdout.strip():
-        raise LineInitError(
-            "line.id.reused", relative, "Git history에 이미 사용된 Line ID입니다."
-        )
-
-
 def _read_template(name: str) -> str:
     relative = f"templates/schema-v1/artifacts/{name}"
     module_path = Path(__file__).resolve()
@@ -589,7 +575,10 @@ def initialize_line(
     artifact_root_identity = _directory_identity(artifact_root)
     lines_root_identity = _directory_identity(target.parent)
     _require_valid_project(project_root)
-    _require_unused_history(project_root, line_id)
+    try:
+        require_allocation_preflight(project_root, line_id)
+    except IdentityLedgerError as exc:
+        raise LineInitError(exc.code, exc.path, exc.message) from exc
     try:
         line_text, discovery_text = _render(line_id, title)
     except LineInitError:

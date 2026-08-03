@@ -5,6 +5,7 @@ from pathlib import Path
 
 import yaml
 
+from .identity_ledger import LEDGER_PATH, validate_ledger
 from .project_schema import REQUIRED_DIRECTORIES, SUPPORT_MARKERS
 
 
@@ -337,7 +338,9 @@ def _validate_topology(root: Path) -> list[ValidationError]:
                     )
                 )
             continue
-        if stat.S_ISREG(state.st_mode) and path.suffix == ".md":
+        if stat.S_ISREG(state.st_mode) and (
+            path.suffix == ".md" or relative == LEDGER_PATH
+        ):
             continue
         errors.append(
             ValidationError(
@@ -707,4 +710,8 @@ def validate_project(root: Path) -> list[ValidationError]:
         )
     errors.extend(_validate_topology(root))
     errors.extend(_validate_artifacts(root))
+    errors.extend(
+        ValidationError(error.path, error.code, error.message)
+        for error in validate_ledger(root)
+    )
     return sorted(errors)

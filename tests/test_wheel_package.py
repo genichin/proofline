@@ -172,7 +172,7 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
     e2e_project = tmp_path / "checkout-outside-project"
     e2e_project.mkdir()
     git_init = subprocess.run(
-        ["git", "init", "-q"], cwd=e2e_project, capture_output=True, text=True, check=False
+        ["git", "init", "-q", "-b", "main"], cwd=e2e_project, capture_output=True, text=True, check=False
     )
     assert git_init.returncode == 0, git_init.stderr
     git_metadata_before = subprocess.run(
