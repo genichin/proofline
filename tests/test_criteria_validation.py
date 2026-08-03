@@ -155,13 +155,19 @@ def make_satisfy_binding(project: Path) -> None:
     replace(req, "  retire: []", "  retire: []\n  satisfy:\n    - ac-0003")
 
 
-def snapshot(project: Path) -> tuple[dict[str, bytes], str, str]:
+def snapshot(project: Path) -> tuple[dict[str, bytes], str, str, str, str]:
     files = {
         path.relative_to(project).as_posix(): path.read_bytes()
         for path in project.rglob("*")
         if path.is_file() and ".git" not in path.parts
     }
-    return files, git(project, "status", "--porcelain=v1"), git(project, "show-ref")
+    return (
+        files,
+        git(project, "status", "--porcelain=v1"),
+        git(project, "show-ref"),
+        git(project, "symbolic-ref", "-q", "HEAD"),
+        git(project, "rev-parse", "HEAD"),
+    )
 
 
 def validate_without_mutation(project: Path):
@@ -224,6 +230,32 @@ def test_committed_active_to_draft_accepts_exact_prior_approved_satisfy(
     commit_all(project, "begin AC update")
 
     assert validate_without_mutation(project) == []
+
+
+def test_non_main_committed_draft_requires_main_transition_evidence(tmp_path: Path) -> None:
+    project = prepare_update_history(tmp_path)
+    ac_path = ".proofline/criteria/ac-0003.md"
+    ac = project / ac_path
+    git(project, "switch", "-c", "update-ac")
+    replace(ac, "status: active", "status: draft")
+    commit_all(project, "commit AC draft outside main")
+
+    assert git(project, "status", "--porcelain=v1") == ""
+    assert ac.read_bytes() == subprocess.run(
+        ("git", "show", f"HEAD:{ac_path}"),
+        cwd=project,
+        capture_output=True,
+        check=True,
+    ).stdout
+    assert b"status: active" in subprocess.run(
+        ("git", "show", f"refs/heads/main:{ac_path}"),
+        cwd=project,
+        capture_output=True,
+        check=True,
+    ).stdout
+
+    errors = inactive_errors(project)
+    assert errors and "ac-0003" in errors[0].message
 
 
 def test_status_only_draft_to_active_approval_commit_validates(tmp_path: Path) -> None:

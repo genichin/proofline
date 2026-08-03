@@ -595,7 +595,10 @@ def _git_file(root: Path, revision: str, path: str) -> bytes | None:
     return _git_output(root, "show", f"{revision}:{path}")
 
 
-def _last_active_revision(root: Path, ac_path: str) -> str | None:
+def _last_active_revision(root: Path, ac_path: str, current_ac: bytes) -> str | None:
+    current_head_ac = _git_file(root, "HEAD", ac_path)
+    if current_head_ac is None:
+        return None
     history = _git_output(root, "rev-list", "--first-parent", "refs/heads/main")
     if history is None:
         return None
@@ -608,7 +611,7 @@ def _last_active_revision(root: Path, ac_path: str) -> str | None:
 
     head_status = _historical_status(_git_file(root, commits[0], ac_path) or b"")
     if head_status == "active":
-        return commits[0]
+        return commits[0] if current_ac != current_head_ac else None
     if head_status != "draft":
         return None
 
@@ -640,12 +643,14 @@ def _draft_satisfy_uses_last_active_binding(
     if len(owners) != 1 or req.get("status") != "approved":
         return False
 
-    prior_revision = _last_active_revision(root, f".proofline/criteria/{ac_id}.md")
-    if prior_revision is None:
-        return False
+    ac_path = f".proofline/criteria/{ac_id}.md"
     try:
+        current_ac = (root / ac_path).read_bytes()
         current_req = (root / req_path).read_bytes()
     except OSError:
+        return False
+    prior_revision = _last_active_revision(root, ac_path, current_ac)
+    if prior_revision is None:
         return False
     historical_req = _git_file(root, prior_revision, req_path)
     return historical_req is not None and historical_req == current_req
