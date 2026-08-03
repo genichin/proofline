@@ -541,6 +541,10 @@ def prepare_allocation_candidate(project_root: Path, line_id: str) -> Allocation
     current = _current_ledger(project_root)
     if isinstance(current, IdentityLedger):
         descriptor: int | None = None
+        state: os.stat_result | None = None
+        prior: bytes | None = None
+        primary: IdentityLedgerError | None = None
+        primary_cause: OSError | None = None
         try:
             descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
             state = os.fstat(descriptor)
@@ -549,10 +553,28 @@ def prepare_allocation_candidate(project_root: Path, line_id: str) -> Allocation
                 chunks.append(chunk)
             prior = b"".join(chunks)
         except OSError as exc:
-            raise IdentityLedgerError("ledger.type") from exc
-        finally:
-            if descriptor is not None:
+            primary = IdentityLedgerError("ledger.type")
+            primary_cause = exc
+        close_error: OSError | None = None
+        if descriptor is not None:
+            try:
                 os.close(descriptor)
+            except OSError as exc:
+                close_error = exc
+        if primary is not None:
+            if close_error is not None:
+                primary = IdentityLedgerError(
+                    primary.code,
+                    primary.path,
+                    f"{primary.message}; secondary: ledger.finalize.failed: {close_error}",
+                )
+            raise primary from primary_cause
+        if close_error is not None:
+            raise IdentityLedgerError(
+                "ledger.finalize.failed",
+                message=f"ledger descriptor close에 실패했습니다: {close_error}",
+            ) from close_error
+        assert prior is not None and state is not None
         if decode_ledger(prior) != current:
             raise IdentityLedgerError("ledger.concurrent.changed")
         prior_identity = (state.st_dev, state.st_ino)

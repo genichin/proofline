@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -560,3 +561,93 @@ def test_allocation_preflight_rejects_reserved_id_and_non_main(tmp_path: Path) -
     with pytest.raises(IdentityLedgerError) as authority:
         require_allocation_preflight(project, "line-0002")
     assert authority.value.code == "ledger.authority.required"
+
+
+def test_candidate_read_primary_survives_descriptor_close_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = init_repo(tmp_path)
+    write_ledger(project, set())
+    commit_all(project, "adopt ledger")
+    ledger = project / ".proofline/line-identities.json"
+    before = ledger.read_bytes()
+    original_open = os.open
+    original_fstat = os.fstat
+    original_close = os.close
+    candidate_fd: int | None = None
+    close_failed = False
+
+    def record_candidate_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
+        nonlocal candidate_fd
+        descriptor = original_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+        if path == ledger:
+            candidate_fd = descriptor
+        return descriptor
+
+    def fail_candidate_fstat(descriptor: int) -> os.stat_result:
+        if descriptor == candidate_fd:
+            raise OSError(5, "injected candidate fstat failure")
+        return original_fstat(descriptor)
+
+    def fail_candidate_close(descriptor: int) -> None:
+        nonlocal close_failed
+        if descriptor == candidate_fd and not close_failed:
+            close_failed = True
+            raise OSError(5, "injected candidate close failure")
+        original_close(descriptor)
+
+    monkeypatch.setattr(os, "open", record_candidate_open)
+    monkeypatch.setattr(os, "fstat", fail_candidate_fstat)
+    monkeypatch.setattr(os, "close", fail_candidate_close)
+
+    with pytest.raises(IdentityLedgerError) as raised:
+        ledger_module.prepare_allocation_candidate(project, "line-0002")
+
+    assert raised.value.code == "ledger.type"
+    assert "ledger.finalize.failed" in raised.value.message
+    assert "injected candidate close failure" in raised.value.message
+    assert ledger.read_bytes() == before
+    assert not list(project.glob(".proofline-ledger-*"))
+    assert candidate_fd is not None
+    original_close(candidate_fd)
+
+
+def test_candidate_close_failure_after_successful_read_is_typed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = init_repo(tmp_path)
+    write_ledger(project, set())
+    commit_all(project, "adopt ledger")
+    ledger = project / ".proofline/line-identities.json"
+    before = ledger.read_bytes()
+    original_open = os.open
+    original_close = os.close
+    candidate_fd: int | None = None
+    close_failed = False
+
+    def record_candidate_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
+        nonlocal candidate_fd
+        descriptor = original_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+        if path == ledger:
+            candidate_fd = descriptor
+        return descriptor
+
+    def fail_candidate_close(descriptor: int) -> None:
+        nonlocal close_failed
+        if descriptor == candidate_fd and not close_failed:
+            close_failed = True
+            raise OSError(5, "injected candidate close failure")
+        original_close(descriptor)
+
+    monkeypatch.setattr(os, "open", record_candidate_open)
+    monkeypatch.setattr(os, "close", fail_candidate_close)
+
+    with pytest.raises(IdentityLedgerError) as raised:
+        ledger_module.prepare_allocation_candidate(project, "line-0002")
+
+    assert raised.value.code == "ledger.finalize.failed"
+    assert "injected candidate close failure" in raised.value.message
+    assert ledger.read_bytes() == before
+    assert not list(project.glob(".proofline-ledger-*"))
+    assert candidate_fd is not None
+    original_close(candidate_fd)

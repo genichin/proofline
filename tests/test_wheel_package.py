@@ -7,6 +7,8 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from proofline.identity_ledger import decode_ledger, encode_ledger
 from proofline.line_writer import _render
 
@@ -92,6 +94,183 @@ def test_source_checkout_line_init_fresh_and_legacy_e2e(tmp_path: Path) -> None:
         assert validated.returncode == 0, validated.stderr
         assert not list(project.glob(".line-*"))
         assert not list(project.glob(".proofline-ledger-*"))
+
+
+@pytest.mark.parametrize("committed", [False, True], ids=["uncommitted", "committed"])
+def test_source_checkout_rejects_ledger_only_delta_without_mutation(
+    tmp_path: Path, committed: bool
+) -> None:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT / "src")
+    home = tmp_path / "home"
+    home.mkdir()
+    env["HOME"] = str(home)
+    external = tmp_path / "external.txt"
+    external.write_bytes(b"external sentinel\n")
+    command = [
+        sys.executable,
+        "-c",
+        "from proofline.cli import main; raise SystemExit(main())",
+    ]
+    project = tmp_path / "project"
+    (project / ".proofline/lines").mkdir(parents=True)
+    (project / ".proofline/criteria").mkdir()
+    (project / "proofline.yaml").write_bytes(
+        b"schema_version: 1\nartifact_root: .proofline\n"
+    )
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=project, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=project, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=proofline@example.invalid",
+            "-c",
+            "user.name=ProofLine Test",
+            "commit",
+            "-qm",
+            "project baseline",
+        ],
+        cwd=project,
+        check=True,
+    )
+    initialized = subprocess.run(
+        [*command, "line", "init", "line-0007", "--title", "Source baseline"],
+        cwd=project,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert initialized.returncode == 0, initialized.stderr
+    subprocess.run(["git", "add", "-A"], cwd=project, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=proofline@example.invalid",
+            "-c",
+            "user.name=ProofLine Test",
+            "commit",
+            "-qm",
+            "valid allocation",
+        ],
+        cwd=project,
+        check=True,
+    )
+    ledger = project / ".proofline/line-identities.json"
+    ledger.write_bytes(encode_ledger({"line-0007", "line-0008"}))
+    if committed:
+        subprocess.run(["git", "add", str(ledger)], cwd=project, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.email=proofline@example.invalid",
+                "-c",
+                "user.name=ProofLine Test",
+                "commit",
+                "-qm",
+                "ledger-only delta",
+            ],
+            cwd=project,
+            check=True,
+        )
+
+    canonical_before = {
+        path.relative_to(project): path.read_bytes()
+        for path in (project / ".proofline").rglob("*")
+        if path.is_file()
+    }
+    git_before = subprocess.run(
+        [
+            "git",
+            "status",
+            "--porcelain=v1",
+            "--branch",
+            "--untracked-files=all",
+        ],
+        cwd=project,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
+    refs_before = subprocess.run(
+        ["git", "for-each-ref", "--format=%(refname):%(objectname)"],
+        cwd=project,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
+    head_before = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=project,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
+    remotes_before = subprocess.run(
+        ["git", "remote", "-v"],
+        cwd=project,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout
+
+    rejected = subprocess.run(
+        [*command, "validate"],
+        cwd=project,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert rejected.returncode == 1
+    assert "ledger.orphan" in rejected.stderr
+    assert not (project / ".proofline/lines/line-0008").exists()
+    assert {
+        path.relative_to(project): path.read_bytes()
+        for path in (project / ".proofline").rglob("*")
+        if path.is_file()
+    } == canonical_before
+    assert external.read_bytes() == b"external sentinel\n"
+    assert not list(project.glob(".line-*"))
+    assert not list(project.glob(".proofline-ledger-*"))
+    assert subprocess.run(
+        [
+            "git",
+            "status",
+            "--porcelain=v1",
+            "--branch",
+            "--untracked-files=all",
+        ],
+        cwd=project,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout == git_before
+    assert subprocess.run(
+        ["git", "for-each-ref", "--format=%(refname):%(objectname)"],
+        cwd=project,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout == refs_before
+    assert subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=project,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout == head_before
+    assert subprocess.run(
+        ["git", "remote", "-v"],
+        cwd=project,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout == remotes_before
 
 
 def test_built_sdist_contains_project_schema_resources(tmp_path: Path) -> None:

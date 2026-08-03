@@ -13,6 +13,7 @@ import fcntl
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
+from typing import Callable
 
 from .identity_ledger import (
     AllocationCandidate,
@@ -733,7 +734,12 @@ def _release_repository_lock(descriptor: int) -> str | None:
 
 
 def _initialize_line_unlocked(
-    project_root: Path, line_id: str, title: str, *, dry_run: bool = False
+    project_root: Path,
+    line_id: str,
+    title: str,
+    *,
+    dry_run: bool = False,
+    finalizer: Callable[[], str | None] | None = None,
 ) -> LineInitResult:
     project_root = project_root.absolute()
     if LINE_ID_RE.fullmatch(line_id) is None:
@@ -905,13 +911,10 @@ def _initialize_line_unlocked(
                 raise LineInitError(
                     "line.finalize.failed", paths[0], f"directory anchor close에 실패했습니다: {exc}"
                 ) from exc
-        if ledger_stage.exists():
-            try:
-                ledger_stage.unlink()
-            except OSError as exc:
-                raise LineInitError(
-                    "line.finalize.failed", paths[0], f"prior ledger cleanup에 실패했습니다: {exc}"
-                ) from exc
+        if finalizer is not None:
+            detail = finalizer()
+            if detail:
+                raise LineInitError("line.finalize.failed", paths[0], detail)
         for descriptor in (rollback_fd, ledger_rollback_fd):
             try:
                 os.close(descriptor)
@@ -919,6 +922,13 @@ def _initialize_line_unlocked(
             except OSError as exc:
                 raise LineInitError(
                     "line.finalize.failed", paths[0], f"rollback anchor close에 실패했습니다: {exc}"
+                ) from exc
+        if ledger_stage.exists():
+            try:
+                ledger_stage.unlink()
+            except OSError as exc:
+                raise LineInitError(
+                    "line.finalize.failed", paths[0], f"prior ledger cleanup에 실패했습니다: {exc}"
                 ) from exc
     except Exception as primary:
         details: list[str] = []
@@ -932,6 +942,29 @@ def _initialize_line_unlocked(
             if rollback_fd is not None and rollback_fd not in closed_fds
             else lines_root_fd if lines_root_fd not in closed_fds else None
         )
+        recovered_fds: list[int] = []
+        if ledger_committed and ledger_anchor is None:
+            try:
+                ledger_anchor = _open_verified_directory(
+                    artifact_root,
+                    artifact_root_identity,
+                    "artifact_root.changed",
+                    ".proofline",
+                )
+                recovered_fds.append(ledger_anchor)
+            except LineInitError as recovery_error:
+                details.append(str(recovery_error))
+        if committed and line_anchor is None:
+            try:
+                line_anchor = _open_verified_directory(
+                    target.parent,
+                    lines_root_identity,
+                    "lines_root.changed",
+                    ".proofline/lines",
+                )
+                recovered_fds.append(line_anchor)
+            except LineInitError as recovery_error:
+                details.append(str(recovery_error))
         if ledger_committed:
             if ledger_anchor is None:
                 details.append("ledger.rollback.failed: usable artifact anchor가 없습니다.")
@@ -967,7 +1000,7 @@ def _initialize_line_unlocked(
                 ledger_stage.unlink()
             except OSError as cleanup_error:
                 details.append(f"ledger.cleanup.failed: {cleanup_error}")
-        for descriptor in (*anchor_fds, rollback_fd, ledger_rollback_fd):
+        for descriptor in (*anchor_fds, rollback_fd, ledger_rollback_fd, *recovered_fds):
             if descriptor is None or descriptor in closed_fds:
                 continue
             try:
@@ -991,14 +1024,20 @@ def initialize_line(
     absolute_root = project_root.absolute()
     _require_git_root(absolute_root)
     descriptor = _acquire_repository_lock(absolute_root)
+    lock_finalized = False
+
+    def finalize_lock() -> str | None:
+        nonlocal lock_finalized
+        lock_finalized = True
+        return _release_repository_lock(descriptor)
+
     try:
-        result = _initialize_line_unlocked(project_root, line_id, title)
+        result = _initialize_line_unlocked(
+            project_root, line_id, title, finalizer=finalize_lock
+        )
     except Exception as primary:
-        detail = _release_repository_lock(descriptor)
+        detail = None if lock_finalized else _release_repository_lock(descriptor)
         if detail and isinstance(primary, LineInitError):
             raise _with_secondary(primary, detail) from primary
         raise
-    detail = _release_repository_lock(descriptor)
-    if detail:
-        raise LineInitError("line.finalize.failed", ".git", detail)
     return result

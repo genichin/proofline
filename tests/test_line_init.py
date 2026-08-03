@@ -1468,3 +1468,62 @@ def test_line_init_ledger_rollback_continues_after_read_descriptor_close_failure
     assert tree_snapshot(project) == before
     assert ledger_read_fd is not None
     original_close(ledger_read_fd)
+
+
+def test_line_init_second_rollback_anchor_close_failure_restores_exact_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    before = tree_snapshot(project)
+    original_dup = os.dup
+    original_close = os.close
+    rollback_fds: list[int] = []
+    failed = False
+
+    def record_rollback_anchor(descriptor: int) -> int:
+        duplicate = original_dup(descriptor)
+        rollback_fds.append(duplicate)
+        return duplicate
+
+    def fail_ledger_rollback_anchor_close(descriptor: int) -> None:
+        nonlocal failed
+        if len(rollback_fds) == 2 and descriptor == rollback_fds[1] and not failed:
+            failed = True
+            raise OSError(5, "injected ledger rollback anchor close failure")
+        original_close(descriptor)
+
+    monkeypatch.setattr(os, "dup", record_rollback_anchor)
+    monkeypatch.setattr(os, "close", fail_ledger_rollback_anchor_close)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Rollback anchor close")
+
+    assert exc_info.value.code == "line.finalize.failed"
+    assert "injected ledger rollback anchor close failure" in exc_info.value.message
+    assert failed
+    assert tree_snapshot(project) == before
+    assert not list(project.glob(".line-0013-*"))
+    assert not list(project.glob(".proofline-ledger-*"))
+
+
+def test_line_init_repository_lock_release_failure_rolls_back_inner_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    before = tree_snapshot(project)
+    original_release = line_writer._release_repository_lock
+
+    def release_then_report_failure(descriptor: int) -> str:
+        assert original_release(descriptor) is None
+        return "line.lock.release.failed: injected repository lock release failure"
+
+    monkeypatch.setattr(line_writer, "_release_repository_lock", release_then_report_failure)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Repository lock release")
+
+    assert exc_info.value.code == "line.finalize.failed"
+    assert "line.lock.release.failed" in exc_info.value.message
+    assert tree_snapshot(project) == before
+    assert not list(project.glob(".line-0013-*"))
+    assert not list(project.glob(".proofline-ledger-*"))
