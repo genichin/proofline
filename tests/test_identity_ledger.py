@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import proofline.identity_ledger as ledger_module
 from proofline.identity_ledger import (
     AUTHORITY_REF,
     IdentityLedgerError,
@@ -138,6 +139,130 @@ def test_validator_history_failure_is_typed_and_fail_closed(tmp_path: Path) -> N
     (project / ".git" / "objects" / head[:2] / head[2:]).unlink()
 
     assert codes(project) == {"ledger.history.unavailable"}
+
+
+def failed_git(*args: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.CompletedProcess(["git", *args], 128, b"", b"injected failure")
+
+
+def test_tree_listing_failure_is_typed_not_an_empty_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = init_repo(tmp_path)
+    original_git = ledger_module._git
+
+    def fail_ls_tree(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+        if args and args[0] == "ls-tree":
+            return failed_git(*args)
+        return original_git(root, *args)
+
+    monkeypatch.setattr(ledger_module, "_git", fail_ls_tree)
+
+    with pytest.raises(IdentityLedgerError) as raised:
+        ledger_module._tree_line_ids(project, "HEAD")
+
+    assert raised.value.code == "ledger.history.unavailable"
+
+
+@pytest.mark.parametrize("reader", ["ledger", "tree"])
+def test_tree_blob_read_failure_is_typed_not_absence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reader: str
+) -> None:
+    project = init_repo(tmp_path)
+    write_ledger(project, set())
+    commit_all(project, "ledger")
+    original_git = ledger_module._git
+
+    def fail_blob_read(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+        if args and args[0] == "show":
+            return failed_git(*args)
+        if len(args) >= 2 and args[:2] == ("cat-file", "blob"):
+            return failed_git(*args)
+        return original_git(root, *args)
+
+    monkeypatch.setattr(ledger_module, "_git", fail_blob_read)
+
+    with pytest.raises(IdentityLedgerError) as raised:
+        if reader == "ledger":
+            ledger_module._ledger_at(project, "HEAD")
+        else:
+            ledger_module._tree_file(project, "HEAD", "proofline.yaml")
+
+    assert raised.value.code == "ledger.history.unavailable"
+
+
+def test_parent_lookup_failure_is_typed_while_root_parent_is_legitimately_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root_project = tmp_path / "root-project"
+    (root_project / ".proofline/lines").mkdir(parents=True)
+    (root_project / ".proofline/criteria").mkdir()
+    (root_project / "proofline.yaml").write_text(
+        "schema_version: 1\nartifact_root: .proofline\n", encoding="utf-8"
+    )
+    git(root_project, "init", "-q", "-b", "main")
+    git(root_project, "config", "user.email", "proofline@example.invalid")
+    git(root_project, "config", "user.name", "ProofLine Test")
+    write_ledger(root_project, set())
+    commit_all(root_project, "root ledger")
+    assert codes(root_project) == set()
+
+    project = init_repo(tmp_path)
+    write_ledger(project, set())
+    commit_all(project, "first ledger")
+    ledger_commit = git(project, "rev-parse", "HEAD").stdout.strip()
+    original_git = ledger_module._git
+
+    def fail_parent_lookup(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+        if args == ("rev-parse", f"{ledger_commit}^"):
+            return failed_git(*args)
+        if args == ("rev-list", "--parents", "-n", "1", ledger_commit):
+            return failed_git(*args)
+        return original_git(root, *args)
+
+    monkeypatch.setattr(ledger_module, "_git", fail_parent_lookup)
+
+    assert codes(project) == {"ledger.history.unavailable"}
+
+
+def test_git_spawn_oserror_is_typed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = init_repo(tmp_path)
+
+    def fail_spawn(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+        raise OSError("git unavailable")
+
+    monkeypatch.setattr(ledger_module.subprocess, "run", fail_spawn)
+
+    with pytest.raises(IdentityLedgerError) as raised:
+        bootstrap_allocation_ids(project)
+
+    assert raised.value.code == "ledger.history.unavailable"
+
+
+def test_later_git_log_failure_is_typed_through_validator_and_preflight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = init_repo(tmp_path)
+    write_ledger(project, set())
+    commit_all(project, "adopt")
+    add_pair(project, "line-0001")
+    write_ledger(project, {"line-0001"})
+    original_git = ledger_module._git
+
+    def fail_log(root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+        if args and args[0] == "log":
+            return failed_git(*args)
+        return original_git(root, *args)
+
+    monkeypatch.setattr(ledger_module, "_git", fail_log)
+
+    project_codes = {error.code for error in validate_project(project)}
+    assert "ledger.history.unavailable" in project_codes
+    with pytest.raises(IdentityLedgerError) as raised:
+        require_allocation_preflight(project, "line-0001")
+    assert raised.value.code == "ledger.history.unavailable"
 
 
 def test_bootstrap_union_uses_current_and_main_first_parent_history_only(tmp_path: Path) -> None:

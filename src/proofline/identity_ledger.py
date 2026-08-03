@@ -74,29 +74,69 @@ def decode_ledger(data: bytes) -> IdentityLedger:
 
 
 def _git(project_root: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
-    return subprocess.run(
-        ["git", *args], cwd=project_root, capture_output=True, check=False
-    )
+    try:
+        return subprocess.run(
+            ["git", *args], cwd=project_root, capture_output=True, check=False
+        )
+    except OSError as exc:
+        raise IdentityLedgerError(
+            "ledger.history.unavailable",
+            message="Git 명령을 실행할 수 없습니다.",
+        ) from exc
+
+
+def _history_unavailable(message: str) -> IdentityLedgerError:
+    return IdentityLedgerError("ledger.history.unavailable", message=message)
+
+
+def _decode_git_output(result: subprocess.CompletedProcess[bytes], message: str) -> str:
+    try:
+        return result.stdout.decode("utf-8", "strict")
+    except UnicodeError as exc:
+        raise _history_unavailable(message) from exc
+
+
+def _authority_ref_absent(project_root: Path) -> bool:
+    result = _git(project_root, "show-ref", "--verify", "--quiet", AUTHORITY_REF)
+    if result.returncode == 0:
+        return False
+    if result.returncode == 1:
+        return True
+    raise _history_unavailable("canonical main ref를 확인할 수 없습니다.")
 
 
 def require_allocation_authority(project_root: Path) -> None:
-    result = _git(project_root, "symbolic-ref", "-q", "HEAD")
-    try:
-        symbolic = result.stdout.decode("utf-8", "strict").strip()
-    except UnicodeError:
-        symbolic = ""
-    authority = _git(
-        project_root, "rev-parse", "--verify", "--quiet", f"{AUTHORITY_REF}^{{commit}}"
-    )
-    if (
-        result.returncode != 0
-        or symbolic != AUTHORITY_REF
-        or authority.returncode != 0
-    ):
+    symbolic_result = _git(project_root, "symbolic-ref", "-q", "HEAD")
+    if symbolic_result.returncode == 1:
         raise IdentityLedgerError(
             "ledger.authority.required",
             message="allocation mutation은 attached refs/heads/main에서만 허용됩니다.",
         )
+    if symbolic_result.returncode != 0:
+        raise _history_unavailable("현재 Git branch를 확인할 수 없습니다.")
+    symbolic = _decode_git_output(
+        symbolic_result, "현재 Git branch를 확인할 수 없습니다."
+    ).strip()
+    if symbolic != AUTHORITY_REF:
+        raise IdentityLedgerError(
+            "ledger.authority.required",
+            message="allocation mutation은 attached refs/heads/main에서만 허용됩니다.",
+        )
+    if _authority_ref_absent(project_root):
+        raise IdentityLedgerError(
+            "ledger.authority.required",
+            message="allocation mutation은 resolvable refs/heads/main에서만 허용됩니다.",
+        )
+    authority = _git(
+        project_root, "rev-parse", "--verify", "--quiet", f"{AUTHORITY_REF}^{{commit}}"
+    )
+    if authority.returncode != 0:
+        raise _history_unavailable("canonical main commit을 확인할 수 없습니다.")
+    commit = _decode_git_output(
+        authority, "canonical main commit을 확인할 수 없습니다."
+    ).strip()
+    if re.fullmatch(r"[0-9a-fA-F]{40,64}", commit) is None:
+        raise _history_unavailable("canonical main commit 결과가 올바르지 않습니다.")
 
 
 def _ids_from_paths(paths: str) -> set[str]:
@@ -129,8 +169,8 @@ def _working_line_ids(project_root: Path) -> set[str]:
 def _tree_line_ids(project_root: Path, revision: str) -> set[str]:
     result = _git(project_root, "ls-tree", "-r", "--name-only", revision, "--", ".proofline/lines")
     if result.returncode != 0:
-        return set()
-    paths = result.stdout.decode("utf-8", "strict")
+        raise _history_unavailable("Git tree의 Line 목록을 확인할 수 없습니다.")
+    paths = _decode_git_output(result, "Git tree의 Line 목록을 확인할 수 없습니다.")
     return {
         match.group(1)
         for path in paths.splitlines()
@@ -150,22 +190,10 @@ def _history_line_ids(project_root: Path, revision: str) -> set[str]:
         ".proofline/lines",
     )
     if result.returncode != 0:
-        authority = _git(
-            project_root, "rev-parse", "--verify", "--quiet", revision
-        )
-        if authority.returncode != 0:
+        if revision == AUTHORITY_REF and _authority_ref_absent(project_root):
             return set()
-        raise IdentityLedgerError(
-            "ledger.history.unavailable",
-            message="canonical main Line history를 확인할 수 없습니다.",
-        )
-    try:
-        paths = result.stdout.decode("utf-8", "strict")
-    except UnicodeError as exc:
-        raise IdentityLedgerError(
-            "ledger.history.unavailable",
-            message="canonical main Line history를 확인할 수 없습니다.",
-        ) from exc
+        raise _history_unavailable("canonical main Line history를 확인할 수 없습니다.")
+    paths = _decode_git_output(result, "canonical main Line history를 확인할 수 없습니다.")
     return _ids_from_paths(paths)
 
 
@@ -175,10 +203,8 @@ def bootstrap_allocation_ids(project_root: Path) -> tuple[str, ...]:
 
 
 def _ledger_at(project_root: Path, revision: str) -> IdentityLedger | None:
-    result = _git(project_root, "show", f"{revision}:{LEDGER_PATH}")
-    if result.returncode != 0:
-        return None
-    return decode_ledger(result.stdout)
+    data = _tree_file(project_root, revision, LEDGER_PATH)
+    return decode_ledger(data) if data is not None else None
 
 
 def _ledger_commits(project_root: Path) -> list[str]:
@@ -192,22 +218,15 @@ def _ledger_commits(project_root: Path) -> list[str]:
         LEDGER_PATH,
     )
     if result.returncode != 0:
-        authority = _git(
-            project_root, "rev-parse", "--verify", "--quiet", AUTHORITY_REF
-        )
-        if authority.returncode != 0:
+        if _authority_ref_absent(project_root):
             return []
-        raise IdentityLedgerError(
-            "ledger.history.unavailable",
-            message="canonical main ledger history를 확인할 수 없습니다.",
-        )
-    try:
-        return result.stdout.decode("utf-8", "strict").split()
-    except UnicodeError as exc:
-        raise IdentityLedgerError(
-            "ledger.history.unavailable",
-            message="canonical main ledger history를 확인할 수 없습니다.",
-        ) from exc
+        raise _history_unavailable("canonical main ledger history를 확인할 수 없습니다.")
+    commits = _decode_git_output(
+        result, "canonical main ledger history를 확인할 수 없습니다."
+    ).split()
+    if any(re.fullmatch(r"[0-9a-fA-F]{40,64}", commit) is None for commit in commits):
+        raise _history_unavailable("canonical main ledger history 결과가 올바르지 않습니다.")
+    return commits
 
 
 def _pair_paths(line_id: str) -> tuple[str, str]:
@@ -239,8 +258,57 @@ def _working_pair_valid(project_root: Path, line_id: str) -> bool:
 
 
 def _tree_file(project_root: Path, revision: str, path: str) -> bytes | None:
-    result = _git(project_root, "show", f"{revision}:{path}")
-    return result.stdout if result.returncode == 0 else None
+    revision_result = _git(
+        project_root, "rev-parse", "--verify", "--quiet", f"{revision}^{{commit}}"
+    )
+    if revision_result.returncode != 0:
+        raise _history_unavailable(f"Git revision {revision!r}을 확인할 수 없습니다.")
+    commit = _decode_git_output(
+        revision_result, f"Git revision {revision!r}을 확인할 수 없습니다."
+    ).strip()
+    if re.fullmatch(r"[0-9a-fA-F]{40,64}", commit) is None:
+        raise _history_unavailable(f"Git revision {revision!r} 결과가 올바르지 않습니다.")
+
+    entry_result = _git(project_root, "ls-tree", "-z", commit, "--", path)
+    if entry_result.returncode != 0:
+        raise _history_unavailable(f"Git tree의 {path} 항목을 확인할 수 없습니다.")
+    if not entry_result.stdout:
+        return None
+    entries = entry_result.stdout.rstrip(b"\0").split(b"\0")
+    try:
+        metadata, entry_path = entries[0].split(b"\t", 1)
+        mode, object_type, object_id = metadata.split(b" ", 2)
+        decoded_path = entry_path.decode("utf-8", "strict")
+        decoded_id = object_id.decode("ascii", "strict")
+    except (ValueError, UnicodeError) as exc:
+        raise _history_unavailable(f"Git tree의 {path} 항목이 올바르지 않습니다.") from exc
+    if (
+        len(entries) != 1
+        or decoded_path != path
+        or object_type != b"blob"
+        or re.fullmatch(r"[0-9a-fA-F]{40,64}", decoded_id) is None
+        or not mode
+    ):
+        raise _history_unavailable(f"Git tree의 {path} 항목이 올바르지 않습니다.")
+
+    blob_result = _git(project_root, "cat-file", "blob", decoded_id)
+    if blob_result.returncode != 0:
+        raise _history_unavailable(f"Git tree의 {path} 내용을 읽을 수 없습니다.")
+    return blob_result.stdout
+
+
+def _commit_parent(project_root: Path, commit: str) -> str | None:
+    result = _git(project_root, "rev-list", "--parents", "-n", "1", commit)
+    if result.returncode != 0:
+        raise _history_unavailable(f"commit {commit}의 parent를 확인할 수 없습니다.")
+    fields = _decode_git_output(
+        result, f"commit {commit}의 parent를 확인할 수 없습니다."
+    ).split()
+    if not fields or fields[0] != commit or any(
+        re.fullmatch(r"[0-9a-fA-F]{40,64}", field) is None for field in fields
+    ):
+        raise _history_unavailable(f"commit {commit}의 parent 결과가 올바르지 않습니다.")
+    return fields[1] if len(fields) > 1 else None
 
 
 def _tree_pair_valid(project_root: Path, revision: str, line_id: str) -> bool:
@@ -289,13 +357,14 @@ def _validate_committed_history(
         try:
             ledger = _ledger_at(project_root, commit)
         except IdentityLedgerError as exc:
+            if exc.code == "ledger.history.unavailable":
+                raise
             errors.append(exc)
             continue
         if ledger is None:
             continue
         ids = set(ledger.allocated_line_ids)
-        parent_result = _git(project_root, "rev-parse", f"{commit}^")
-        parent = parent_result.stdout.decode().strip() if parent_result.returncode == 0 else None
+        parent = _commit_parent(project_root, commit)
         if index == 0:
             expected = _tree_line_ids(project_root, commit)
             if parent:
@@ -322,15 +391,25 @@ def _validate_committed_history(
     return errors, prior_ids
 
 
-def validate_ledger(project_root: Path) -> list[IdentityLedgerError]:
+def _local_git_metadata_exists(project_root: Path) -> bool:
     try:
-        commits = _ledger_commits(project_root)
-    except IdentityLedgerError as exc:
-        return [exc]
-    committed_errors, prior_main_ids = _validate_committed_history(project_root, commits)
+        (project_root / ".git").stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise _history_unavailable("project Git metadata를 확인할 수 없습니다.") from exc
+    return True
+
+
+def _validate_ledger(project_root: Path) -> list[IdentityLedgerError]:
     current = _current_ledger(project_root)
     if isinstance(current, IdentityLedgerError):
         return [current]
+    if current is None and not _local_git_metadata_exists(project_root):
+        return []
+
+    commits = _ledger_commits(project_root)
+    committed_errors, prior_main_ids = _validate_committed_history(project_root, commits)
     if current is None:
         return [IdentityLedgerError("ledger.missing")] if commits else []
 
@@ -374,6 +453,13 @@ def validate_ledger(project_root: Path) -> list[IdentityLedgerError]:
         ):
             errors.append(IdentityLedgerError("ledger.orphan"))
     return errors
+
+
+def validate_ledger(project_root: Path) -> list[IdentityLedgerError]:
+    try:
+        return _validate_ledger(project_root)
+    except IdentityLedgerError as exc:
+        return [exc]
 
 
 def require_allocation_preflight(project_root: Path, line_id: str) -> None:

@@ -27,6 +27,7 @@ def test_uv_tool_install_is_isolated_from_application_environment(tmp_path: Path
 
     shutil.copy2(ROOT / "proofline.yaml", app / "proofline.yaml")
     shutil.copytree(ROOT / ".proofline", app / ".proofline")
+    (app / ".proofline/line-identities.json").unlink()
     pyproject = app / "pyproject.toml"
     lockfile = app / "uv.lock"
     pyproject.write_text("[project]\nname = 'application-fixture'\nversion = '0.0.0'\n")
