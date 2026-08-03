@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import os
 import shutil
 import subprocess
@@ -10,6 +11,7 @@ import pytest
 import yaml
 
 from proofline import line_writer
+from proofline.identity_ledger import decode_ledger, encode_ledger
 from proofline.line_writer import LineInitError, initialize_line
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -232,6 +234,78 @@ def test_line_init_creates_valid_line_and_discovery(tmp_path: Path) -> None:
     assert "{{DISCOVERY_ID}}" not in text
     assert "{{TITLE}}" not in text
     assert run("validate", cwd=project).returncode == 0
+
+
+def test_line_init_fresh_bootstrap_commits_ledger_and_matching_pair(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+
+    result = run("line", "init", "line-0007", "--title", "Fresh allocation", cwd=project)
+
+    assert result.returncode == 0, result.stderr
+    ledger = project / ".proofline/line-identities.json"
+    assert decode_ledger(ledger.read_bytes()).allocated_line_ids == ("line-0007",)
+    assert (project / ".proofline/lines/line-0007/line-0007.md").is_file()
+    assert (project / ".proofline/lines/line-0007/dcy-0007.md").is_file()
+    assert not list(project.glob(".proofline-ledger-*"))
+
+
+def test_line_init_appends_existing_ledger_without_losing_prior_allocation(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    (project / ".proofline/line-identities.json").write_bytes(encode_ledger(set()))
+    git("add", ".proofline/line-identities.json", cwd=project)
+    git("commit", "-qm", "Adopt allocation ledger", cwd=project)
+
+    result = run("line", "init", "line-0007", "--title", "Append allocation", cwd=project)
+
+    assert result.returncode == 0, result.stderr
+    assert decode_ledger(
+        (project / ".proofline/line-identities.json").read_bytes()
+    ).allocated_line_ids == ("line-0007",)
+    assert run("validate", cwd=project).returncode == 0
+
+
+@pytest.mark.parametrize("legacy", [False, True], ids=["fresh", "existing-ledger"])
+def test_line_init_dry_run_has_ledger_candidate_parity_without_residue(
+    tmp_path: Path, legacy: bool
+) -> None:
+    project = make_project(tmp_path)
+    ledger = project / ".proofline/line-identities.json"
+    if legacy:
+        ledger.write_bytes(encode_ledger(set()))
+        git("add", ".proofline/line-identities.json", cwd=project)
+        git("commit", "-qm", "Adopt allocation ledger", cwd=project)
+    before = tree_snapshot(project)
+
+    dry = run(
+        "line", "init", "line-0007", "--title", "Parity", "--dry-run", cwd=project
+    )
+
+    assert dry.returncode == 0, dry.stderr
+    assert tree_snapshot(project) == before
+    assert not list(project.glob(".line-0007-*"))
+    assert not list(project.glob(".proofline-ledger-*"))
+
+    actual = run("line", "init", "line-0007", "--title", "Parity", cwd=project)
+    assert actual.returncode == 0, actual.stderr
+    assert decode_ledger(ledger.read_bytes()).allocated_line_ids == ("line-0007",)
+
+
+@pytest.mark.parametrize("checkout", ["topic", "detached"])
+def test_line_init_rejects_non_authority_checkout_before_transaction_mutation(
+    tmp_path: Path, checkout: str
+) -> None:
+    project = make_project(tmp_path)
+    if checkout == "topic":
+        git("switch", "-qc", "topic", cwd=project)
+    else:
+        git("checkout", "--detach", "-q", cwd=project)
+    before = tree_snapshot(project)
+
+    result = run("line", "init", "line-0007", "--title", "Wrong authority", cwd=project)
+
+    assert result.returncode == 1
+    assert "ledger.authority.required" in result.stderr
+    assert tree_snapshot(project) == before
 
 
 def test_line_init_dry_run_does_not_change_tree(tmp_path: Path) -> None:
@@ -1066,7 +1140,8 @@ def test_line_init_anchor_open_primary_survives_close_failure(
 
     assert exc_info.value.code == "lines_root.changed"
     assert "line.finalize.failed" in exc_info.value.message
-    assert len(close_attempts) == 2
+    assert artifact_fd in close_attempts
+    assert len(close_attempts) == 3  # artifact, project root, repository lock
     assert tree_snapshot(project) == before
     assert artifact_fd is not None
     original_close(artifact_fd)
@@ -1121,7 +1196,8 @@ def test_line_init_stage_primary_survives_anchor_close_failure(
 
     assert exc_info.value.code == "line.prepare.failed"
     assert "line.finalize.failed" in exc_info.value.message
-    assert set(close_attempts) == set(opened)
+    assert set(opened).issubset(close_attempts)
+    assert len(set(close_attempts) - set(opened)) == 1  # repository lock
     assert tree_snapshot(project) == before
     original_close(close_attempts[0])
 
@@ -1243,3 +1319,152 @@ with release.open('w', encoding='utf-8') as stream:
     displaced = project / "displaced-lines"
     assert not (displaced / "line-0013").exists()
     assert not list(project.glob(".line-0013-*"))
+
+
+def test_line_init_rejects_repository_lock_contention_without_residue(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    before = tree_snapshot(project)
+    locked = tmp_path / "lock-held.fifo"
+    release = tmp_path / "lock-release.fifo"
+    os.mkfifo(locked)
+    os.mkfifo(release)
+    holder_script = """
+import fcntl
+import os
+import sys
+from pathlib import Path
+project, locked, release = map(Path, sys.argv[1:4])
+descriptor = os.open(project / '.git', os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+fcntl.flock(descriptor, fcntl.LOCK_EX)
+with locked.open('w', encoding='utf-8') as stream:
+    stream.write('locked')
+with release.open('r', encoding='utf-8') as stream:
+    assert stream.read() == 'release'
+os.close(descriptor)
+"""
+    holder = subprocess.Popen(
+        [sys.executable, "-c", holder_script, str(project), str(locked), str(release)],
+        cwd=project,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    with locked.open("r", encoding="utf-8") as stream:
+        assert stream.read() == "locked"
+    result = run("line", "init", "line-0013", "--title", "Lock contention", cwd=project)
+    with release.open("w", encoding="utf-8") as stream:
+        stream.write("release")
+    _, holder_stderr = holder.communicate(timeout=30)
+
+    assert holder.returncode == 0, holder_stderr
+    assert result.returncode == 1
+    assert "line.lock.contended" in result.stderr
+    assert tree_snapshot(project) == before
+
+
+def test_line_init_preserves_concurrent_existing_ledger_and_rolls_back_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    ledger = project / ".proofline/line-identities.json"
+    ledger.write_bytes(encode_ledger(set()))
+    git("add", ".proofline/line-identities.json", cwd=project)
+    git("commit", "-qm", "Adopt ledger", cwd=project)
+    external = encode_ledger({"line-0099"})
+    original_commit = line_writer._commit_ledger_path
+
+    def mutate_then_commit(*args: object, **kwargs: object) -> None:
+        ledger.write_bytes(external)
+        original_commit(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(line_writer, "_commit_ledger_path", mutate_then_commit)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Ledger race")
+
+    assert exc_info.value.code == "ledger.concurrent.changed"
+    assert ledger.read_bytes() == external
+    assert not (project / ".proofline/lines/line-0013").exists()
+    assert not list(project.glob(".line-0013-*"))
+    assert not list(project.glob(".proofline-ledger-*"))
+
+
+def test_line_init_post_result_external_ledger_mutation_preserves_primary_and_data(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    ledger = project / ".proofline/line-identities.json"
+    external = encode_ledger({"line-0099"})
+    original_validate = line_writer._require_valid_project
+    validations = 0
+
+    def mutate_before_post_result_validation(root: Path) -> None:
+        nonlocal validations
+        validations += 1
+        if validations == 2:
+            ledger.write_bytes(external)
+        original_validate(root)
+
+    monkeypatch.setattr(line_writer, "_require_valid_project", mutate_before_post_result_validation)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Post result race")
+
+    assert exc_info.value.code == "project.invalid"
+    assert "ledger.rollback.ownership" in exc_info.value.message
+    assert ledger.read_bytes() == external
+    assert not (project / ".proofline/lines/line-0013").exists()
+    assert not list(project.glob(".line-0013-*"))
+    assert not list(project.glob(".proofline-ledger-*"))
+
+
+def test_line_init_ledger_rollback_continues_after_read_descriptor_close_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    before = tree_snapshot(project)
+    original_validate = line_writer._require_valid_project
+    original_open = os.open
+    original_close = os.close
+    validations = 0
+    ledger_read_fd: int | None = None
+    committed = False
+    close_failed = False
+
+    def fail_post_result_validation(root: Path) -> None:
+        nonlocal validations, committed
+        validations += 1
+        if validations == 2:
+            committed = True
+            raise LineInitError("project.invalid", ".", "injected post-result failure")
+        original_validate(root)
+
+    def record_ledger_read(path: object, flags: int, *args: object, **kwargs: object) -> int:
+        nonlocal ledger_read_fd
+        descriptor = original_open(path, flags, *args, **kwargs)  # type: ignore[arg-type]
+        if committed and isinstance(path, (str, bytes)) and os.fsdecode(path) == "line-identities.json":
+            ledger_read_fd = descriptor
+        return descriptor
+
+    def fail_ledger_read_close(descriptor: int) -> None:
+        nonlocal close_failed
+        if descriptor == ledger_read_fd and not close_failed:
+            close_failed = True
+            raise OSError(5, "injected ledger rollback close failure")
+        original_close(descriptor)
+
+    monkeypatch.setattr(line_writer, "_require_valid_project", fail_post_result_validation)
+    monkeypatch.setattr(os, "open", record_ledger_read)
+    monkeypatch.setattr(os, "close", fail_ledger_read_close)
+
+    with pytest.raises(LineInitError) as exc_info:
+        initialize_line(project, "line-0013", "Ledger rollback close")
+
+    assert exc_info.value.code == "project.invalid"
+    assert "line.finalize.failed" in exc_info.value.message
+    assert close_failed
+    assert tree_snapshot(project) == before
+    assert ledger_read_fd is not None
+    original_close(ledger_read_fd)

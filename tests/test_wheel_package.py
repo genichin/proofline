@@ -7,9 +7,91 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+from proofline.identity_ledger import decode_ledger, encode_ledger
 from proofline.line_writer import _render
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_source_checkout_line_init_fresh_and_legacy_e2e(tmp_path: Path) -> None:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT / "src")
+    command = [
+        sys.executable,
+        "-c",
+        "from proofline.cli import main; raise SystemExit(main())",
+    ]
+
+    def create_project(name: str, *, legacy: bool) -> Path:
+        project = tmp_path / name
+        (project / ".proofline/lines").mkdir(parents=True)
+        (project / ".proofline/criteria").mkdir()
+        (project / "proofline.yaml").write_bytes(
+            b"schema_version: 1\nartifact_root: .proofline\n"
+        )
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=project, check=True)
+        if legacy:
+            (project / ".proofline/line-identities.json").write_bytes(encode_ledger(set()))
+        subprocess.run(["git", "add", "-A"], cwd=project, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.email=proofline@example.invalid",
+                "-c",
+                "user.name=ProofLine Test",
+                "commit",
+                "-qm",
+                "project baseline",
+            ],
+            cwd=project,
+            check=True,
+        )
+        return project
+
+    for name, legacy in (("fresh-source", False), ("legacy-source", True)):
+        project = create_project(name, legacy=legacy)
+        before = {
+            path.relative_to(project): path.read_bytes()
+            for path in project.rglob("*")
+            if path.is_file()
+        }
+        dry = subprocess.run(
+            [*command, "line", "init", "line-0007", "--title", "Source", "--dry-run"],
+            cwd=project,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert dry.returncode == 0, dry.stderr
+        assert {
+            path.relative_to(project): path.read_bytes()
+            for path in project.rglob("*")
+            if path.is_file()
+        } == before
+        actual = subprocess.run(
+            [*command, "line", "init", "line-0007", "--title", "Source"],
+            cwd=project,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert actual.returncode == 0, actual.stderr
+        ledger = project / ".proofline/line-identities.json"
+        assert decode_ledger(ledger.read_bytes()).allocated_line_ids == ("line-0007",)
+        validated = subprocess.run(
+            [*command, "validate"],
+            cwd=project,
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert validated.returncode == 0, validated.stderr
+        assert not list(project.glob(".line-*"))
+        assert not list(project.glob(".proofline-ledger-*"))
 
 
 def test_built_sdist_contains_project_schema_resources(tmp_path: Path) -> None:
@@ -303,6 +385,9 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
     assert (e2e_project / ".proofline/lines/line-0001/dcy-0001.md").read_bytes() == (
         expected_discovery.encode("utf-8")
     )
+    ledger = e2e_project / ".proofline/line-identities.json"
+    assert decode_ledger(ledger.read_bytes()).allocated_line_ids == ("line-0001",)
+    assert not list(e2e_project.glob(".proofline-ledger-*"))
 
     collision = subprocess.run(
         [str(proofline), "line", "init", "line-0001", "--title", "충돌"],
@@ -372,6 +457,134 @@ print(diagnostic, end='', file=sys.stderr)
         capture_output=True,
         check=False,
     ).stdout == git_metadata_before
+
+    good_ledger = ledger.read_bytes()
+    bad_ledger = encode_ledger({"line-0001", "line-0002"})
+    ledger.write_bytes(bad_ledger)
+    uncommitted_ledger_only = subprocess.run(
+        [str(proofline), "validate"],
+        cwd=e2e_project,
+        env=project_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert uncommitted_ledger_only.returncode == 1
+    assert "ledger.orphan" in uncommitted_ledger_only.stderr
+    assert not list(e2e_project.glob(".line-*"))
+    assert not list(e2e_project.glob(".proofline-ledger-*"))
+    ledger.write_bytes(good_ledger)
+    subprocess.run(["git", "add", "-A"], cwd=e2e_project, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=proofline@example.invalid",
+            "-c",
+            "user.name=ProofLine Test",
+            "commit",
+            "-qm",
+            "commit valid allocation",
+        ],
+        cwd=e2e_project,
+        check=True,
+    )
+    ledger.write_bytes(bad_ledger)
+    subprocess.run(["git", "add", str(ledger)], cwd=e2e_project, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=proofline@example.invalid",
+            "-c",
+            "user.name=ProofLine Test",
+            "commit",
+            "-qm",
+            "injected ledger-only allocation",
+        ],
+        cwd=e2e_project,
+        check=True,
+    )
+    committed_ledger_only = subprocess.run(
+        [str(proofline), "validate"],
+        cwd=e2e_project,
+        env=project_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert committed_ledger_only.returncode == 1
+    assert "ledger.orphan" in committed_ledger_only.stderr
+
+    legacy_project = tmp_path / "legacy-project"
+    legacy_project.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=legacy_project, check=True)
+    legacy_init = subprocess.run(
+        [str(proofline), "project", "init"],
+        cwd=legacy_project,
+        env=project_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert legacy_init.returncode == 0, legacy_init.stderr
+    legacy_ledger = legacy_project / ".proofline/line-identities.json"
+    legacy_ledger.write_bytes(encode_ledger(set()))
+    subprocess.run(["git", "add", "-A"], cwd=legacy_project, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=proofline@example.invalid",
+            "-c",
+            "user.name=ProofLine Test",
+            "commit",
+            "-qm",
+            "legacy project with adopted ledger",
+        ],
+        cwd=legacy_project,
+        check=True,
+    )
+    legacy_before = {
+        path.relative_to(legacy_project): path.read_bytes()
+        for path in legacy_project.rglob("*")
+        if path.is_file()
+    }
+    legacy_dry = subprocess.run(
+        [str(proofline), "line", "init", "line-0005", "--title", "Legacy", "--dry-run"],
+        cwd=legacy_project,
+        env=project_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert legacy_dry.returncode == 0, legacy_dry.stderr
+    assert {
+        path.relative_to(legacy_project): path.read_bytes()
+        for path in legacy_project.rglob("*")
+        if path.is_file()
+    } == legacy_before
+    legacy_actual = subprocess.run(
+        [str(proofline), "line", "init", "line-0005", "--title", "Legacy"],
+        cwd=legacy_project,
+        env=project_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert legacy_actual.returncode == 0, legacy_actual.stderr
+    assert decode_ledger(legacy_ledger.read_bytes()).allocated_line_ids == ("line-0005",)
+    legacy_validate = subprocess.run(
+        [str(proofline), "validate"],
+        cwd=legacy_project,
+        env=project_env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert legacy_validate.returncode == 0, legacy_validate.stderr
+    assert not list(legacy_project.glob(".line-*"))
+    assert not list(legacy_project.glob(".proofline-ledger-*"))
 
     absent_home = tmp_path / "absent-home"
     absent_home.mkdir()

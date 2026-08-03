@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import stat
 import subprocess
@@ -22,6 +23,13 @@ LINE_PATH_RE = re.compile(r"^\.proofline/lines/(line-\d{4})(?:/|$)")
 @dataclass(frozen=True)
 class IdentityLedger:
     allocated_line_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class AllocationCandidate:
+    prior_bytes: bytes | None
+    prior_identity: tuple[int, int] | None
+    candidate_bytes: bytes
 
 
 @dataclass(frozen=True)
@@ -167,6 +175,17 @@ def require_allocation_authority(project_root: Path) -> None:
     ).strip()
     if re.fullmatch(r"[0-9a-fA-F]{40,64}", commit) is None:
         raise _history_unavailable("canonical main commit 결과가 올바르지 않습니다.")
+    head = _git(project_root, "rev-parse", "--verify", "--quiet", "HEAD^{commit}")
+    if head.returncode != 0:
+        raise _history_unavailable("현재 HEAD commit을 확인할 수 없습니다.")
+    head_commit = _decode_git_output(
+        head, "현재 HEAD commit을 확인할 수 없습니다."
+    ).strip()
+    if head_commit != commit:
+        raise IdentityLedgerError(
+            "ledger.authority.diverged",
+            message="현재 HEAD와 refs/heads/main commit이 일치해야 합니다.",
+        )
 
 
 def _ids_from_paths(paths: str) -> set[str]:
@@ -513,3 +532,36 @@ def require_allocation_preflight(project_root: Path, line_id: str) -> None:
             path=f".proofline/lines/{line_id}",
             message="canonical allocation ledger에 이미 예약된 Line ID입니다.",
         )
+
+
+def prepare_allocation_candidate(project_root: Path, line_id: str) -> AllocationCandidate:
+    """Validate allocation state and return exact prior/candidate ledger bytes."""
+    require_allocation_preflight(project_root, line_id)
+    path = project_root / LEDGER_PATH
+    current = _current_ledger(project_root)
+    if isinstance(current, IdentityLedger):
+        descriptor: int | None = None
+        try:
+            descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+            state = os.fstat(descriptor)
+            chunks: list[bytes] = []
+            while chunk := os.read(descriptor, 65536):
+                chunks.append(chunk)
+            prior = b"".join(chunks)
+        except OSError as exc:
+            raise IdentityLedgerError("ledger.type") from exc
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+        if decode_ledger(prior) != current:
+            raise IdentityLedgerError("ledger.concurrent.changed")
+        prior_identity = (state.st_dev, state.st_ino)
+        ids = set(current.allocated_line_ids)
+    else:
+        prior = None
+        prior_identity = None
+        ids = set(bootstrap_allocation_ids(project_root))
+    ids.add(line_id)
+    candidate = encode_ledger(ids)
+    decode_ledger(candidate)
+    return AllocationCandidate(prior, prior_identity, candidate)

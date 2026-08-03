@@ -8,11 +8,17 @@ import stat
 import subprocess
 import sys
 import tempfile
+import ctypes
+import fcntl
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
 
-from .identity_ledger import IdentityLedgerError, require_allocation_preflight
+from .identity_ledger import (
+    AllocationCandidate,
+    IdentityLedgerError,
+    prepare_allocation_candidate,
+)
 from .project_writer import (
     ProjectInitError,
     _commit_path_at,
@@ -212,6 +218,128 @@ def _open_verified_child(
 
 def _commit_line_path(source: Path, target: Path, parent_fd: int) -> None:
     _commit_path_at(source, parent_fd, target.name)
+
+
+def _exchange_path_at(source: Path, target_dir_fd: int, target_name: str) -> None:
+    libc = ctypes.CDLL(None, use_errno=True)
+    renameat2 = libc.renameat2
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    if renameat2(
+        -100, os.fsencode(source), target_dir_fd, os.fsencode(target_name), 2
+    ) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), target_name)
+
+
+def _read_regular_at(
+    parent_fd: int, name: str
+) -> tuple[tuple[int, int], bytes, str | None]:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            name, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd
+        )
+        state = os.fstat(descriptor)
+        if not stat.S_ISREG(state.st_mode):
+            raise OSError(f"{name} is not a regular file")
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, 65536):
+            chunks.append(chunk)
+    except OSError as exc:
+        close_detail = _close_descriptors((descriptor,))
+        if close_detail:
+            raise OSError(f"{exc}; secondary: {close_detail}") from exc
+        raise
+    close_detail = _close_descriptors((descriptor,))
+    return (state.st_dev, state.st_ino), b"".join(chunks), close_detail
+
+
+def _new_ledger_stage(project_root: Path, candidate: bytes) -> tuple[Path, tuple[int, int]]:
+    descriptor, raw_path = tempfile.mkstemp(prefix=".proofline-ledger-", dir=project_root)
+    path = Path(raw_path)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(candidate)
+            stream.flush()
+            os.fsync(stream.fileno())
+        return path, _directory_identity(path)
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+
+
+def _commit_ledger_path(
+    stage: Path,
+    artifact_root_fd: int,
+    plan: AllocationCandidate,
+) -> None:
+    name = "line-identities.json"
+    if plan.prior_bytes is None:
+        try:
+            _commit_path_at(stage, artifact_root_fd, name)
+        except FileExistsError as exc:
+            raise LineInitError(
+                "ledger.concurrent.changed", ".proofline/line-identities.json", "ledger가 생성 중 나타났습니다."
+            ) from exc
+        return
+    try:
+        _exchange_path_at(stage, artifact_root_fd, name)
+        displaced_identity = _directory_identity(stage)
+        displaced_bytes = stage.read_bytes()
+    except OSError as exc:
+        raise LineInitError(
+            "ledger.commit.failed", ".proofline/line-identities.json", f"ledger commit에 실패했습니다: {exc}"
+        ) from exc
+    if (
+        displaced_identity != plan.prior_identity
+        or displaced_bytes != plan.prior_bytes
+    ):
+        try:
+            _exchange_path_at(stage, artifact_root_fd, name)
+        except OSError as rollback_error:
+            raise LineInitError(
+                "ledger.concurrent.changed",
+                ".proofline/line-identities.json",
+                f"외부 ledger 변경을 보존하지 못했습니다.; secondary: ledger.rollback.failed: {rollback_error}",
+            ) from rollback_error
+        raise LineInitError(
+            "ledger.concurrent.changed",
+            ".proofline/line-identities.json",
+            "ledger가 preflight 이후 변경되어 외부 bytes를 보존했습니다.",
+        )
+
+
+def _rollback_owned_ledger(
+    stage: Path,
+    artifact_root_fd: int,
+    plan: AllocationCandidate,
+    candidate_identity: tuple[int, int],
+) -> str | None:
+    try:
+        current_identity, current_bytes, close_detail = _read_regular_at(
+            artifact_root_fd, "line-identities.json"
+        )
+        if current_identity != candidate_identity or current_bytes != plan.candidate_bytes:
+            ownership = "ledger.rollback.ownership: 외부 변경 ledger를 보존했습니다."
+            return f"{ownership}; {close_detail}" if close_detail else ownership
+        if plan.prior_bytes is None:
+            os.unlink("line-identities.json", dir_fd=artifact_root_fd)
+        else:
+            stage_identity = _directory_identity(stage)
+            if stage_identity != plan.prior_identity or stage.read_bytes() != plan.prior_bytes:
+                ownership = "ledger.rollback.ownership: 외부 변경 prior ledger를 보존했습니다."
+                return f"{ownership}; {close_detail}" if close_detail else ownership
+            _exchange_path_at(stage, artifact_root_fd, "line-identities.json")
+        return close_detail
+    except OSError as exc:
+        return f"ledger.rollback.failed: {exc}"
 
 
 def _rollback_owned_target(
@@ -557,7 +685,54 @@ def _validate_rendered(line_id: str, line_text: str, discovery_text: str) -> Non
             )
 
 
-def initialize_line(
+def _acquire_repository_lock(project_root: Path) -> int:
+    try:
+        common = _run_git(project_root, "rev-parse", "--git-common-dir")
+    except (OSError, UnicodeError) as exc:
+        raise LineInitError(
+            "line.lock.unavailable", ".git", "repository lock 위치를 확인할 수 없습니다."
+        ) from exc
+    if common.returncode != 0:
+        raise LineInitError(
+            "line.lock.unavailable", ".git", "repository lock 위치를 확인할 수 없습니다."
+        )
+    common_path = Path(common.stdout.strip())
+    if not common_path.is_absolute():
+        common_path = project_root / common_path
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            common_path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        )
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return descriptor
+    except BlockingIOError as exc:
+        detail = _close_descriptors((descriptor,))
+        primary = LineInitError(
+            "line.lock.contended", ".git", "다른 ProofLine invocation이 실행 중입니다."
+        )
+        raise _with_secondary(primary, detail) from exc
+    except OSError as exc:
+        detail = _close_descriptors((descriptor,))
+        primary = LineInitError(
+            "line.lock.unavailable", ".git", f"repository lock을 획득할 수 없습니다: {exc}"
+        )
+        raise _with_secondary(primary, detail) from exc
+
+
+def _release_repository_lock(descriptor: int) -> str | None:
+    details: list[str] = []
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+    except OSError as exc:
+        details.append(f"line.lock.release.failed: {exc}")
+    close_detail = _close_descriptors((descriptor,))
+    if close_detail:
+        details.append(close_detail)
+    return "; ".join(details) if details else None
+
+
+def _initialize_line_unlocked(
     project_root: Path, line_id: str, title: str, *, dry_run: bool = False
 ) -> LineInitResult:
     project_root = project_root.absolute()
@@ -585,7 +760,7 @@ def initialize_line(
     lines_root_identity = _directory_identity(target.parent)
     _require_valid_project(project_root)
     try:
-        require_allocation_preflight(project_root, line_id)
+        allocation = prepare_allocation_candidate(project_root, line_id)
     except IdentityLedgerError as exc:
         raise LineInitError(exc.code, exc.path, exc.message) from exc
     try:
@@ -654,12 +829,28 @@ def initialize_line(
         if close_detail is None:
             raise
         raise _with_secondary(primary, close_detail) from primary
+    try:
+        ledger_stage, ledger_stage_identity = _new_ledger_stage(
+            project_root, allocation.candidate_bytes
+        )
+    except OSError as exc:
+        cleanup_detail = _cleanup_stage(temp, temp_identity, ())
+        close_detail = _close_descriptors(anchor_fds)
+        details = [detail for detail in (cleanup_detail, close_detail) if detail]
+        primary = LineInitError(
+            "ledger.prepare.failed",
+            ".proofline/line-identities.json",
+            f"ledger staging에 실패했습니다: {exc}",
+        )
+        raise _with_secondary(primary, "; ".join(details) if details else None) from exc
     expected = {
         f"{line_id}.md": line_text.encode("utf-8"),
         f"dcy-{suffix}.md": discovery_text.encode("utf-8"),
     }
     committed = False
+    ledger_committed = False
     rollback_fd: int | None = None
+    ledger_rollback_fd: int | None = None
     closed_fds: set[int] = set()
     try:
         try:
@@ -674,17 +865,18 @@ def initialize_line(
                 "line.path.exists", paths[0], "대상 Line path가 생성 중 나타났습니다."
             )
         _require_directory_identity(
-            artifact_root,
-            artifact_root_identity,
-            code="artifact_root.changed",
-            display_path=".proofline",
+            artifact_root, artifact_root_identity, "artifact_root.changed", ".proofline"
         )
         _require_directory_identity(
-            target.parent,
-            lines_root_identity,
-            code="lines_root.changed",
-            display_path=".proofline/lines",
+            target.parent, lines_root_identity, "lines_root.changed", ".proofline/lines"
         )
+        try:
+            rollback_fd = os.dup(lines_root_fd)
+            ledger_rollback_fd = os.dup(artifact_root_fd)
+        except OSError as exc:
+            raise LineInitError(
+                "line.finalize.failed", paths[0], f"rollback anchor 복제에 실패했습니다: {exc}"
+            ) from exc
         try:
             _commit_line_path(temp, target, lines_root_fd)
             committed = True
@@ -696,83 +888,117 @@ def initialize_line(
             raise LineInitError(
                 "line.commit.failed", paths[0], f"atomic Line commit에 실패했습니다: {exc}"
             ) from exc
-        try:
-            rollback_fd = os.dup(lines_root_fd)
-        except OSError as exc:
-            raise LineInitError(
-                "line.finalize.failed",
-                paths[0],
-                f"rollback anchor 복제에 실패했습니다: {exc}",
-            ) from exc
+        _commit_ledger_path(ledger_stage, artifact_root_fd, allocation)
+        ledger_committed = True
         _require_directory_identity(
-            artifact_root,
-            artifact_root_identity,
-            code="artifact_root.changed",
-            display_path=".proofline",
+            artifact_root, artifact_root_identity, "artifact_root.changed", ".proofline"
         )
         _require_directory_identity(
-            target.parent,
-            lines_root_identity,
-            code="lines_root.changed",
-            display_path=".proofline/lines",
+            target.parent, lines_root_identity, "lines_root.changed", ".proofline/lines"
         )
+        _require_valid_project(project_root)
         for descriptor in anchor_fds:
             try:
                 os.close(descriptor)
                 closed_fds.add(descriptor)
             except OSError as exc:
                 raise LineInitError(
-                    "line.finalize.failed",
-                    paths[0],
-                    f"directory anchor close에 실패했습니다: {exc}",
+                    "line.finalize.failed", paths[0], f"directory anchor close에 실패했습니다: {exc}"
                 ) from exc
-        try:
-            os.close(rollback_fd)
-            closed_fds.add(rollback_fd)
-        except OSError as exc:
-            raise LineInitError(
-                "line.finalize.failed",
-                paths[0],
-                f"rollback anchor close에 실패했습니다: {exc}",
-            ) from exc
+        if ledger_stage.exists():
+            try:
+                ledger_stage.unlink()
+            except OSError as exc:
+                raise LineInitError(
+                    "line.finalize.failed", paths[0], f"prior ledger cleanup에 실패했습니다: {exc}"
+                ) from exc
+        for descriptor in (rollback_fd, ledger_rollback_fd):
+            try:
+                os.close(descriptor)
+                closed_fds.add(descriptor)
+            except OSError as exc:
+                raise LineInitError(
+                    "line.finalize.failed", paths[0], f"rollback anchor close에 실패했습니다: {exc}"
+                ) from exc
     except Exception as primary:
-        cleanup_detail: str | None = None
-        rollback_anchor = None
-        if rollback_fd is not None and rollback_fd not in closed_fds:
-            rollback_anchor = rollback_fd
-        elif lines_root_fd not in closed_fds:
-            rollback_anchor = lines_root_fd
-        try:
-            if committed and rollback_anchor is not None:
-                cleanup_detail = _rollback_owned_target(
-                    rollback_anchor, target.name, temp_identity, expected
+        details: list[str] = []
+        ledger_anchor = (
+            ledger_rollback_fd
+            if ledger_rollback_fd is not None and ledger_rollback_fd not in closed_fds
+            else artifact_root_fd if artifact_root_fd not in closed_fds else None
+        )
+        line_anchor = (
+            rollback_fd
+            if rollback_fd is not None and rollback_fd not in closed_fds
+            else lines_root_fd if lines_root_fd not in closed_fds else None
+        )
+        if ledger_committed:
+            if ledger_anchor is None:
+                details.append("ledger.rollback.failed: usable artifact anchor가 없습니다.")
+            else:
+                detail = _rollback_owned_ledger(
+                    ledger_stage,
+                    ledger_anchor,
+                    allocation,
+                    ledger_stage_identity,
                 )
+                if detail:
+                    details.append(detail)
+        try:
+            if committed and line_anchor is not None:
+                detail = _rollback_owned_target(
+                    line_anchor, target.name, temp_identity, expected
+                )
+                if detail:
+                    details.append(detail)
             elif committed:
-                cleanup_detail = "line.rollback.failed: usable parent anchor가 없습니다."
-            elif not committed:
-                cleanup_detail = _cleanup_stage(temp, temp_identity, tuple(expected))
+                details.append("line.rollback.failed: usable parent anchor가 없습니다.")
+            else:
+                detail = _cleanup_stage(temp, temp_identity, tuple(expected))
+                if detail:
+                    details.append(detail)
         except LineInitError as cleanup_error:
-            cleanup_detail = str(cleanup_error)
+            details.append(str(cleanup_error))
         except OSError as cleanup_error:
-            cleanup_code = "line.rollback.failed" if committed else "line.cleanup.failed"
-            cleanup_detail = f"{cleanup_code}: {cleanup_error}"
-        descriptors = (*anchor_fds, rollback_fd)
-        for descriptor in descriptors:
+            code = "line.rollback.failed" if committed else "line.cleanup.failed"
+            details.append(f"{code}: {cleanup_error}")
+        if ledger_stage.exists():
+            try:
+                ledger_stage.unlink()
+            except OSError as cleanup_error:
+                details.append(f"ledger.cleanup.failed: {cleanup_error}")
+        for descriptor in (*anchor_fds, rollback_fd, ledger_rollback_fd):
             if descriptor is None or descriptor in closed_fds:
                 continue
             try:
                 os.close(descriptor)
                 closed_fds.add(descriptor)
             except OSError as close_error:
-                close_detail = f"line.finalize.failed: {close_error}"
-                cleanup_detail = (
-                    f"{cleanup_detail}; {close_detail}" if cleanup_detail else close_detail
-                )
-        if cleanup_detail and isinstance(primary, LineInitError):
+                details.append(f"line.finalize.failed: {close_error}")
+        if details and isinstance(primary, LineInitError):
             raise LineInitError(
-                primary.code,
-                primary.path,
-                f"{primary.message}; secondary: {cleanup_detail}",
+                primary.code, primary.path, f"{primary.message}; secondary: {'; '.join(details)}"
             ) from primary
         raise
     return LineInitResult(paths=paths, dry_run=False)
+
+
+def initialize_line(
+    project_root: Path, line_id: str, title: str, *, dry_run: bool = False
+) -> LineInitResult:
+    if dry_run:
+        return _initialize_line_unlocked(project_root, line_id, title, dry_run=True)
+    absolute_root = project_root.absolute()
+    _require_git_root(absolute_root)
+    descriptor = _acquire_repository_lock(absolute_root)
+    try:
+        result = _initialize_line_unlocked(project_root, line_id, title)
+    except Exception as primary:
+        detail = _release_repository_lock(descriptor)
+        if detail and isinstance(primary, LineInitError):
+            raise _with_secondary(primary, detail) from primary
+        raise
+    detail = _release_repository_lock(descriptor)
+    if detail:
+        raise LineInitError("line.finalize.failed", ".git", detail)
+    return result

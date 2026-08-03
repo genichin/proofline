@@ -337,6 +337,30 @@ def test_bootstrap_union_uses_current_and_main_first_parent_history_only(tmp_pat
     assert bootstrap_allocation_ids(project) == ("line-0001", "line-0002")
 
 
+def test_main_allocation_remains_reserved_after_same_commit_refs_and_reflog_are_deleted(
+    tmp_path: Path,
+) -> None:
+    project = init_repo(tmp_path)
+    write_ledger(project, set())
+    commit_all(project, "adopt empty ledger")
+    add_pair(project, "line-0004")
+    write_ledger(project, {"line-0004"})
+    commit_all(project, "allocate line on main")
+    allocation_commit = git(project, "rev-parse", "HEAD").stdout.strip()
+    git(project, "branch", "temporary-allocation", allocation_commit)
+    git(project, "tag", "temporary-allocation", allocation_commit)
+    shutil.rmtree(project / ".proofline/lines/line-0004")
+    commit_all(project, "remove allocation artifacts")
+    git(project, "branch", "-D", "temporary-allocation")
+    git(project, "tag", "-d", "temporary-allocation")
+    git(project, "reflog", "expire", "--expire=now", "--all")
+
+    with pytest.raises(IdentityLedgerError) as raised:
+        require_allocation_preflight(project, "line-0004")
+
+    assert raised.value.code == "line.id.reused"
+
+
 def test_first_ledger_must_equal_exact_bootstrap_union_and_omission_survives_recreation(
     tmp_path: Path,
 ) -> None:
