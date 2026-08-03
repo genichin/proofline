@@ -1625,7 +1625,7 @@ def test_line_init_unlock_failure_rolls_back_while_repository_lock_is_retained(
     assert git_state_snapshot(project) == git_before
 
 
-def test_line_init_unlock_success_close_failure_reacquires_before_exact_rollback(
+def test_line_init_unlock_success_post_close_failure_reacquires_before_exact_rollback(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     project = make_project(tmp_path)
@@ -1641,15 +1641,16 @@ def test_line_init_unlock_success_close_failure_reacquires_before_exact_rollback
         acquired.append(descriptor)
         return descriptor
 
-    def fail_first_repository_close(descriptor: int) -> None:
+    def fail_first_repository_close_after_real_close(descriptor: int) -> None:
         nonlocal close_failed
         if acquired and descriptor == acquired[0] and not close_failed:
             close_failed = True
+            original_close(descriptor)
             raise OSError(5, "injected repository descriptor close failure")
         original_close(descriptor)
 
     monkeypatch.setattr(line_writer, "_acquire_repository_lock", record_acquire)
-    monkeypatch.setattr(os, "close", fail_first_repository_close)
+    monkeypatch.setattr(os, "close", fail_first_repository_close_after_real_close)
 
     with pytest.raises(LineInitError) as exc_info:
         initialize_line(project, "line-0013", "Repository close failure")
@@ -1663,6 +1664,77 @@ def test_line_init_unlock_success_close_failure_reacquires_before_exact_rollback
     assert tree_snapshot(project) == before
     assert_transaction_residue_absent(project)
     assert git_state_snapshot(project) == git_before
+
+
+def test_line_init_post_close_error_preserves_reused_successor_lock_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    git_before = git_state_snapshot(project)
+    original_acquire = line_writer._acquire_repository_lock
+    original_close = os.close
+    repository_fd: int | None = None
+    successor_fd: int | None = None
+    target_close_attempts = 0
+
+    def record_acquire(root: Path) -> int:
+        nonlocal repository_fd
+        descriptor = original_acquire(root)
+        if repository_fd is None:
+            repository_fd = descriptor
+        return descriptor
+
+    def close_then_reuse_and_fail(descriptor: int) -> None:
+        nonlocal successor_fd, target_close_attempts
+        if descriptor == repository_fd:
+            target_close_attempts += 1
+            if target_close_attempts == 1:
+                original_close(descriptor)
+                successor_fd = original_acquire(project)
+                assert successor_fd == descriptor
+                raise OSError(5, "injected post-close repository descriptor failure")
+        original_close(descriptor)
+
+    monkeypatch.setattr(line_writer, "_acquire_repository_lock", record_acquire)
+    monkeypatch.setattr(os, "close", close_then_reuse_and_fail)
+
+    try:
+        with pytest.raises(LineInitError) as exc_info:
+            initialize_line(project, "line-0013", "Post-close descriptor failure")
+
+        assert exc_info.value.code == "line.finalize.failed"
+        assert "injected post-close repository descriptor failure" in exc_info.value.message
+        assert "secondary:" in exc_info.value.message
+        assert "line.lock.contended" in exc_info.value.message
+        assert repository_fd is not None
+        assert successor_fd == repository_fd
+        assert target_close_attempts == 1
+        os.fstat(successor_fd)
+        contender_fd = os.open(project / ".git", os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(contender_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            original_close(contender_fd)
+        ledger = project / ".proofline/line-identities.json"
+        assert ledger.read_bytes() == encode_ledger({"line-0013"})
+        assert decode_ledger(ledger.read_bytes()).allocated_line_ids == ("line-0013",)
+        target = project / ".proofline/lines/line-0013"
+        assert sorted(path.name for path in target.iterdir()) == [
+            "dcy-0013.md",
+            "line-0013.md",
+        ]
+        assert 'id: "line-0013"' in (target / "line-0013.md").read_text()
+        assert 'id: "dcy-0013"' in (target / "dcy-0013.md").read_text()
+        assert_transaction_residue_absent(project)
+        assert git_state_snapshot(project) == git_before
+    finally:
+        if successor_fd is not None:
+            try:
+                fcntl.flock(successor_fd, fcntl.LOCK_UN)
+                original_close(successor_fd)
+            except OSError:
+                pass
 
 
 def test_line_init_close_failure_preserves_successor_advanced_whole_transaction(

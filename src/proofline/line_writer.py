@@ -1131,13 +1131,17 @@ def initialize_line(
         return _initialize_line_unlocked(project_root, line_id, title, dry_run=True)
     absolute_root = project_root.absolute()
     _require_git_root(absolute_root)
-    descriptor = _acquire_repository_lock(absolute_root)
-    lock_release: _LockReleaseResult | None = None
+    descriptor: int | None = _acquire_repository_lock(absolute_root)
 
     def finalize_lock() -> _LockReleaseResult:
-        nonlocal lock_release
-        lock_release = _release_repository_lock(descriptor)
-        return lock_release
+        nonlocal descriptor
+        owned_descriptor = descriptor
+        assert owned_descriptor is not None
+        descriptor = None
+        release = _release_repository_lock(owned_descriptor)
+        if not release.unlocked:
+            descriptor = owned_descriptor
+        return release
 
     try:
         result = _initialize_line_unlocked(
@@ -1145,10 +1149,8 @@ def initialize_line(
         )
     except Exception as primary:
         detail: str | None = None
-        if lock_release is None or not lock_release.unlocked:
+        if descriptor is not None:
             detail = _release_repository_lock(descriptor).detail
-        elif not lock_release.closed:
-            detail = _close_descriptors((descriptor,))
         if detail and isinstance(primary, LineInitError):
             raise _with_secondary(primary, detail) from primary
         raise
