@@ -6,8 +6,12 @@ import json
 import re
 import stat
 import subprocess
+from collections.abc import Hashable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 AUTHORITY_REF = "refs/heads/main"
 LEDGER_PATH = ".proofline/line-identities.json"
@@ -28,6 +32,32 @@ class IdentityLedgerError(Exception):
 
     def __str__(self) -> str:
         return f"{self.path}: {self.code}: {self.message}"
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):
+    def construct_mapping(
+        self, node: yaml.nodes.MappingNode, deep: bool = False
+    ) -> dict[Hashable, Any]:
+        self.flatten_mapping(node)
+        mapping: dict[Hashable, Any] = {}
+        for key_node, value_node in node.value:
+            key = self.construct_object(key_node, deep=deep)
+            if not isinstance(key, Hashable):
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    "found an unhashable key",
+                    key_node.start_mark,
+                )
+            if key in mapping:
+                raise yaml.constructor.ConstructorError(
+                    "while constructing a mapping",
+                    node.start_mark,
+                    "found a duplicate key",
+                    key_node.start_mark,
+                )
+            mapping[key] = self.construct_object(value_node, deep=deep)
+        return mapping
 
 
 def encode_ledger(ids: set[str] | tuple[str, ...] | list[str]) -> bytes:
@@ -238,12 +268,13 @@ def _pair_paths(line_id: str) -> tuple[str, str]:
 def _frontmatter_id(data: bytes, expected: str) -> bool:
     try:
         text = data.decode("utf-8")
-    except UnicodeError:
+        if not text.startswith("---\n") or "\n---\n" not in text:
+            return False
+        frontmatter = text[4 : text.index("\n---\n")]
+        value = yaml.load(frontmatter, Loader=_UniqueKeyLoader)
+    except (UnicodeError, yaml.YAMLError):
         return False
-    if not text.startswith("---\n") or "\n---\n" not in text:
-        return False
-    frontmatter = text.split("\n---\n", 1)[0] + "\n"
-    return re.search(rf'^id:\s*["\']?{re.escape(expected)}["\']?\s*$', frontmatter, re.M) is not None
+    return isinstance(value, dict) and type(value.get("id")) is str and value["id"] == expected
 
 
 def _working_pair_valid(project_root: Path, line_id: str) -> bool:
@@ -286,8 +317,8 @@ def _tree_file(project_root: Path, revision: str, path: str) -> bytes | None:
         len(entries) != 1
         or decoded_path != path
         or object_type != b"blob"
+        or mode not in {b"100644", b"100755"}
         or re.fullmatch(r"[0-9a-fA-F]{40,64}", decoded_id) is None
-        or not mode
     ):
         raise _history_unavailable(f"Git tree의 {path} 항목이 올바르지 않습니다.")
 

@@ -45,6 +45,11 @@ def commit_all(project: Path, message: str) -> None:
     git(project, "commit", "-qm", message)
 
 
+def stage_as_symlink_blob(project: Path, path: str) -> None:
+    object_id = git(project, "hash-object", "-w", path).stdout.strip()
+    git(project, "update-index", "--add", "--cacheinfo", f"120000,{object_id},{path}")
+
+
 def add_pair(project: Path, line_id: str) -> None:
     suffix = line_id.removeprefix("line-")
     target = project / ".proofline/lines" / line_id
@@ -189,6 +194,37 @@ def test_tree_blob_read_failure_is_typed_not_absence(
             ledger_module._tree_file(project, "HEAD", "proofline.yaml")
 
     assert raised.value.code == "ledger.history.unavailable"
+
+
+def test_historical_ledger_symlink_blob_is_rejected_despite_working_correction(
+    tmp_path: Path,
+) -> None:
+    project = init_repo(tmp_path)
+    write_ledger(project, set())
+    git(project, "add", ".proofline/line-identities.json")
+    stage_as_symlink_blob(project, ".proofline/line-identities.json")
+    git(project, "commit", "-qm", "symlink-mode ledger")
+
+    assert (project / ".proofline/line-identities.json").is_file()
+    assert codes(project) == {"ledger.history.unavailable"}
+
+
+def test_historical_pair_symlink_blob_is_rejected_despite_working_correction(
+    tmp_path: Path,
+) -> None:
+    project = init_repo(tmp_path)
+    write_ledger(project, set())
+    commit_all(project, "adopt empty project")
+    add_pair(project, "line-0001")
+    write_ledger(project, {"line-0001"})
+    git(project, "add", "-A")
+    stage_as_symlink_blob(
+        project, ".proofline/lines/line-0001/line-0001.md"
+    )
+    git(project, "commit", "-qm", "allocate with symlink-mode pair")
+
+    assert (project / ".proofline/lines/line-0001/line-0001.md").is_file()
+    assert codes(project) == {"ledger.history.unavailable"}
 
 
 def test_parent_lookup_failure_is_typed_while_root_parent_is_legitimately_absent(
@@ -343,6 +379,60 @@ def test_post_bootstrap_candidate_and_commit_require_matching_new_pair(
     write_ledger(project, {"line-0002", "line-0003"})
     commit_all(project, "orphan committed delta")
     assert "ledger.orphan" in codes(project)
+
+
+@pytest.mark.parametrize(
+    "frontmatter",
+    [
+        'id: "line-0001"\nid: "line-9999"\nexecution_status: not_started\n',
+        'id: "line-0001"\ninvalid: [\n',
+    ],
+    ids=["conflicting-duplicate-id", "malformed-yaml"],
+)
+def test_allocation_history_rejects_invalid_identity_frontmatter_after_working_correction(
+    tmp_path: Path, frontmatter: str
+) -> None:
+    project = init_repo(tmp_path)
+    write_ledger(project, set())
+    commit_all(project, "adopt empty project")
+    add_pair(project, "line-0001")
+    line = project / ".proofline/lines/line-0001/line-0001.md"
+    line.write_text(f"---\n{frontmatter}---\n", encoding="utf-8")
+    write_ledger(project, {"line-0001"})
+    commit_all(project, "allocate with invalid identity frontmatter")
+
+    line.write_text(
+        '---\nid: "line-0001"\nexecution_status: not_started\n---\n', encoding="utf-8"
+    )
+
+    assert "ledger.orphan" in codes(project)
+
+
+@pytest.mark.parametrize(
+    ("frontmatter", "expected"),
+    [
+        ('id: "line-0001"\nexecution_status: not_started\n', True),
+        ('id: "line-0001"\nid: "line-0001"\n', False),
+        ('id: "line-0001"\nid: "line-9999"\n', False),
+        ('id: "line-0001"\ninvalid: [\n', False),
+        ('- id: "line-0001"\n', False),
+        ('id: 1\n', False),
+    ],
+    ids=[
+        "valid-mapping",
+        "duplicate-id",
+        "conflicting-id",
+        "malformed-yaml",
+        "non-mapping",
+        "non-string-id",
+    ],
+)
+def test_frontmatter_id_requires_unique_string_id_in_parseable_mapping(
+    frontmatter: str, expected: bool
+) -> None:
+    data = f"---\n{frontmatter}---\nbody\n".encode()
+
+    assert ledger_module._frontmatter_id(data, "line-0001") is expected
 
 
 def deleted_unledgered_line_history(tmp_path: Path, line_id: str) -> Path:
