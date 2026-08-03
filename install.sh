@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-VERSION="0.4.1"
+VERSION="0.5.0"
 REPOSITORY="genichin/proofline"
 WHEEL="proofline-${VERSION}-py3-none-any.whl"
 BASE_URL="https://github.com/${REPOSITORY}/releases/download/v${VERSION}"
