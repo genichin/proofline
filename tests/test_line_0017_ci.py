@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import yaml
@@ -103,6 +106,35 @@ def test_windows_gate_exercises_exact_wheel_and_full_fresh_install_sequence() ->
     assert "git push" not in text.lower()
     assert "gh release" not in text.lower()
     assert "Start-Sleep -Milliseconds 500" not in text
+
+
+def test_cli_import_does_not_require_posix_fcntl() -> None:
+    code = """
+import importlib.abc
+import sys
+
+class RejectFcntl(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname == "fcntl":
+            raise ModuleNotFoundError("No module named 'fcntl'", name="fcntl")
+        return None
+
+sys.modules.pop("fcntl", None)
+sys.meta_path.insert(0, RejectFcntl())
+from proofline.cli import build_parser
+assert build_parser().prog == "proofline"
+"""
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(ROOT / "src")
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_windows_workflow_supplies_artifact_checksum_to_tracked_gate() -> None:

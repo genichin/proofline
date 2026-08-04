@@ -9,11 +9,15 @@ import subprocess
 import sys
 import tempfile
 import ctypes
-import fcntl
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
 from typing import Callable
+
+try:
+    import fcntl
+except ModuleNotFoundError:  # Windows has no POSIX advisory lock module.
+    fcntl = None  # type: ignore[assignment]
 
 from .identity_ledger import (
     AllocationCandidate,
@@ -742,6 +746,12 @@ def _validate_rendered(line_id: str, line_text: str, discovery_text: str) -> Non
 
 
 def _acquire_repository_lock(project_root: Path) -> int:
+    if fcntl is None:
+        raise LineInitError(
+            "line.commit.unsupported",
+            ".",
+            "repository lock은 POSIX fcntl을 지원하는 platform에서만 사용할 수 있습니다.",
+        )
     try:
         common = _run_git(project_root, "rev-parse", "--git-common-dir")
     except (OSError, UnicodeError) as exc:
@@ -777,6 +787,12 @@ def _acquire_repository_lock(project_root: Path) -> int:
 
 
 def _release_repository_lock(descriptor: int) -> _LockReleaseResult:
+    if fcntl is None:
+        return _LockReleaseResult(
+            unlocked=False,
+            closed=False,
+            detail="line.lock.release.failed: POSIX fcntl을 사용할 수 없습니다.",
+        )
     try:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
     except OSError as exc:
