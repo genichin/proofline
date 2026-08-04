@@ -1,7 +1,7 @@
 ---
 name: proofline-start-line
 description: Use when starting a new ProofLine Line and writing its evidence-grounded Discovery draft without granting the agent confirmation authority.
-version: 1.1.0
+version: 1.1.1
 author: ProofLine
 license: MIT
 metadata:
@@ -52,11 +52,13 @@ proofline line init line-NNNN --title "TITLE" --dry-run
 proofline line init line-NNNN --title "TITLE"
 ```
 
-다음 두 artifact만 생성돼야 한다.
+다음 두 canonical artifact가 생성되고 identity reuse 방지를 위한
+`.proofline/line-identities.json`만 함께 갱신돼야 한다.
 
 ```text
 .proofline/lines/line-NNNN/line-NNNN.md
 .proofline/lines/line-NNNN/dcy-NNNN.md
+.proofline/line-identities.json  # 기존 ledger의 해당 Line entry 추가
 ```
 
 CLI는 Discovery의 실질적 내용을 판단하지 않는다. 생성 직후 `proofline validate`를 실행한다.
@@ -150,7 +152,7 @@ Version·tag·checksum 같은 release-specific 표현은 review warning으로 �
 
 - [ ] 사용자가 Line ID와 제목을 명시했다.
 - [ ] Dry-run이 통과했다.
-- [ ] 두 canonical artifact만 생성됐다.
+- [ ] 두 canonical artifact가 생성되고 identity ledger만 함께 갱신됐다.
 - [ ] 직접 evidence를 확인한 뒤 Discovery를 작성했다.
 - [ ] create/update/retire/satisfy/release evidence/housekeeping 분류와 가장 가까운 active AC를 검토했다.
 - [ ] 필수 section이 실질적 내용을 갖거나 허용된 draft placeholder를 사용한다.
