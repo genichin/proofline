@@ -6,8 +6,8 @@ ProofLine은 프로젝트의 Discovery, Requirement, Acceptance Criterion, Micro
 
 - Python 3.11 이상
 - [`uv`](https://docs.astral.sh/uv/) 설치
-- GitHub Release asset을 내려받을 수 있는 `curl`
-- SHA-256 검증을 위한 `sha256sum`
+- POSIX 설치에서는 GitHub Release asset을 내려받을 수 있는 `curl`과 SHA-256 검증용 `sha256sum`
+- Windows 설치에서는 native PowerShell 5.1 이상
 
 ## 설치
 
@@ -23,6 +23,28 @@ curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.5.0/install.s
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.5.0/install.sh | sh -s -- --force
+```
+
+Windows 11에서는 repository root의 candidate `install.ps1`을 native PowerShell에서 실행합니다. 이 경로는 Windows native temporary path, `Invoke-WebRequest`, `Get-FileHash`를 사용하며 Git Bash나 관리자 권한을 요구하지 않고 machine PATH 또는 registry를 변경하지 않습니다.
+
+```powershell
+.\install.ps1
+```
+
+기존 installation을 명시적으로 교체할 때만 `-Force`를 전달합니다.
+
+```powershell
+.\install.ps1 -Force
+```
+
+설치 후에는 user harness를 먼저 초기화하고, initialized harness의 update 상태를 확인한 다음 project를 검증합니다.
+
+```powershell
+proofline --version
+proofline init --dry-run
+proofline init
+proofline update --check
+proofline validate
 ```
 
 Installer는 application project의 `.venv`, `pyproject.toml`, lockfile, Git state 또는 `.proofline/`을 변경하지 않습니다.
@@ -66,29 +88,23 @@ uv tool install --force --no-config \
 
 ```bash
 proofline --version
+proofline init --dry-run
+proofline init
 proofline update --check
+proofline validate
 ```
 
-정상적인 v0.5.0 official wheel 설치는 다음과 같이 표시됩니다.
+`proofline --version`은 설치 identity를 확인하는 선택 단계입니다. `proofline update --check`는 user harness를 초기화한 뒤 실행합니다.
 
 ```text
 proofline 0.5.0
-current: 0.5.0
-target: 0.5.0
-provenance: archive
-status: already-current
 ```
 
 `proofline` 명령을 찾지 못하면 `uv tool dir --bin`으로 executable 경로를 확인하고 해당 경로가 `PATH`에 포함됐는지 확인하세요.
 
 ### User-level ProofLine resources
 
-ProofLine 0.3.0 이상에서는 설치 후 다음 명령으로 user-level harness를 초기화합니다. 이 명령은 current project를 변경하지 않습니다.
-
-```bash
-proofline init --dry-run
-proofline init
-```
+ProofLine 0.3.0 이상에서는 위 설치 확인 순서의 `proofline init --dry-run`, `proofline init`으로 user-level harness를 초기화합니다. 이 명령은 current project를 변경하지 않습니다.
 
 ```text
 ~/.proofline/

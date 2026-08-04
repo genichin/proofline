@@ -9,6 +9,7 @@ from pathlib import Path, PurePosixPath
 import re
 import shutil
 import stat
+import sys
 import tempfile
 from typing import Any
 import zipfile
@@ -214,13 +215,22 @@ def _write_stage(stage: Path, payload: dict[str, bytes]) -> None:
         (stage / relative).write_bytes(content)
 
 
-def _commit_directory(stage: Path, target: Path) -> None:
+def _platform_name() -> str:
+    return sys.platform
+
+
+def _renameat2_function():
     libc = ctypes.CDLL(None, use_errno=True)
     renameat2 = getattr(libc, "renameat2", None)
     if renameat2 is None:
         raise OSError(errno.ENOSYS, "renameat2 is unavailable")
     renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
     renameat2.restype = ctypes.c_int
+    return renameat2
+
+
+def _linux_commit_directory(stage: Path, target: Path) -> None:
+    renameat2 = _renameat2_function()
     result = renameat2(
         -100,
         os.fsencode(stage),
@@ -233,17 +243,40 @@ def _commit_directory(stage: Path, target: Path) -> None:
         raise OSError(error, os.strerror(error), target)
 
 
+def _windows_commit_directory(stage: Path, target: Path) -> None:
+    os.rename(stage, target)
+
+
+def _commit_directory(stage: Path, target: Path) -> None:
+    if _platform_name() == "win32":
+        _windows_commit_directory(stage, target)
+        return
+    _linux_commit_directory(stage, target)
+
+
 def _exchange_directories(left: Path, right: Path) -> None:
-    libc = ctypes.CDLL(None, use_errno=True)
-    renameat2 = getattr(libc, "renameat2", None)
-    if renameat2 is None:
-        raise OSError(errno.ENOSYS, "renameat2 is unavailable")
-    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-    renameat2.restype = ctypes.c_int
+    renameat2 = _renameat2_function()
     result = renameat2(-100, os.fsencode(left), -100, os.fsencode(right), 2)
     if result != 0:
         error = ctypes.get_errno()
         raise OSError(error, os.strerror(error), right)
+
+
+def _preflight_commit(mode: str, home: Path, target: Path) -> None:
+    if _platform_name() == "win32":
+        if mode == "replace":
+            raise HomeInitError("home update replacement is unsupported on Windows")
+        if mode != "create":
+            raise HomeInitError(f"invalid home update mode: {mode}")
+        if home.resolve().drive.casefold() != target.parent.resolve().drive.casefold():
+            raise HomeInitError("Windows fresh commit requires same-volume staging")
+        if not callable(os.rename):
+            raise HomeInitError("Windows fresh commit capability unavailable")
+        return
+    try:
+        _renameat2_function()
+    except OSError as exc:
+        raise HomeInitError(f"home update commit capability unavailable: {exc}") from exc
 
 
 def _identity(path: Path) -> tuple[int, int]:
@@ -253,11 +286,40 @@ def _identity(path: Path) -> tuple[int, int]:
     return value.st_dev, value.st_ino
 
 
+def _tree_ownership_signature(root: Path) -> tuple[tuple[str, int, int, int, int, int, int], ...]:
+    paths = [root, *sorted(root.rglob("*"))]
+    records: list[tuple[str, int, int, int, int, int, int]] = []
+    for path in paths:
+        relative = "." if path == root else path.relative_to(root).as_posix()
+        value = path.stat(follow_symlinks=False)
+        if stat.S_ISLNK(value.st_mode):
+            raise HomeInitError(f"home update ownership signature found symlink: {relative}")
+        records.append(
+            (
+                relative,
+                value.st_dev,
+                value.st_ino,
+                value.st_mode,
+                value.st_size,
+                value.st_mtime_ns,
+                value.st_ctime_ns,
+            )
+        )
+    return tuple(records)
+
+
 class HomeUpdateTransaction:
-    def __init__(self, target: Path, stage: Path | None, mode: str) -> None:
+    def __init__(
+        self,
+        target: Path,
+        stage: Path | None,
+        mode: str,
+        expected_payload: dict[str, bytes],
+    ) -> None:
         self.target = target
         self.stage = stage
         self.mode = mode
+        self._expected_payload = expected_payload
         self.committed = mode == "noop"
         self._target_identity: tuple[int, int] | None = None
         self._prepared_target_identity = (
@@ -265,6 +327,18 @@ class HomeUpdateTransaction:
         )
         self._old_target_identity: tuple[int, int] | None = None
         self._stage_identity = _identity(stage) if stage is not None else None
+        self._prepared_stage_tree_signature = (
+            _tree_ownership_signature(stage) if stage is not None else None
+        )
+        self._prepared_target_tree_signature = (
+            _tree_ownership_signature(target) if mode in {"replace", "noop"} else None
+        )
+        self._committed_target_tree_signature: (
+            tuple[tuple[str, int, int, int, int, int, int], ...] | None
+        ) = None
+        self._committed_old_tree_signature: (
+            tuple[tuple[str, int, int, int, int, int, int], ...] | None
+        ) = None
         self._finalization_started = False
         self._finalized = False
 
@@ -276,16 +350,21 @@ class HomeUpdateTransaction:
         try:
             if self._stage_identity is None or _identity(self.stage) != self._stage_identity:
                 raise HomeInitError("home update staging identity changed")
+            if _tree_ownership_signature(self.stage) != self._prepared_stage_tree_signature:
+                raise HomeInitError("home update staging tree changed")
             if self.mode == "create":
                 _commit_directory(self.stage, self.target)
                 self.committed = True
                 self._target_identity = _identity(self.target)
                 if self._target_identity != self._stage_identity:
                     raise HomeInitError("home update target identity mismatch")
+                self._committed_target_tree_signature = _tree_ownership_signature(self.target)
             elif self.mode == "replace":
                 old_identity = _identity(self.target)
                 if old_identity != self._prepared_target_identity:
                     raise HomeInitError("home update target identity changed")
+                if _tree_ownership_signature(self.target) != self._prepared_target_tree_signature:
+                    raise HomeInitError("home update target tree changed")
                 _exchange_directories(self.stage, self.target)
                 self.committed = True
                 target_identity = _identity(self.target)
@@ -297,6 +376,8 @@ class HomeUpdateTransaction:
                     raise HomeInitError("home update concurrent target detected")
                 self._old_target_identity = old_identity
                 self._target_identity = target_identity
+                self._committed_target_tree_signature = _tree_ownership_signature(self.target)
+                self._committed_old_tree_signature = _tree_ownership_signature(self.stage)
             else:
                 raise HomeInitError(f"invalid home update mode: {self.mode}")
         except HomeInitError:
@@ -326,11 +407,19 @@ class HomeUpdateTransaction:
                 return
             if self._target_identity is None or _identity(self.target) != self._target_identity:
                 raise HomeInitError("home update rollback target identity mismatch")
+            if _tree_ownership_signature(self.target) != self._committed_target_tree_signature:
+                raise HomeInitError("home update rollback ownership mismatch")
             if self.mode == "replace":
                 if self._old_target_identity is None or _identity(self.stage) != self._old_target_identity:
                     raise HomeInitError("home update rollback stage identity mismatch")
+                if _tree_ownership_signature(self.stage) != self._committed_old_tree_signature:
+                    raise HomeInitError("home update rollback old-tree ownership mismatch")
                 _exchange_directories(self.stage, self.target)
             elif self.mode == "create":
+                try:
+                    _verify_existing(self.target, self._expected_payload)
+                except HomeInitError as exc:
+                    raise HomeInitError("home update rollback ownership mismatch") from exc
                 _commit_directory(self.target, self.stage)
             if _identity(self.stage) != self._target_identity:
                 raise HomeInitError("home update rollback stage identity mismatch")
@@ -359,6 +448,12 @@ class HomeUpdateTransaction:
                 expected = self._old_target_identity if self.mode == "replace" else None
                 if expected is not None and _identity(self.stage) != expected:
                     raise HomeInitError("home update finalize identity mismatch")
+                if (
+                    self.mode == "replace"
+                    and _tree_ownership_signature(self.stage)
+                    != self._committed_old_tree_signature
+                ):
+                    raise HomeInitError("home update finalize ownership mismatch")
                 self._finalization_started = True
                 shutil.rmtree(self.stage)
             self._finalized = True
@@ -391,15 +486,16 @@ def prepare_home_update(
         except HomeInitError:
             mode = "replace"
         else:
-            return HomeUpdateTransaction(target, None, "noop")
+            return HomeUpdateTransaction(target, None, "noop", target_payload)
     else:
         mode = "create"
 
+    _preflight_commit(mode, active_home, target)
     stage = Path(tempfile.mkdtemp(prefix=".proofline-update-", dir=active_home))
     try:
         _write_stage(stage, target_payload)
         _verify_existing(stage, target_payload)
-        return HomeUpdateTransaction(target, stage, mode)
+        return HomeUpdateTransaction(target, stage, mode, target_payload)
     except Exception as exc:
         if stage.exists() and not stage.is_symlink():
             shutil.rmtree(stage)
@@ -524,17 +620,20 @@ def initialize_home(*, dry_run: bool = False) -> HomeInitResult:
     if target.exists() or target.is_symlink():
         _verify_existing(target, payload)
         return HomeInitResult("already-initialized", dry_run=dry_run)
+    _preflight_commit("create", home, target)
     if dry_run:
         return HomeInitResult("would-create", dry_run=True)
 
-    stage = Path(tempfile.mkdtemp(prefix=".proofline-init-", dir=home))
+    transaction = prepare_home_update(payload, current_payload=None, home=home)
     try:
-        _write_stage(stage, payload)
-        _verify_existing(stage, payload)
-        _commit_directory(stage, target)
+        transaction.commit()
+        verify_home(payload, home=home)
+        transaction.finalize()
     except Exception as exc:
-        if stage.exists() and not stage.is_symlink():
-            shutil.rmtree(stage)
+        try:
+            transaction.rollback()
+        except Exception as rollback_exc:
+            raise HomeInitError(f"init failed: {exc}; cleanup failed: {rollback_exc}") from exc
         if isinstance(exc, HomeInitError):
             raise
         raise HomeInitError(f"init failed: {exc}") from exc
