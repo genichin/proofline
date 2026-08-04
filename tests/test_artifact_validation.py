@@ -18,6 +18,34 @@ def test_valid_minimal_artifacts_have_no_errors(tmp_path: Path) -> None:
     assert validate_project(project) == []
 
 
+def test_line_accepts_first_parent_implementation_history_policy(tmp_path: Path) -> None:
+    project = copy_valid_project(tmp_path)
+    artifact = project / ".proofline/lines/line-0001/line-0001.md"
+    artifact.write_text(
+        artifact.read_text(encoding="utf-8").replace(
+            "execution_status: verifying",
+            "execution_status: verifying\nimplementation_history: first_parent",
+        ),
+        encoding="utf-8",
+    )
+
+    assert validate_project(project) == []
+
+
+def test_line_rejects_unknown_implementation_history_policy(tmp_path: Path) -> None:
+    project = copy_valid_project(tmp_path)
+    artifact = project / ".proofline/lines/line-0001/line-0001.md"
+    artifact.write_text(
+        artifact.read_text(encoding="utf-8").replace(
+            "execution_status: verifying",
+            "execution_status: verifying\nimplementation_history: all_parents",
+        ),
+        encoding="utf-8",
+    )
+
+    assert_error(project, artifact, "artifact.policy")
+
+
 def test_unknown_artifact_frontmatter_field_is_rejected(tmp_path: Path) -> None:
     project = copy_valid_project(tmp_path)
     artifact = project / ".proofline/criteria/ac-0001.md"

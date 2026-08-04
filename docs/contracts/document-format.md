@@ -45,7 +45,7 @@ x-* extension field 금지
 
 Validator는 정의되지 않은 frontmatter key를 오류로 처리한다. 이는 field 이름 오타가 조용히 무시되는 것을 막고 canonical 사실이 임의 metadata로 분산되는 것을 방지한다.
 
-`created_at`, `updated_at`, `author`, `owner`, `reviewer`, `priority`, `due_date`, `branch` 등은 현재 schema에 추가하지 않는다. IQC의 `micro_spec_commit`과 `implementation_commit`, DQC의 `candidate_commit`처럼 각 artifact contract 문서가 명시적으로 정의한 exact binding 외에는 Git 또는 외부 시스템이 이미 소유하는 사실을 중복하지 않는다. 새 metadata가 필요하면 해당 artifact contract와 이 공통 형식 계약을 먼저 개정하고 template과 validator를 함께 갱신한다.
+`created_at`, `updated_at`, `author`, `owner`, `reviewer`, `priority`, `due_date`, `branch` 등은 현재 schema에 추가하지 않는다. Line의 `implementation_history`, IQC의 `micro_spec_commit`과 `implementation_commit`, DQC의 `candidate_commit`처럼 각 artifact contract 문서가 명시적으로 정의한 policy·exact binding 외에는 Git 또는 외부 시스템이 이미 소유하는 사실을 중복하지 않는다. 새 metadata가 필요하면 해당 artifact contract와 이 공통 형식 계약을 먼저 개정하고 template과 validator를 함께 갱신한다.
 
 ## Artifact별 문서 schema 소유권
 

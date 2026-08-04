@@ -154,14 +154,17 @@ Trigger가 없으면 component-specific 검사의 not applicable은 실패가 �
 .proofline/lines/line-<NNNN>/line-<NNNN>.md
 ```
 
-Line artifact는 Line identity와 전체 execution 상태를 소유한다. 최소 형태는 다음과 같다.
+Line artifact는 Line identity와 전체 execution 상태를 소유한다. 새 Line의 최소 형태는 다음과 같다.
 
 ```yaml
 ---
 id: line-0001
 execution_status: not_started
+implementation_history: first_parent
 ---
 ```
+
+`implementation_history: first_parent`는 implementation lifecycle chronology를 exact candidate의 Git first-parent chain에서 판정하는 Line policy이다. 새 Line은 이 field를 기록한다. Policy 도입 전에 생성된 historical Line의 fieldless shape는 parser·schema 호환성을 위해 그대로 읽으며 writer가 소급 수정하지 않는다.
 
 `execution_status`는 다음 다섯 값만 허용한다.
 
@@ -260,15 +263,20 @@ DQC passed
 ---
 id: line-0001
 execution_status: not_started
+implementation_history: first_parent
 ---
 ```
 
-필수 field:
+새 Line의 필수 field:
 
 ```text
 id
 execution_status
+implementation_history
 ```
+
+- `implementation_history` 값은 `first_parent`만 허용한다.
+- Policy 지원 전에 생성된 historical Line은 field가 없어도 구조적으로 읽을 수 있으며 bytes를 소급 변경하지 않는다.
 
 ### Markdown 본문
 

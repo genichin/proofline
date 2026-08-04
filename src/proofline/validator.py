@@ -33,6 +33,10 @@ ARTIFACT_FIELDS = {
     "dqc": {"id", "line", "candidate_commit", "result"},
 }
 
+ARTIFACT_OPTIONAL_FIELDS = {
+    "line": {"implementation_history"},
+}
+
 ARTIFACT_STATUSES = {
     "line": {
         "execution_status": {
@@ -455,12 +459,25 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
                     f"필수 YAML 머리말 항목이 없습니다: {', '.join(sorted(missing))}",
                 )
             )
-        if set(frontmatter) - ARTIFACT_FIELDS[kind]:
+        allowed_fields = ARTIFACT_FIELDS[kind] | ARTIFACT_OPTIONAL_FIELDS.get(kind, set())
+        if set(frontmatter) - allowed_fields:
             errors.append(
                 ValidationError(
                     relative,
                     "artifact.unknown-field",
                     "정의되지 않은 YAML 머리말 항목이 있습니다.",
+                )
+            )
+        if (
+            kind == "line"
+            and "implementation_history" in frontmatter
+            and frontmatter["implementation_history"] != "first_parent"
+        ):
+            errors.append(
+                ValidationError(
+                    relative,
+                    "artifact.policy",
+                    "implementation_history 값은 first_parent여야 합니다.",
                 )
             )
         if kind == "req" and "criteria" in frontmatter:
