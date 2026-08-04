@@ -13,6 +13,12 @@ function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
 }
 
+function Get-FirstApplicationPath([string]$Name) {
+    $Commands = @(Get-Command -Name $Name -CommandType Application)
+    Assert-True ($Commands.Count -ge 1) "$Name executable not found"
+    return $Commands[0].Source
+}
+
 function Get-TreeSnapshot([string]$Root) {
     if (-not (Test-Path -LiteralPath $Root)) { return "<absent>" }
     $RootPath = [System.IO.Path]::GetFullPath($Root).TrimEnd("\")
@@ -124,9 +130,7 @@ foreach ($Name in @("USERPROFILE", "HOME", "UV_TOOL_DIR", "UV_TOOL_BIN_DIR", "Pa
 }
 $MachinePathBefore = [Environment]::GetEnvironmentVariable("Path", "Machine")
 $MachineEnvironmentBefore = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" | ConvertTo-Json -Compress)
-$GitCommands = @(Get-Command git -CommandType Application)
-Assert-True ($GitCommands.Count -ge 1) "git executable not found"
-$GitPath = $GitCommands[0].Source
+$GitPath = Get-FirstApplicationPath "git"
 $Root = Join-Path ([System.IO.Path]::GetTempPath()) ("proofline line 0017 " + [guid]::NewGuid().ToString("N"))
 $ServerJob = $null
 
@@ -226,7 +230,7 @@ server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
 ready.write_text(str(server.server_address[1]), encoding="ascii")
 server.serve_forever()
 '@ | Set-Content -LiteralPath $ServerScript -NoNewline
-    $PythonPath = (Get-Command python -CommandType Application).Source
+    $PythonPath = Get-FirstApplicationPath "python"
     $ServerJob = Start-Job -ScriptBlock {
         param($PythonExecutable, $ScriptPath, $AssetPath, $ReadyPath)
         & $PythonExecutable $ScriptPath $AssetPath $ReadyPath
@@ -253,7 +257,7 @@ server.serve_forever()
     $DownloadFailureBase = '$BASE_URL = "http://127.0.0.1:' + $Port + '/missing"'
     Set-Content -LiteralPath $DownloadFailureInstaller -Value $ProductionInstaller.Replace($OfficialBase, $DownloadFailureBase) -NoNewline
 
-    $RealUv = (Get-Command uv -CommandType Application).Source
+    $RealUv = Get-FirstApplicationPath "uv"
     $FakeBin = Join-Path $Root "fake uv bin with spaces"
     [void](New-Item -ItemType Directory -Path $FakeBin)
     $UvWrapper = Join-Path $FakeBin "uv.cmd"
