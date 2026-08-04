@@ -90,6 +90,9 @@ def test_windows_gate_exercises_exact_wheel_and_full_fresh_install_sequence() ->
     for item in required:
         assert item in text
 
+    assert "$GitCommands = @(Get-Command git -CommandType Application)" in text
+    assert '$GitPath = $GitCommands[0].Source' in text
+    assert "$GitPath = (Get-Command git -CommandType Application).Source" not in text
     assert text.index("init --dry-run") < text.index("$ProofLine init | Out-String")
     assert text.index("$ProofLine init | Out-String") < text.index("update --check")
     assert "Start-Process -Verb RunAs" not in text

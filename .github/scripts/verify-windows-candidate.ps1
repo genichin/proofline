@@ -124,7 +124,9 @@ foreach ($Name in @("USERPROFILE", "HOME", "UV_TOOL_DIR", "UV_TOOL_BIN_DIR", "Pa
 }
 $MachinePathBefore = [Environment]::GetEnvironmentVariable("Path", "Machine")
 $MachineEnvironmentBefore = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" | ConvertTo-Json -Compress)
-$GitPath = (Get-Command git -CommandType Application).Source
+$GitCommands = @(Get-Command git -CommandType Application)
+Assert-True ($GitCommands.Count -ge 1) "git executable not found"
+$GitPath = $GitCommands[0].Source
 $Root = Join-Path ([System.IO.Path]::GetTempPath()) ("proofline line 0017 " + [guid]::NewGuid().ToString("N"))
 $ServerJob = $null
 
