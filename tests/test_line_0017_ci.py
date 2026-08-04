@@ -103,6 +103,14 @@ def test_windows_gate_exercises_exact_wheel_and_full_fresh_install_sequence() ->
     ):
         assert f'{variable} = Get-FirstApplicationPath "{name}"' in text
         assert f"(Get-Command {name} -CommandType Application).Source" not in text
+    assert "function Invoke-NativeCapture(" in text
+    assert "$PreviousErrorActionPreference = $ErrorActionPreference" in text
+    assert '$ErrorActionPreference = "Continue"' in text
+    assert "$ExitCode = $LASTEXITCODE" in text
+    assert "$ErrorActionPreference = $PreviousErrorActionPreference" in text
+    assert text.count("Invoke-NativeCapture -Executable $PowerShellPath") == 2
+    assert "(& $PowerShellPath @ChildArguments 2>&1 | Out-String)" not in text
+    assert "(& $PowerShellPath @(" not in text
     assert text.index("init --dry-run") < text.index("$ProofLine init | Out-String")
     assert text.index("$ProofLine init | Out-String") < text.index("update --check")
     assert "Start-Process -Verb RunAs" not in text

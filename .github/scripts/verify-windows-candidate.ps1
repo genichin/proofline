@@ -19,6 +19,21 @@ function Get-FirstApplicationPath([string]$Name) {
     return $Commands[0].Source
 }
 
+function Invoke-NativeCapture(
+    [string]$Executable,
+    [string[]]$Arguments
+) {
+    $PreviousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $Output = (& $Executable @Arguments 2>&1 | Out-String)
+        $ExitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $PreviousErrorActionPreference
+    }
+    return [pscustomobject]@{ ExitCode = $ExitCode; Output = $Output }
+}
+
 function Get-TreeSnapshot([string]$Root) {
     if (-not (Test-Path -LiteralPath $Root)) { return "<absent>" }
     $RootPath = [System.IO.Path]::GetFullPath($Root).TrimEnd("\")
@@ -70,8 +85,9 @@ function Invoke-InstallerChild(
     $ApplicationBefore = Get-ApplicationSnapshot $Application
     Push-Location $Application
     try {
-        $Output = (& $PowerShellPath @ChildArguments 2>&1 | Out-String)
-        $ExitCode = $LASTEXITCODE
+        $Capture = Invoke-NativeCapture -Executable $PowerShellPath -Arguments $ChildArguments
+        $Output = $Capture.Output
+        $ExitCode = $Capture.ExitCode
     } finally {
         Pop-Location
     }
@@ -346,8 +362,10 @@ Write-Output "CALLER_SURVIVED"
     $env:Path = ""
     try {
         $PowerShellPath = (Get-Process -Id $PID).Path
-        $CallerOutput = (& $PowerShellPath @("-NoProfile", "-NonInteractive", "-File", $CallerProbe, $FixtureInstaller) 2>&1 | Out-String)
-        $CallerExit = $LASTEXITCODE
+        $CallerArguments = @("-NoProfile", "-NonInteractive", "-File", $CallerProbe, $FixtureInstaller)
+        $CallerCapture = Invoke-NativeCapture -Executable $PowerShellPath -Arguments $CallerArguments
+        $CallerOutput = $CallerCapture.Output
+        $CallerExit = $CallerCapture.ExitCode
     } finally {
         $env:Path = $SavedPath
     }
