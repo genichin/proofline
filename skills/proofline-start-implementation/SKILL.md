@@ -1,7 +1,7 @@
 ---
 name: proofline-start-implementation
 description: Use when starting implementation for an approved ProofLine Line in an exact-baseline Git linked worktree while preserving main as the governance checkout.
-version: 1.2.0
+version: 1.3.0
 author: ProofLine
 license: MIT
 metadata:
@@ -67,6 +67,7 @@ git show "$APPROVAL_COMMIT:.proofline/lines/line-NNNN/line-NNNN.md"
 Discovery.status = confirmed
 REQ.status = approved
 Line.execution_status = not_started
+Line.implementation_history = first_parent (새 policy-bearing Line; 기존 fieldless도 허용)
 REQ identity와 Line identity의 NNNN 일치
 ```
 
@@ -115,6 +116,13 @@ Worktree에서 공용 `proofline` executable을 사용해 canonical tree를 확�
 
 ### 4. Implementation handoff
 
+- 새 policy-bearing Line은 approval baseline `B` 뒤 별도 lifecycle-only `in_progress` commit `P`를 persist하여 `B < P < I < Q`로 진행한다.
+- 기존 fieldless non-terminal Line은 fieldless lifecycle-only `in_progress`만 포함한 별도 commit `P`를 먼저 만들고, 그 다음 `implementation_history: first_parent`만 추가한 별도 commit `B`를 만든다. 따라서 `P < B < I < Q`이며 두 commit을 합치지 않는다.
+- 엄격한 validator가 `P`와 `B` 사이에 보고하는 `history.line.policy.missing`이 유일한 history-policy error(sole history-policy error)이고 모든 non-history validation이 clean일 때만 이 narrow transitional gate를 통과한다. 다른 history 또는 schema·artifact·ledger 오류는 무시하지 않는다. `B` 이후 full `proofline validate`가 PASS해야 한다.
+- 제품 변경 전에 Line과 대상 Micro-SPEC의 `in_progress` transition을 별도 commit `P`로 persist한다. Existing fieldless Line에서 `P`에는 policy field를 넣지 않는다.
+- `P`는 approved Micro-SPEC commit보다 뒤여야 한다. 제품 변경을 `P`와 같은 commit에 섞거나 `P`를 `implementation_commit`으로 bind하지 않는다.
+- Implementation commit `I`를 고정한 뒤에만 Micro-SPEC을 `implemented`로 전환하고 IQC를 작성한다. `implemented`/IQC candidate `Q`는 `I`의 strict first-parent descendant여야 한다.
+- Rework는 이전 `implemented` 뒤 fresh `in_progress` commit부터 같은 순서를 반복한다. Merge의 second parent에만 존재하는 marker나 implementation은 evidence가 아니다.
 - 승인된 AC만 Micro-SPEC에 배정한다.
 - `criteria.satisfy` 대상은 exact approval commit에서 `active`여야 하며 implementation 중 body와 status를 변경하지 않는다.
 - Micro-SPEC, implementation source, test와 IQC는 Line worktree에서 작성하고 commit한다.
@@ -145,6 +153,7 @@ Dirty 또는 untracked file이 있으면 중단한다. `--force`를 자동 사�
 4. **Project build environment와 ProofLine tool environment를 혼동함.** 전자는 project-owned, 후자는 user-level shared tool이다.
 5. **충돌을 `--force`로 우회함.** Preflight 실패는 no-mutation으로 끝낸다.
 6. **DQC 전에 merge함.** IQC·DQC와 fast-forward gate를 유지한다.
+7. **Lifecycle과 제품 변경을 한 commit에 섞음.** `micro_spec_commit < P < I < Q`와 adoption baseline `B < I < Q`를 유지한다. Fieldless adoption은 `P < B < I < Q`와 transitional gate를 유지한다.
 
 ## Verification Checklist
 
@@ -156,4 +165,6 @@ Dirty 또는 untracked file이 있으면 중단한다. `--force`를 자동 사�
 - [ ] Worktree에 ProofLine 전용 `.venv`가 없다.
 - [ ] Worktree에서 공용 `proofline validate`가 통과한다.
 - [ ] Implementation과 IQC는 worktree에 기록한다.
+- [ ] Approved Micro-SPEC 뒤 별도 `in_progress` commit이 제품 implementation보다 먼저 persisted됐다.
+- [ ] `proofline validate`가 exact first-parent chronology와 policy baseline을 통과한다.
 - [ ] DQC와 fast-forward gate 전에는 main에 통합하지 않는다.

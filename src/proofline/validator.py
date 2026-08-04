@@ -7,7 +7,9 @@ from pathlib import Path
 import yaml
 
 from .identity_ledger import LEDGER_PATH, validate_ledger
+from .implementation_history import validate_implementation_history
 from .project_schema import REQUIRED_DIRECTORIES, SUPPORT_MARKERS
+from .yaml_strict import safe_load_unique
 
 
 @dataclass(frozen=True, order=True)
@@ -429,7 +431,7 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
         closing = lines.index("---", 1)
         frontmatter_text = "\n".join(lines[1:closing])
         try:
-            frontmatter = yaml.safe_load(frontmatter_text)
+            frontmatter = safe_load_unique(frontmatter_text)
         except yaml.YAMLError:
             errors.append(
                 ValidationError(
@@ -599,7 +601,7 @@ def _historical_status(content: bytes) -> str | None:
         if not lines or lines[0] != "---" or "---" not in lines[1:]:
             return None
         closing = lines.index("---", 1)
-        frontmatter = yaml.safe_load("\n".join(lines[1:closing]))
+        frontmatter = safe_load_unique("\n".join(lines[1:closing]))
     except (UnicodeError, yaml.YAMLError):
         return None
     if not isinstance(frontmatter, dict):
@@ -738,7 +740,9 @@ def _validate_criteria_bindings(
     return errors
 
 
-def validate_project(root: Path) -> list[ValidationError]:
+def _validate_project(
+    root: Path, *, excluded_line_path: str | tuple[str, ...] | None = None
+) -> list[ValidationError]:
     config_path = root / "proofline.yaml"
     try:
         config_state = config_path.stat(follow_symlinks=False)
@@ -831,6 +835,30 @@ def validate_project(root: Path) -> list[ValidationError]:
     errors.extend(_validate_artifacts(root))
     errors.extend(
         ValidationError(error.path, error.code, error.message)
+        for error in validate_implementation_history(
+            root, excluded_line_path=excluded_line_path
+        )
+    )
+    errors.extend(
+        ValidationError(error.path, error.code, error.message)
         for error in validate_ledger(root)
     )
     return sorted(errors)
+
+
+def validate_project(root: Path) -> list[ValidationError]:
+    """Validate the complete project, including persisted Git history."""
+    return _validate_project(root)
+
+
+def _validate_schema_candidate(root: Path) -> list[ValidationError]:
+    """Validate an uncommitted schema candidate without a Git history."""
+    candidate = sorted(
+        path.relative_to(root).as_posix()
+        for path in (root / ".proofline/lines").glob("line-*/line-*.md")
+    )
+    if len(candidate) != 1:
+        return _validate_project(root, excluded_line_path=None)
+    # The candidate is intentionally isolated from the repository and has no
+    # persisted history. All callers must preflight the real project first.
+    return _validate_project(root, excluded_line_path=candidate[0])

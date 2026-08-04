@@ -13,7 +13,8 @@ import yaml
 
 from proofline import line_writer
 from proofline.identity_ledger import decode_ledger, encode_ledger
-from proofline.line_writer import LineInitError, initialize_line
+from proofline.line_writer import LineInitError, LineInitResult, initialize_line
+from proofline.validator import ValidationError
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -229,13 +230,98 @@ def test_line_init_creates_valid_line_and_discovery(tmp_path: Path) -> None:
         "implementation_history": "first_parent",
     }
     text = discovery.read_text()
-    assert "id: \"dcy-0007\"" in text
+    assert 'id: "dcy-0007"' in text
     assert "status: draft" in text
     assert "# 캐시 일관성 조사" in text
     assert "{{LINE_ID}}" not in text
     assert "{{DISCOVERY_ID}}" not in text
     assert "{{TITLE}}" not in text
-    assert run("validate", cwd=project).returncode == 0
+    validation = run("validate", cwd=project)
+    assert validation.returncode == 1
+    assert ".proofline/lines/line-0007/line-0007.md: history.unavailable:" in validation.stderr
+
+
+def test_line_init_refuses_unrelated_uncommitted_line_without_mutation(
+    tmp_path: Path,
+) -> None:
+    project = make_project(tmp_path)
+    unrelated = project / ".proofline/lines/line-0002/line-0002.md"
+    unrelated.parent.mkdir()
+    unrelated.write_text(
+        '---\nid: "line-0002"\nexecution_status: not_started\n---\n',
+        encoding="utf-8",
+    )
+    before = tree_snapshot(project)
+    with pytest.raises(LineInitError, match="history.line.policy.missing"):
+        initialize_line(project, "line-0007", "blocked by unrelated line")
+    assert tree_snapshot(project) == before
+
+
+def test_line_init_cat_file_inspection_failure_refuses_without_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    before = tree_snapshot(project)
+    original = line_writer._run_git
+
+    def fail_candidate(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
+        if args[:2] == ("cat-file", "-e"):
+            return subprocess.CompletedProcess(
+                ("git", *args), 2, "", "injected inspection failure"
+            )
+        return original(root, *args)
+
+    monkeypatch.setattr(line_writer, "_run_git", fail_candidate)
+    with pytest.raises(LineInitError, match="git.repository.unavailable"):
+        initialize_line(project, "line-0007", "inspection failure")
+    assert tree_snapshot(project) == before
+
+def test_line_init_refuses_when_preexisting_history_is_invalid(tmp_path: Path) -> None:
+    project = make_project(tmp_path)
+    line_dir = project / ".proofline/lines/line-0001"
+    line_dir.mkdir()
+    (line_dir / "line-0001.md").write_text(
+        '---\nid: "line-0001"\nexecution_status: in_progress\n---\n',
+        encoding="utf-8",
+    )
+    git("add", ".", cwd=project)
+    git("commit", "-qm", "invalid lifecycle", cwd=project)
+    before = tree_snapshot(project)
+
+    with pytest.raises(LineInitError) as raised:
+        initialize_line(project, "line-0007", "Blocked")
+
+    assert raised.value.code == "project.invalid"
+    assert "history.line.policy.missing" in raised.value.message
+    assert tree_snapshot(project) == before
+    assert not (project / ".proofline/lines/line-0007").exists()
+
+
+def test_line_init_allocated_sibling_history_unavailable_fails_closed_without_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = make_project(tmp_path)
+    sibling = project / ".proofline/lines/line-0002"
+    sibling.mkdir()
+    (sibling / "line-0002.md").write_text("persisted sibling", encoding="utf-8")
+    (sibling / "dcy-0002.md").write_text("persisted discovery", encoding="utf-8")
+    (project / ".proofline/line-identities.json").write_bytes(
+        encode_ledger({"line-0002"})
+    )
+    before = tree_snapshot(project)
+    injected = ValidationError(
+        ".proofline/lines/line-0002/line-0002.md",
+        "history.unavailable",
+        "injected shallow history",
+    )
+    monkeypatch.setattr(
+        line_writer, "_validate_project", lambda *args, **kwargs: [injected]
+    )
+
+    with pytest.raises(LineInitError, match="history.unavailable"):
+        initialize_line(project, "line-0007", "Blocked sibling history")
+
+    assert tree_snapshot(project) == before
 
 
 def test_line_init_fresh_bootstrap_commits_ledger_and_matching_pair(tmp_path: Path) -> None:
@@ -263,7 +349,9 @@ def test_line_init_appends_existing_ledger_without_losing_prior_allocation(tmp_p
     assert decode_ledger(
         (project / ".proofline/line-identities.json").read_bytes()
     ).allocated_line_ids == ("line-0007",)
-    assert run("validate", cwd=project).returncode == 0
+    validation = run("validate", cwd=project)
+    assert validation.returncode == 1
+    assert "history.unavailable" in validation.stderr
 
 
 @pytest.mark.parametrize("legacy", [False, True], ids=["fresh", "existing-ledger"])
@@ -1402,12 +1490,12 @@ def test_line_init_post_result_external_ledger_mutation_preserves_primary_and_da
     original_validate = line_writer._require_valid_project
     validations = 0
 
-    def mutate_before_post_result_validation(root: Path) -> None:
+    def mutate_before_post_result_validation(root: Path, **kwargs: object) -> None:
         nonlocal validations
         validations += 1
         if validations == 2:
             ledger.write_bytes(external)
-        original_validate(root)
+        original_validate(root, **kwargs)
 
     monkeypatch.setattr(line_writer, "_require_valid_project", mutate_before_post_result_validation)
 
@@ -1435,13 +1523,13 @@ def test_line_init_ledger_rollback_continues_after_read_descriptor_close_failure
     committed = False
     close_failed = False
 
-    def fail_post_result_validation(root: Path) -> None:
+    def fail_post_result_validation(root: Path, **kwargs: object) -> None:
         nonlocal validations, committed
         validations += 1
         if validations == 2:
             committed = True
             raise LineInitError("project.invalid", ".", "injected post-result failure")
-        original_validate(root)
+            original_validate(root, **kwargs)
 
     def record_ledger_read(path: object, flags: int, *args: object, **kwargs: object) -> int:
         nonlocal ledger_read_fd
@@ -1748,6 +1836,8 @@ def test_line_init_close_failure_preserves_successor_advanced_whole_transaction(
     acquired: list[int] = []
     close_failed = False
     successor_result = None
+    predecessor_commit: str | None = None
+    successor_commit: str | None = None
 
     def record_acquire(root: Path) -> int:
         descriptor = original_acquire(root)
@@ -1755,10 +1845,19 @@ def test_line_init_close_failure_preserves_successor_advanced_whole_transaction(
         return descriptor
 
     def commit_successor_then_fail_close(descriptor: int) -> None:
-        nonlocal close_failed, successor_result
+        nonlocal close_failed, predecessor_commit, successor_result, successor_commit
         if acquired and descriptor == acquired[0] and not close_failed:
             close_failed = True
-            successor_result = initialize_line(project, "line-0014", "Cooperative successor")
+            git("add", ".proofline", cwd=project)
+            git("commit", "-qm", "Persist cooperative predecessor", cwd=project)
+            predecessor_commit = git("rev-parse", "HEAD", cwd=project).stdout.strip()
+            original_close(descriptor)
+            successor_result = initialize_line(
+                project, "line-0014", "Cooperative successor"
+            )
+            git("add", ".proofline", cwd=project)
+            git("commit", "-qm", "Persist cooperative successor", cwd=project)
+            successor_commit = git("rev-parse", "HEAD", cwd=project).stdout.strip()
             raise OSError(5, "injected repository descriptor close failure")
         original_close(descriptor)
 
@@ -1774,6 +1873,13 @@ def test_line_init_close_failure_preserves_successor_advanced_whole_transaction(
     assert "line.rollback" not in exc_info.value.message
     assert close_failed
     assert successor_result is not None
+    assert successor_result == LineInitResult(
+        paths=(
+            ".proofline/lines/line-0014/line-0014.md",
+            ".proofline/lines/line-0014/dcy-0014.md",
+        ),
+        dry_run=False,
+    )
     assert len(acquired) == 3  # first, successor, first transaction rollback re-acquire
     ledger = project / ".proofline/line-identities.json"
     assert ledger.read_bytes() == encode_ledger({"line-0013", "line-0014"})
@@ -1791,7 +1897,14 @@ def test_line_init_close_failure_preserves_successor_advanced_whole_transaction(
         assert f'id: "{line_id}"' in (target / f"{line_id}.md").read_text()
         assert f'id: "dcy-{suffix}"' in (target / f"dcy-{suffix}.md").read_text()
     assert_transaction_residue_absent(project)
-    assert git_state_snapshot(project) == git_before
+    assert predecessor_commit is not None
+    assert successor_commit is not None
+    assert git("rev-parse", f"{successor_commit}^", cwd=project).stdout.strip() == predecessor_commit
+    assert git("rev-parse", "HEAD", cwd=project).stdout.strip() == successor_commit
+    assert git_state_snapshot(project)[2:] == git_before[2:]
+    assert git("status", "--porcelain=v1", cwd=project).stdout == ""
+    assert git("diff", "--cached", "--quiet", cwd=project).returncode == 0
+    assert git("diff", "--quiet", cwd=project).returncode == 0
 
 
 def test_line_init_close_failure_without_recovery_lock_preserves_both_transactions(
@@ -1806,11 +1919,14 @@ def test_line_init_close_failure_without_recovery_lock_preserves_both_transactio
     acquisition_attempts = 0
     acquisition_guard = threading.Lock()
     successor_holds_lock = threading.Event()
+    predecessor_persisted = threading.Event()
     recovery_attempted = threading.Event()
     successor_errors: list[BaseException] = []
     successor_result = None
     successor_thread: threading.Thread | None = None
     close_failed = False
+    predecessor_commit: str | None = None
+    successor_commit: str | None = None
 
     def synchronized_acquire(root: Path) -> int:
         nonlocal acquisition_attempts
@@ -1826,7 +1942,11 @@ def test_line_init_close_failure_without_recovery_lock_preserves_both_transactio
                 recovery_attempted.set()
 
     def hold_successor_lock(descriptor: int) -> line_writer._LockReleaseResult:
+        nonlocal successor_commit
         if len(acquired) >= 2 and descriptor == acquired[1]:
+            git("add", ".proofline", cwd=project)
+            git("commit", "-qm", "Persist lock-holding successor", cwd=project)
+            successor_commit = git("rev-parse", "HEAD", cwd=project).stdout.strip()
             successor_holds_lock.set()
             assert recovery_attempted.wait(timeout=30)
         return original_release(descriptor)
@@ -1834,6 +1954,7 @@ def test_line_init_close_failure_without_recovery_lock_preserves_both_transactio
     def run_successor() -> None:
         nonlocal successor_result
         try:
+            assert predecessor_persisted.wait(timeout=30)
             successor_result = initialize_line(
                 project, "line-0014", "Lock-holding cooperative successor"
             )
@@ -1841,9 +1962,14 @@ def test_line_init_close_failure_without_recovery_lock_preserves_both_transactio
             successor_errors.append(exc)
 
     def commit_successor_then_fail_close(descriptor: int) -> None:
-        nonlocal close_failed, successor_thread
+        nonlocal close_failed, predecessor_commit, successor_thread
         if acquired and descriptor == acquired[0] and not close_failed:
             close_failed = True
+            git("add", ".proofline", cwd=project)
+            git("commit", "-qm", "Persist lock-holding predecessor", cwd=project)
+            predecessor_commit = git("rev-parse", "HEAD", cwd=project).stdout.strip()
+            predecessor_persisted.set()
+            original_close(descriptor)
             successor_thread = threading.Thread(target=run_successor)
             successor_thread.start()
             assert successor_holds_lock.wait(timeout=30)
@@ -1862,6 +1988,13 @@ def test_line_init_close_failure_without_recovery_lock_preserves_both_transactio
     assert not successor_thread.is_alive()
     assert successor_errors == []
     assert successor_result is not None
+    assert successor_result == LineInitResult(
+        paths=(
+            ".proofline/lines/line-0014/line-0014.md",
+            ".proofline/lines/line-0014/dcy-0014.md",
+        ),
+        dry_run=False,
+    )
     assert exc_info.value.code == "line.finalize.failed"
     assert "injected repository descriptor close failure" in exc_info.value.message
     assert "secondary:" in exc_info.value.message
@@ -1886,4 +2019,11 @@ def test_line_init_close_failure_without_recovery_lock_preserves_both_transactio
             f"{line_id}.md",
         ]
     assert_transaction_residue_absent(project)
-    assert git_state_snapshot(project) == git_before
+    assert predecessor_commit is not None
+    assert successor_commit is not None
+    assert git("rev-parse", f"{successor_commit}^", cwd=project).stdout.strip() == predecessor_commit
+    assert git("rev-parse", "HEAD", cwd=project).stdout.strip() == successor_commit
+    assert git_state_snapshot(project)[2:] == git_before[2:]
+    assert git("status", "--porcelain=v1", cwd=project).stdout == ""
+    assert git("diff", "--cached", "--quiet", cwd=project).returncode == 0
+    assert git("diff", "--quiet", cwd=project).returncode == 0

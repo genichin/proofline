@@ -100,6 +100,8 @@ blocked
 - `failed`는 검사를 실행했으나 하나 이상의 필수 판정이 실패한 상태이다.
 - `blocked`는 환경이나 필수 입력 문제로 검증을 완료하지 못한 상태이다.
 - IQC는 exact Micro-SPEC commit과 실제 검증한 implementation commit을 함께 bind해야 한다.
+- `implementation_history: first_parent` Line에서는 `micro_spec_commit`, 별도 persisted `in_progress`, `implementation_commit`, 후속 `implemented`/IQC candidate가 strict first-parent 순서여야 한다. IQC 작성 전에 `proofline validate`로 이 chronology를 확인한다.
+- `implementation_commit`은 `in_progress` transition commit이나 second parent에만 존재하는 commit이 아니어야 한다. Rework는 fresh `in_progress` transition부터 다시 시작한다.
 - 재검증할 때 같은 IQC 파일을 갱신하고 과거 결과는 Git history로 보존한다. Attempt별 IQC 파일은 만들지 않는다.
 - 대용량 원시 log나 binary evidence는 canonical tree에 복사하지 않고 안정적인 저장소 경로나 외부 참조를 IQC에 기록한다. 장기 보존이 필요한 evidence는 가능한 경우 digest를 함께 기록한다.
 - `passed`는 해당 Micro-SPEC 구현의 검증 통과만 의미하며 main 통합, Line delivery 또는 release를 승인하지 않는다.

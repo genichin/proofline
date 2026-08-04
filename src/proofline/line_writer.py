@@ -22,6 +22,7 @@ except ModuleNotFoundError:  # Windows has no POSIX advisory lock module.
 from .identity_ledger import (
     AllocationCandidate,
     IdentityLedgerError,
+    decode_ledger,
     prepare_allocation_candidate,
 )
 from .project_writer import (
@@ -31,7 +32,7 @@ from .project_writer import (
 from .project_writer import (
     _require_commit_capability as _require_project_commit_capability,
 )
-from .validator import validate_project
+from .validator import _validate_schema_candidate, _validate_project, validate_project
 
 LINE_ID_RE = re.compile(r"^line-(\d{4})$")
 TEMPLATE_PACKAGE = "proofline_schema_v1_templates"
@@ -51,8 +52,6 @@ RENAME_NOREPLACE_FILESYSTEMS = frozenset(
         "xfs",
     }
 )
-
-
 @dataclass(frozen=True)
 class LineInitError(Exception):
     code: str
@@ -129,19 +128,47 @@ def _require_git_root(project_root: Path) -> None:
                 "git.repository.unavailable", ".", "Git 저장소를 확인할 수 없습니다."
             )
         raise LineInitError("git.repository.required", ".", "Git 저장소가 아닙니다.")
-    actual = Path(result.stdout.strip()).resolve()
-    if actual != project_root.resolve():
+    try:
+        actual = Path(result.stdout.strip()).resolve()
+        expected = project_root.resolve()
+    except (OSError, UnicodeError, RuntimeError) as exc:
+        raise LineInitError(
+            "git.repository.unavailable", ".", "Git 저장소 경로를 확인할 수 없습니다."
+        ) from exc
+    if actual != expected:
         raise LineInitError(
             "git.root.mismatch", ".", "현재 directory가 Git 저장소 root가 아닙니다."
         )
 
 
-def _require_valid_project(project_root: Path) -> None:
-    diagnostics = validate_project(project_root)
+def _require_valid_project(
+    project_root: Path, *, excluded_line_path: str | tuple[str, ...] | None = None
+) -> None:
+    diagnostics = (
+        _validate_project(project_root, excluded_line_path=excluded_line_path)
+        if excluded_line_path is not None
+        else validate_project(project_root)
+    )
     if diagnostics:
         first = diagnostics[0]
         raise LineInitError(
             "project.invalid", first.path, f"{first.code}: {first.message}"
+        )
+
+
+def _require_unpersisted_candidate(project_root: Path, path: str) -> None:
+    """Inspect only the Line path owned by this transaction."""
+    try:
+        result = _run_git(project_root, "cat-file", "-e", f"HEAD:{path}")
+    except (OSError, UnicodeError) as exc:
+        raise LineInitError(
+            "git.repository.unavailable", path, "candidate Git object를 확인할 수 없습니다."
+        ) from exc
+    if result.returncode == 0:
+        raise LineInitError("line.path.exists", path, "대상 Line이 이미 HEAD에 존재합니다.")
+    if result.returncode != 128 or "does not exist in" not in result.stderr:
+        raise LineInitError(
+            "git.repository.unavailable", path, "candidate Git object를 확인할 수 없습니다."
         )
 
 
@@ -737,7 +764,7 @@ def _validate_rendered(line_id: str, line_text: str, discovery_text: str) -> Non
         suffix = line_id.removeprefix("line-")
         (target / f"{line_id}.md").write_text(line_text, encoding="utf-8")
         (target / f"dcy-{suffix}.md").write_text(discovery_text, encoding="utf-8")
-        diagnostics = validate_project(root)
+        diagnostics = _validate_schema_candidate(root)
         if diagnostics:
             first = diagnostics[0]
             raise LineInitError(
@@ -840,11 +867,22 @@ def _initialize_line_unlocked(
     project_root_identity = _directory_identity(project_root)
     artifact_root_identity = _directory_identity(artifact_root)
     lines_root_identity = _directory_identity(target.parent)
-    _require_valid_project(project_root)
+    suffix = line_id.removeprefix("line-")
+    paths = (
+        f".proofline/lines/{line_id}/{line_id}.md",
+        f".proofline/lines/{line_id}/dcy-{suffix}.md",
+    )
+    _require_unpersisted_candidate(project_root, paths[0])
+    # Preserve the established line.id.reused diagnostic before broader project
+    # history validation; allocation preparation is read-only at this point.
     try:
         allocation = prepare_allocation_candidate(project_root, line_id)
     except IdentityLedgerError as exc:
         raise LineInitError(exc.code, exc.path, exc.message) from exc
+    _require_valid_project(
+        project_root,
+        excluded_line_path=(paths[0],),
+    )
     try:
         line_text, discovery_text = _render(line_id, title)
     except LineInitError:
@@ -871,11 +909,6 @@ def _initialize_line_unlocked(
         ) from exc
     _require_commit_capability(project_root)
 
-    suffix = line_id.removeprefix("line-")
-    paths = (
-        f".proofline/lines/{line_id}/{line_id}.md",
-        f".proofline/lines/{line_id}/dcy-{suffix}.md",
-    )
     if dry_run:
         return LineInitResult(paths=paths, dry_run=True)
 
@@ -981,7 +1014,10 @@ def _initialize_line_unlocked(
         _require_directory_identity(
             target.parent, lines_root_identity, "lines_root.changed", ".proofline/lines"
         )
-        _require_valid_project(project_root)
+        _require_valid_project(
+            project_root,
+            excluded_line_path=(paths[0],),
+        )
         for descriptor in anchor_fds:
             try:
                 os.close(descriptor)
@@ -1072,7 +1108,10 @@ def _initialize_line_unlocked(
                 allocation.candidate_bytes,
             ):
                 try:
-                    _require_valid_project(project_root)
+                    _require_valid_project(
+                        project_root,
+                        excluded_line_path=(paths[0],),
+                    )
                     preserve_advanced = True
                 except LineInitError as validation_error:
                     details.append(str(validation_error))

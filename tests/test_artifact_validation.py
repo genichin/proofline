@@ -1,7 +1,7 @@
 import shutil
 from pathlib import Path
 
-from proofline.validator import validate_project
+from proofline.validator import _validate_schema_candidate, validate_project
 
 FIXTURE = Path(__file__).parent / "fixtures" / "valid-minimal"
 
@@ -15,7 +15,13 @@ def copy_valid_project(tmp_path: Path) -> Path:
 def test_valid_minimal_artifacts_have_no_errors(tmp_path: Path) -> None:
     project = copy_valid_project(tmp_path)
 
-    assert validate_project(project) == []
+    assert _validate_schema_candidate(project) == []
+
+
+def test_public_project_validation_has_no_history_opt_out() -> None:
+    import inspect
+
+    assert "check_history" not in inspect.signature(validate_project).parameters
 
 
 def test_line_accepts_first_parent_implementation_history_policy(tmp_path: Path) -> None:
@@ -29,7 +35,7 @@ def test_line_accepts_first_parent_implementation_history_policy(tmp_path: Path)
         encoding="utf-8",
     )
 
-    assert validate_project(project) == []
+    assert _validate_schema_candidate(project) == []
 
 
 def test_line_rejects_unknown_implementation_history_policy(tmp_path: Path) -> None:

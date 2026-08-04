@@ -166,6 +166,17 @@ implementation_history: first_parent
 
 `implementation_history: first_parent`는 implementation lifecycle chronology를 exact candidate의 Git first-parent chain에서 판정하는 Line policy이다. 새 Line은 이 field를 기록한다. Policy 도입 전에 생성된 historical Line의 fieldless shape는 parser·schema 호환성을 위해 그대로 읽으며 writer가 소급 수정하지 않는다.
 
+### First-parent history policy
+
+- 해당 Line에서 policy가 처음 persisted된 commit `B`가 adoption baseline이다. 도입 뒤 field 제거·변경은 `history.line.policy.changed`로 실패한다.
+- Repository first-parent history에서 어떤 Line이든 policy가 처음 persisted된 earliest commit `A`가 fieldless legacy cutoff이다. Fieldless terminal(`delivered` 또는 `cancelled`) Line은 terminal transition `T`가 없거나 `T >= A`이면 `history.line.legacy.invalid`이며, `A`가 없는 pre-adoption repository 또는 `T < A`만 legacy로 인정한다.
+- Fieldless non-terminal Line은 `history.line.policy.missing`이다. 새 `not_started` Line은 writer가 field를 기록하며, 기존 non-terminal Line은 implementation/IQC 전에 명시적으로 adoption한다.
+- Strict cycle은 approved `micro_spec_commit < P < I < Q`와 `B < I < Q`를 모두 만족해야 한다. `P`는 별도 persisted `in_progress`, `I`는 IQC의 exact implementation commit, `Q`는 후속 `implemented` transition과 IQC candidate이다. 따라서 `P < B < I < Q`와 `B < P < I < Q`를 모두 허용한다.
+- Rework마다 이전 `implemented` 뒤 fresh `in_progress → implementation → implemented/IQC` cycle이 필요하다. Direct transition, `P = I`, `I = Q`, `I < B`, second-parent-only evidence와 lifecycle-only implementation binding은 거부한다.
+- History 판정은 commit timestamp나 all-parent reachability가 아니라 exact candidate first-parent 순서만 사용한다. Missing object, shallow repository, malformed historical artifact, unresolved binding 또는 Git read 실패는 `history.unavailable`로 fail-closed한다.
+- History Git read는 각 subprocess에 finite timeout(5초), captured output 상한(8 MiB), `GIT_NO_LAZY_FETCH=1`, `GIT_NO_REPLACE_OBJECTS=1`, `GIT_OPTIONAL_LOCKS=0`, `GIT_TERMINAL_PROMPT=0`을 적용하며, timeout·출력 초과·실패는 `history.unavailable`로 처리한다. 반복되는 commit/tree/blob read는 validation session 안에서 cache한다.
+- Validator는 history를 읽기만 하며 artifact, index, worktree, HEAD, refs와 object database를 변경하지 않는다. Path 종류로 implementation의 semantic 품질을 승인하지 않으며 실제 검사 판정은 IQC가 소유한다.
+
 `execution_status`는 다음 다섯 값만 허용한다.
 
 ```text

@@ -68,6 +68,7 @@ def test_uv_tool_install_is_isolated_from_application_environment(tmp_path: Path
     assert not installed_module.is_relative_to(ROOT)
 
     validated = run(str(executable), "validate", cwd=app, env=env)
-    assert validated.returncode == 0, validated.stderr
+    assert validated.returncode == 1, validated.stderr
+    assert "history.unavailable" in validated.stderr
     assert not (app / ".venv").exists()
     assert {path.name: path.read_bytes() for path in (pyproject, lockfile)} == before

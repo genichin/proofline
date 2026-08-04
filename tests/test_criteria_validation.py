@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -7,7 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from proofline.validator import validate_project
+from proofline.validator import _validate_schema_candidate, validate_project
 
 FIXTURE = Path(__file__).parent / "fixtures" / "valid-minimal"
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +44,14 @@ def git(project: Path, *args: str) -> str:
 
 
 def initialize_main(project: Path) -> None:
+    # Criteria-history fixtures predate implementation-history enforcement. Keep
+    # their unrelated Lines as provable pre-adoption delivered legacy.
+    for line in (project / ".proofline/lines").glob("line-*/line-*.md"):
+        text = line.read_text(encoding="utf-8")
+        line.write_text(
+            re.sub(r"^execution_status: \w+$", "execution_status: delivered", text, flags=re.M),
+            encoding="utf-8",
+        )
     git(project, "init", "-b", "main")
     git(project, "config", "user.name", "Criteria Test")
     git(project, "config", "user.email", "criteria@example.invalid")
@@ -200,7 +209,7 @@ def test_req_accepts_optional_satisfy_with_active_target(tmp_path: Path) -> None
     replace(req, "    - ac-0003\n  update: []", "  update: []")
     replace(req, "  retire: []", "  retire: []\n  satisfy:\n    - ac-0003")
 
-    assert validate_project(project) == []
+    assert _validate_schema_candidate(project) == []
 
 
 def test_active_satisfy_baseline_is_history_independent_and_read_only(tmp_path: Path) -> None:

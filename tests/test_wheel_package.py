@@ -91,7 +91,8 @@ def test_source_checkout_line_init_fresh_and_legacy_e2e(tmp_path: Path) -> None:
             capture_output=True,
             check=False,
         )
-        assert validated.returncode == 0, validated.stderr
+        assert validated.returncode == 1, validated.stderr
+        assert "history.unavailable" in validated.stderr
         assert not list(project.glob(".line-*"))
         assert not list(project.glob(".proofline-ledger-*"))
 
@@ -316,6 +317,11 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
         assert "proofline_home/contracts/storage-and-retention.md" in names
         assert "proofline_home/templates/schema-v1/artifacts/line.md" in names
         assert "proofline_home/skills/proofline-start-line/SKILL.md" in names
+        run_iqc = "proofline_home/skills/proofline-run-iqc/SKILL.md"
+        assert run_iqc in names
+        assert archive.read(run_iqc) == (
+            ROOT / "skills/proofline-run-iqc/SKILL.md"
+        ).read_bytes()
         assert "proofline_home/agent-context.md" in names
         unpacked = tmp_path / "wheel"
         archive.extractall(unpacked)
@@ -387,6 +393,8 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
         check=False,
     )
     assert provenance.returncode == 0, provenance.stderr
+
+
     installed_version = subprocess.run(
         [str(proofline), "--version"],
         cwd=tmp_path,
@@ -579,6 +587,28 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
     assert collision.returncode != 0
     assert "line.path.exists" in collision.stderr
     assert not list(e2e_project.glob(".line-0001-*"))
+    subprocess.run(["git", "add", "-A"], cwd=e2e_project, check=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.email=proofline@example.invalid",
+            "-c",
+            "user.name=ProofLine Test",
+            "commit",
+            "-qm",
+            "persist first Line",
+        ],
+        cwd=e2e_project,
+        check=True,
+    )
+    git_metadata_before = subprocess.run(
+        ["git", "for-each-ref", "--format=%(refname):%(objectname)"],
+        cwd=e2e_project,
+        text=True,
+        capture_output=True,
+        check=False,
+    ).stdout
 
     failure_script = """
 import contextlib
@@ -624,6 +654,7 @@ print(diagnostic, end='', file=sys.stderr)
         check=False,
     )
     assert post_line_validate.returncode == 0, post_line_validate.stderr
+    assert post_line_validate.stderr == ""
     assert {
         path.relative_to(project_home): path.read_bytes()
         for path in project_home.rglob("*")
@@ -666,7 +697,7 @@ print(diagnostic, end='', file=sys.stderr)
             "commit valid allocation",
         ],
         cwd=e2e_project,
-        check=True,
+        check=False,
     )
     ledger.write_bytes(bad_ledger)
     subprocess.run(["git", "add", str(ledger)], cwd=e2e_project, check=True)
@@ -761,7 +792,8 @@ print(diagnostic, end='', file=sys.stderr)
         capture_output=True,
         check=False,
     )
-    assert legacy_validate.returncode == 0, legacy_validate.stderr
+    assert legacy_validate.returncode == 1, legacy_validate.stderr
+    assert "history.unavailable" in legacy_validate.stderr
     assert not list(legacy_project.glob(".line-*"))
     assert not list(legacy_project.glob(".proofline-ledger-*"))
 
@@ -783,3 +815,33 @@ print(diagnostic, end='', file=sys.stderr)
     )
     assert absent_init.returncode == 0, absent_init.stderr
     assert not (absent_home / ".proofline").exists()
+
+
+def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workflow(
+    tmp_path: Path,
+) -> None:
+    dist = tmp_path / "dist"
+    build = subprocess.run(
+        ["uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert build.returncode == 0, build.stderr
+    wheel = next(dist.glob("proofline-*.whl"))
+    resources = {
+        "docs/contracts/line-delivery.md": "proofline_home/contracts/line-delivery.md",
+        "docs/contracts/micro-spec-and-iqc.md": "proofline_home/contracts/micro-spec-and-iqc.md",
+        "skills/proofline-start-implementation/SKILL.md": "proofline_home/skills/proofline-start-implementation/SKILL.md",
+        "skills/proofline-start-implementation/scripts/create_worktree.py": "proofline_home/skills/proofline-start-implementation/scripts/create_worktree.py",
+        "skills/proofline-run-iqc/SKILL.md": "proofline_home/skills/proofline-run-iqc/SKILL.md",
+    }
+    with zipfile.ZipFile(wheel) as archive:
+        for source, packaged in resources.items():
+            assert archive.read(packaged) == (ROOT / source).read_bytes()
+        skill = archive.read(resources["skills/proofline-start-implementation/SKILL.md"]).decode()
+        assert "별도 lifecycle-only `in_progress` commit `P`" in skill
+        assert "그 다음 `implementation_history: first_parent`만 추가한 별도 commit `B`" in skill
+        script = archive.read(resources["skills/proofline-start-implementation/scripts/create_worktree.py"])
+        assert b"approval_commit" in script
