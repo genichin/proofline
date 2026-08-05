@@ -3,6 +3,7 @@ import hashlib
 import subprocess
 import sys
 
+import pytest
 import yaml
 
 
@@ -16,6 +17,19 @@ def git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ("git", *args), cwd=repo, text=True, capture_output=True, check=True
     )
+
+
+def stage_canonical_mode(repo: Path, path: str, mode: str) -> None:
+    payload = (repo / path).read_bytes()
+    hashed = subprocess.run(
+        ("git", "hash-object", "-w", "--stdin"),
+        cwd=repo,
+        input=payload,
+        capture_output=True,
+        check=True,
+    )
+    oid = hashed.stdout.decode("ascii").strip()
+    git(repo, "update-index", "--add", "--cacheinfo", f"{mode},{oid},{path}")
 
 
 def write_spec(repo: Path, *, req_status: str, ac_status: str) -> None:
@@ -92,11 +106,13 @@ def snapshot(repo: Path) -> tuple[str, str, str, dict[str, str]]:
     )
 
 
-def run_audit(repo: Path, commit: str) -> subprocess.CompletedProcess[str]:
+def run_audit(
+    repo: Path, commit: str, *, script: Path = SCRIPT
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         (
             sys.executable,
-            str(SCRIPT),
+            str(script),
             "--repo",
             str(repo),
             "--line-id",
@@ -109,6 +125,25 @@ def run_audit(repo: Path, commit: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         check=False,
     )
+
+
+def make_typed_transition_repo(
+    tmp_path: Path, *, path: str, mode: str
+) -> tuple[Path, str]:
+    repo = tmp_path / "project"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "config", "user.email", "proofline@example.invalid")
+    git(repo, "config", "user.name", "ProofLine Test")
+    git(repo, "config", "core.symlinks", "false")
+    write_spec(repo, req_status="draft", ac_status="draft")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "Draft specification")
+    write_spec(repo, req_status="approved", ac_status="active")
+    git(repo, "add", ".")
+    stage_canonical_mode(repo, path, mode)
+    git(repo, "commit", "-qm", f"Approval with mode {mode}")
+    return repo, git(repo, "rev-parse", "HEAD").stdout.strip()
 
 
 def test_approval_skill_has_valid_metadata_and_minimal_gate_policy() -> None:
@@ -206,4 +241,37 @@ def test_audit_rejects_non_approved_commit_without_mutation(tmp_path: Path) -> N
 
     assert result.returncode != 0
     assert "REQ.status must be approved" in result.stderr
+    assert snapshot(repo) == before
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".proofline/lines/line-0007/req-0007.md",
+        ".proofline/criteria/ac-0011.md",
+    ],
+)
+def test_audit_rejects_symlink_mode_canonical_transition_artifact_without_mutation(
+    tmp_path: Path, path: str
+) -> None:
+    repo, approval = make_typed_transition_repo(tmp_path, path=path, mode="120000")
+    before = snapshot(repo)
+
+    result = run_audit(repo, approval)
+
+    assert result.returncode == 2
+    assert result.stderr.strip() == f"error: canonical artifact must be a regular blob: {path}"
+    assert result.stdout == ""
+    assert snapshot(repo) == before
+
+
+def test_audit_accepts_executable_regular_blob_transition_artifact(tmp_path: Path) -> None:
+    path = ".proofline/criteria/ac-0011.md"
+    repo, approval = make_typed_transition_repo(tmp_path, path=path, mode="100755")
+    before = snapshot(repo)
+
+    result = run_audit(repo, approval)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "transition: recorded"
     assert snapshot(repo) == before

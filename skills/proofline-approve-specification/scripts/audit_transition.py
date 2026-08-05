@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -12,6 +13,9 @@ import sys
 
 LINE_RE = re.compile(r"line-[0-9]{4}\Z")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
+OID_RE = re.compile(rb"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+GIT_READ_TIMEOUT_SECONDS = 5
+GIT_READ_OUTPUT_LIMIT = 8 * 1024 * 1024
 
 
 class AuditError(RuntimeError):
@@ -19,23 +23,92 @@ class AuditError(RuntimeError):
 
 
 def git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        ("git", "-C", str(repo), *args),
-        text=True,
-        capture_output=True,
-        check=False,
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
     )
-    if result.returncode != 0:
+    try:
+        result = subprocess.run(
+            ("git", "-C", str(repo), *args),
+            text=True,
+            capture_output=True,
+            check=False,
+            env=environment,
+            timeout=GIT_READ_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise AuditError("git command failed") from exc
+    if (
+        len(result.stdout.encode()) + len(result.stderr.encode()) > GIT_READ_OUTPUT_LIMIT
+        or result.returncode != 0
+    ):
         detail = result.stderr.strip() or result.stdout.strip() or "git command failed"
         raise AuditError(detail)
     return result
 
 
 def artifact_at(repo: Path, commit: str, relative_path: str) -> str:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+        }
+    )
     try:
-        return git(repo, "show", f"{commit}:{relative_path}").stdout
-    except AuditError as exc:
-        raise AuditError(f"artifact is missing at commit: {relative_path}") from exc
+        entry = subprocess.run(
+            ("git", "-C", str(repo), "ls-tree", "-z", "--full-tree", commit, "--", relative_path),
+            capture_output=True,
+            check=False,
+            env=environment,
+            timeout=GIT_READ_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise AuditError(f"canonical artifact read failed: {relative_path}") from exc
+    if len(entry.stdout) + len(entry.stderr) > GIT_READ_OUTPUT_LIMIT or entry.returncode != 0:
+        raise AuditError(f"canonical artifact read failed: {relative_path}")
+    records = entry.stdout.split(b"\0")
+    if len(records) != 2 or records[1] or not records[0]:
+        raise AuditError(f"canonical artifact tree entry is missing or malformed: {relative_path}")
+    fields = records[0].split(b"\t")
+    metadata = fields[0].split(b" ") if len(fields) == 2 else []
+    try:
+        actual_path = fields[1].decode("utf-8")
+    except (IndexError, UnicodeDecodeError) as exc:
+        raise AuditError(f"canonical artifact tree entry is missing or malformed: {relative_path}") from exc
+    if (
+        len(metadata) != 3
+        or metadata[0] not in {b"100644", b"100755"}
+        or metadata[1] != b"blob"
+        or OID_RE.fullmatch(metadata[2]) is None
+        or actual_path != relative_path
+    ):
+        if actual_path == relative_path and len(metadata) == 3:
+            raise AuditError(f"canonical artifact must be a regular blob: {relative_path}")
+        raise AuditError(f"canonical artifact tree entry is missing or malformed: {relative_path}")
+    try:
+        blob = subprocess.run(
+            ("git", "-C", str(repo), "cat-file", "blob", metadata[2].decode("ascii")),
+            capture_output=True,
+            check=False,
+            env=environment,
+            timeout=GIT_READ_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise AuditError(f"canonical artifact read failed: {relative_path}") from exc
+    if len(blob.stdout) + len(blob.stderr) > GIT_READ_OUTPUT_LIMIT or blob.returncode != 0:
+        raise AuditError(f"canonical artifact read failed: {relative_path}")
+    try:
+        return blob.stdout.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise AuditError(f"canonical artifact is not UTF-8: {relative_path}") from exc
 
 
 def frontmatter(text: str) -> str:

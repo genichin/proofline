@@ -224,11 +224,13 @@ def execute_cross_artifact_registry(root: Path, registry_path: Path, temp_root: 
     members = {
         "handoff": "proofline_home/skills/proofline-start-implementation/scripts/create_worktree.py",
         "approval": "proofline_home/skills/proofline-approve-specification/scripts/audit_approval_authority.py",
+        "approval_transition": "proofline_home/skills/proofline-approve-specification/scripts/audit_transition.py",
         "preflight": "proofline_home/skills/proofline-run-dqc/scripts/preflight_integration_candidate.py",
     }
     source_scripts = {
         "handoff": root / "skills/proofline-start-implementation/scripts/create_worktree.py",
         "approval": root / "skills/proofline-approve-specification/scripts/audit_approval_authority.py",
+        "approval_transition": root / "skills/proofline-approve-specification/scripts/audit_transition.py",
         "preflight": root / "skills/proofline-run-dqc/scripts/preflight_integration_candidate.py",
     }
     extracted_scripts: dict[str, Path] = {}
@@ -251,6 +253,7 @@ def execute_cross_artifact_registry(root: Path, registry_path: Path, temp_root: 
         (sys.executable, "-I", str(runner), "run", *common, "--workspace", str(source_workspace),
          "--artifact", "source", "--handoff-script", str(source_scripts["handoff"]),
          "--approval-script", str(source_scripts["approval"]),
+         "--approval-transition-script", str(source_scripts["approval_transition"]),
          "--preflight-script", str(source_scripts["preflight"]),
          "--source-root", str(root / "src")),
         source_workspace,
@@ -260,6 +263,7 @@ def execute_cross_artifact_registry(root: Path, registry_path: Path, temp_root: 
         (str(python), "-I", str(runner), "run", *common, "--workspace", str(wheel_workspace),
          "--artifact", "wheel", "--handoff-script", str(extracted_scripts["handoff"]),
          "--approval-script", str(extracted_scripts["approval"]),
+         "--approval-transition-script", str(extracted_scripts["approval_transition"]),
          "--preflight-script", str(extracted_scripts["preflight"])),
         wheel_workspace,
         _sanitized_env(),
@@ -296,6 +300,7 @@ def _load_test_fixtures(root: Path) -> dict[str, Any]:
     import test_implementation_history as chronology
     import test_integration_history as integration
     import test_specification_approval_authority as approval
+    import test_approve_specification_skill as approval_transition
     import test_start_implementation_skill as handoff
     import test_line_0020_workflow_sync as preflight
     return {
@@ -303,6 +308,7 @@ def _load_test_fixtures(root: Path) -> dict[str, Any]:
         "chronology": chronology,
         "integration": integration,
         "approval": approval,
+        "approval_transition": approval_transition,
         "handoff": handoff,
         "preflight": preflight,
     }
@@ -470,6 +476,22 @@ def _approval_scenario(module: Any, scenario_id: str, workspace: Path, script: P
     return result.stderr.split(marker, 1)[1].split("]", 1)[0], unchanged
 
 
+def _approval_transition_scenario(
+    module: Any, workspace: Path, script: Path
+) -> tuple[str, bool]:
+    path = ".proofline/criteria/ac-0011.md"
+    repo, approval = module.make_typed_transition_repo(
+        workspace, path=path, mode="120000"
+    )
+    before = _repo_git_snapshot(repo)
+    result = module.run_audit(repo, approval, script=script)
+    unchanged = _repo_git_snapshot(repo) == before
+    expected = f"error: canonical artifact must be a regular blob: {path}"
+    if result.returncode == 2 and result.stdout == "" and result.stderr.strip() == expected:
+        return "TRANSITION_SYMLINK_ARTIFACT", unchanged
+    return "APPROVAL_TRANSITION_UNEXPECTED", unchanged
+
+
 def _chronology_scenario(module: Any, scenario_id: str, workspace: Path) -> tuple[str, bool]:
     mapping = {
         "chronology.line-0020-bootstrap.pass": (True, None, True),
@@ -567,7 +589,7 @@ def _preflight_scenario(
 
 def run_registry(root: Path, registry_path: Path, workspace: Path, artifact: str,
                  handoff_script: Path, approval_script: Path,
-                 preflight_script: Path,
+                 approval_transition_script: Path, preflight_script: Path,
                  source_root: Path | None = None) -> dict[str, Any]:
     registry = load_registry(registry_path)
     if source_root is not None:
@@ -592,7 +614,14 @@ def run_registry(root: Path, registry_path: Path, workspace: Path, artifact: str
             if artifact == "wheel":
                 packaged_ids.add(scenario.scenario_id)
         elif scenario.scenario_id.startswith("approval."):
-            code, unchanged = _approval_scenario(modules["approval"], scenario.scenario_id, scenario_workspace, approval_script)
+            if scenario.scenario_id == "approval.transition-symlink-artifact.fail":
+                code, unchanged = _approval_transition_scenario(
+                    modules["approval_transition"], scenario_workspace, approval_transition_script
+                )
+            else:
+                code, unchanged = _approval_scenario(
+                    modules["approval"], scenario.scenario_id, scenario_workspace, approval_script
+                )
             if artifact == "wheel":
                 packaged_ids.add(scenario.scenario_id)
         elif scenario.scenario_id.startswith("chronology."):
@@ -638,11 +667,13 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--artifact", choices=("source", "wheel"), required=True)
     run.add_argument("--handoff-script", type=Path, required=True)
     run.add_argument("--approval-script", type=Path, required=True)
+    run.add_argument("--approval-transition-script", type=Path, required=True)
     run.add_argument("--preflight-script", type=Path, required=True)
     run.add_argument("--source-root", type=Path)
     args = parser.parse_args(argv)
     payload = run_registry(args.root.resolve(), args.registry.resolve(), args.workspace.resolve(),
                            args.artifact, args.handoff_script.resolve(), args.approval_script.resolve(),
+                           args.approval_transition_script.resolve(),
                            args.preflight_script.resolve(),
                            args.source_root.resolve() if args.source_root else None)
     print(json.dumps(payload, sort_keys=True))
