@@ -15,6 +15,7 @@ import time
 
 
 LINE_RE = re.compile(r"line-[0-9]{4}\Z")
+AC_RE = re.compile(r"ac-[0-9]{4}\Z")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 VALIDATE_TIMEOUT_SECONDS = 30
 VALIDATE_OUTPUT_LIMIT = 256 * 1024
@@ -284,6 +285,52 @@ def assert_artifact(
             raise WorkflowError("Line.implementation_history must be first_parent")
 
 
+def assert_req_target_criteria(
+    repo: Path, approval_commit: str, req_path: str
+) -> None:
+    req = frontmatter_mapping(artifact_at(repo, approval_commit, req_path))
+    criteria = req.get("criteria")
+    if not isinstance(criteria, dict):
+        raise WorkflowError("REQ.criteria must be a mapping")
+    required = ("create", "update", "retire")
+    allowed = (*required, "satisfy")
+    if any(name not in criteria for name in required) or any(
+        name not in allowed for name in criteria
+    ):
+        raise WorkflowError("REQ.criteria must contain canonical admission lists")
+
+    expected_states = {
+        "create": "active",
+        "update": "active",
+        "retire": "retired",
+        "satisfy": "active",
+    }
+    seen: set[str] = set()
+    target_count = 0
+    for admission in allowed:
+        targets = criteria.get(admission, [])
+        if not isinstance(targets, list):
+            raise WorkflowError(f"REQ.criteria.{admission} must be a list")
+        for target in targets:
+            if not isinstance(target, str) or not AC_RE.fullmatch(target):
+                raise WorkflowError(f"REQ.criteria.{admission} has an invalid AC identity")
+            if target in seen:
+                raise WorkflowError("REQ.criteria target ACs must be unique across admission lists")
+            seen.add(target)
+            target_count += 1
+            relative_path = f".proofline/criteria/{target}.md"
+            assert_artifact(
+                repo,
+                approval_commit,
+                relative_path,
+                expected_id=target,
+                state_key="status",
+                expected_state=expected_states[admission],
+            )
+    if target_count == 0:
+        raise WorkflowError("REQ.criteria admission lists must target at least one AC")
+
+
 def assert_status_only_handoff(
     repo: Path, approval_commit: str, handoff_commit: str, line_path: str
 ) -> None:
@@ -439,14 +486,16 @@ def create_worktree(
         state_key="status",
         expected_state="confirmed",
     )
+    req_path = f"{line_dir}/req-{number}.md"
     assert_artifact(
         repo,
         approval_commit,
-        f"{line_dir}/req-{number}.md",
+        req_path,
         expected_id=f"req-{number}",
         state_key="status",
         expected_state="approved",
     )
+    assert_req_target_criteria(repo, approval_commit, req_path)
     assert_artifact(
         repo,
         approval_commit,
@@ -485,6 +534,10 @@ def create_worktree(
             raise WorkflowError("existing worktree HEAD does not match handoff commit")
         if git(worktree, "branch", "--show-current").stdout.strip() != branch:
             raise WorkflowError("existing worktree branch does not match")
+        if git(
+            worktree, "status", "--porcelain=v1", "--untracked-files=all"
+        ).stdout:
+            raise WorkflowError("existing worktree is not clean")
         return worktree
     if str(worktree) in paths:
         raise WorkflowError("worktree path registration collision")

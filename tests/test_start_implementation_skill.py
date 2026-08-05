@@ -4,6 +4,7 @@ import os
 import subprocess
 import sys
 import time
+import zipfile
 
 import pytest
 import yaml
@@ -55,7 +56,15 @@ def make_approved_repo(
     (line_dir / "req-0007.md").write_text(
         f'---\nid: "req-0007"\nstatus: {req_status}\n'
         'discovery: "dcy-0007"\ncriteria:\n  create: []\n  update: []\n  retire: []\n'
+        '  satisfy:\n    - "ac-0001"\n'
         '---\n\n# Requirement\n'
+    )
+    criteria_dir = repo / ".proofline/criteria"
+    criteria_dir.mkdir(parents=True)
+    (criteria_dir / "ac-0001.md").write_text(
+        '---\nid: "ac-0001"\nstatus: active\n---\n\n'
+        '# Criterion\n\n## Criterion\n\nRequired.\n\n## Verification\n\n- Verify.\n',
+        encoding="utf-8",
     )
     git(repo, "init", "-q", "-b", "main")
     git(repo, "config", "user.email", "proofline@example.invalid")
@@ -81,11 +90,13 @@ def commit_handoff(repo: Path) -> str:
     return git(repo, "rev-parse", "HEAD").stdout.strip()
 
 
-def run_script(repo: Path, approval: str) -> subprocess.CompletedProcess[str]:
+def run_script(
+    repo: Path, approval: str, *, script: Path = SCRIPT
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         (
             sys.executable,
-            str(SCRIPT),
+            str(script),
             "--repo",
             str(repo),
             "--line-id",
@@ -100,6 +111,49 @@ def run_script(repo: Path, approval: str) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         check=False,
     )
+
+
+def set_criteria_target(
+    repo: Path,
+    admission: str,
+    *,
+    ac_id: str = "ac-0001",
+    ac_status: str | None = None,
+    canonical_name: str | None = None,
+    artifact_id: str | None = None,
+) -> None:
+    req = repo / ".proofline/lines/line-0007/req-0007.md"
+    lists = {
+        name: ([ac_id] if name == admission else [])
+        for name in ("create", "update", "retire", "satisfy")
+    }
+    criteria = "".join(
+        f'  {name}:\n    - "{values[0]}"\n' if values else f"  {name}: []\n"
+        for name, values in lists.items()
+    )
+    req.write_text(
+        '---\nid: "req-0007"\nstatus: approved\ndiscovery: "dcy-0007"\n'
+        f"criteria:\n{criteria}---\n\n# Requirement\n",
+        encoding="utf-8",
+    )
+    criteria_dir = repo / ".proofline/criteria"
+    for existing in criteria_dir.glob("ac-*.md"):
+        existing.unlink()
+    if ac_status is not None:
+        name = canonical_name or ac_id
+        (criteria_dir / f"{name}.md").write_text(
+            f'---\nid: "{artifact_id or ac_id}"\nstatus: {ac_status}\n---\n\n'
+            '# Criterion\n\n## Criterion\n\nRequired.\n\n## Verification\n\n- Verify.\n',
+            encoding="utf-8",
+        )
+
+
+def commit_approval_and_handoff(repo: Path, message: str) -> str:
+    git(repo, "add", "-A")
+    git(repo, "commit", "--allow-empty", "-qm", message)
+    approval = git(repo, "rev-parse", "HEAD").stdout.strip()
+    commit_handoff(repo)
+    return approval
 
 
 def run_script_isolated(
@@ -248,26 +302,20 @@ def test_standalone_preflight_rejects_malformed_indentation_before_worktree(
     assert not (repo / ".worktrees/line-0007").exists()
 
 
-def test_standalone_preflight_accepts_nested_req_criteria_without_proofline_yaml(
-    tmp_path: Path,
+@pytest.mark.parametrize("admission", ["create", "update", "retire", "satisfy"])
+def test_standalone_preflight_rejects_missing_target_ac_without_proofline_yaml(
+    tmp_path: Path, admission: str
 ) -> None:
-    repo, approval = make_approved_repo(tmp_path, handoff=False)
+    repo, _ = make_approved_repo(tmp_path, handoff=False)
     (repo / "proofline.yaml").unlink(missing_ok=True)
-    req = repo / ".proofline/lines/line-0007/req-0007.md"
-    req.write_text(
-        '---\nid: "req-0007"\nstatus: approved\ndiscovery: "dcy-0007"\n'
-        'criteria:\n  create:\n    - "ac-0001"\n  update: []\n  retire: []\n---\n\n# Requirement\n',
-        encoding="utf-8",
-    )
-    git(repo, "add", ".")
-    git(repo, "commit", "-qm", "nested criteria fixture")
-    approval = git(repo, "rev-parse", "HEAD").stdout.strip()
-    commit_handoff(repo)
+    set_criteria_target(repo, admission, ac_id="ac-9999", ac_status=None)
+    approval = commit_approval_and_handoff(repo, f"missing {admission} target AC")
 
     result = run_script(repo, approval)
 
-    assert result.returncode == 0, result.stderr
-    assert (repo / ".worktrees/line-0007").exists()
+    assert result.returncode == 2
+    assert "ac-9999.md" in result.stderr
+    assert not (repo / ".worktrees/line-0007").exists()
 
 
 def test_standalone_preflight_rejects_nested_duplicate_key_before_worktree(
@@ -289,6 +337,124 @@ def test_standalone_preflight_rejects_nested_duplicate_key_before_worktree(
     result = run_script(repo, approval)
 
     assert result.returncode == 2
+    assert not (repo / ".worktrees/line-0007").exists()
+
+
+@pytest.mark.parametrize(
+    ("admission", "expected_status"),
+    [("create", "active"), ("update", "active"), ("retire", "retired"), ("satisfy", "active")],
+)
+def test_exact_approval_accepts_each_admission_target_state(
+    tmp_path: Path, admission: str, expected_status: str
+) -> None:
+    repo, _ = make_approved_repo(tmp_path, handoff=False)
+    set_criteria_target(repo, admission, ac_status=expected_status)
+    approval = commit_approval_and_handoff(repo, f"approve {admission} target")
+
+    result = run_script(repo, approval)
+
+    assert result.returncode == 0, result.stderr
+    assert (repo / ".worktrees/line-0007").is_dir()
+
+
+@pytest.mark.parametrize(
+    ("admission", "invalid_status"),
+    [
+        ("create", "draft"),
+        ("create", "retired"),
+        ("update", "draft"),
+        ("update", "retired"),
+        ("retire", "active"),
+        ("retire", "draft"),
+        ("satisfy", "draft"),
+        ("satisfy", "retired"),
+    ],
+)
+def test_exact_approval_rejects_inactive_or_wrong_terminal_target_state(
+    tmp_path: Path, admission: str, invalid_status: str
+) -> None:
+    repo, _ = make_approved_repo(tmp_path, handoff=False)
+    set_criteria_target(repo, admission, ac_status=invalid_status)
+    approval = commit_approval_and_handoff(repo, f"invalid {admission} target")
+
+    result = run_script(repo, approval)
+
+    assert result.returncode == 2
+    assert f"AC.status must be {'retired' if admission == 'retire' else 'active'}" in result.stderr
+    assert not (repo / ".worktrees/line-0007").exists()
+
+
+@pytest.mark.parametrize("admission", ["create", "update", "retire", "satisfy"])
+@pytest.mark.parametrize(
+    ("canonical_name", "artifact_id"),
+    [("ac-0002", "ac-0001"), ("ac-0001", "ac-0002")],
+)
+def test_exact_approval_rejects_target_ac_path_or_identity_mismatch(
+    tmp_path: Path, admission: str, canonical_name: str, artifact_id: str
+) -> None:
+    repo, _ = make_approved_repo(tmp_path, handoff=False)
+    set_criteria_target(
+        repo,
+        admission,
+        ac_status="retired" if admission == "retire" else "active",
+        canonical_name=canonical_name,
+        artifact_id=artifact_id,
+    )
+    approval = commit_approval_and_handoff(repo, "mismatched target AC")
+
+    result = run_script(repo, approval)
+
+    assert result.returncode == 2
+    assert "ac-0001.md" in result.stderr
+    assert not (repo / ".worktrees/line-0007").exists()
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        "criteria: malformed",
+        "criteria:\n  create: ac-0001\n  update: []\n  retire: []\n  satisfy: []",
+        "criteria:\n  create:\n    - ac-0001\n  update: []\n  retire: []\n  satisfy:\n    - ac-0001",
+    ],
+)
+def test_exact_approval_rejects_malformed_req_criteria_structure(
+    tmp_path: Path, malformed: str
+) -> None:
+    repo, _ = make_approved_repo(tmp_path, handoff=False)
+    req = repo / ".proofline/lines/line-0007/req-0007.md"
+    req.write_text(
+        f'---\nid: "req-0007"\nstatus: approved\ndiscovery: "dcy-0007"\n{malformed}\n---\n',
+        encoding="utf-8",
+    )
+    approval = commit_approval_and_handoff(repo, "malformed REQ criteria")
+
+    result = run_script(repo, approval)
+
+    assert result.returncode == 2
+    assert "REQ.criteria" in result.stderr
+    assert not (repo / ".worktrees/line-0007").exists()
+
+
+@pytest.mark.parametrize(
+    ("frontmatter", "diagnostic"),
+    [
+        ('id: "ac-0001"\nstatus: active\nstatus: retired', "duplicate keys"),
+        ('id: "ac-0001"\nstatus:\n  - active', "AC.status must be active"),
+        ('id: "ac-0001"\n  status: active', "invalid dedent"),
+    ],
+)
+def test_exact_approval_rejects_duplicate_or_malformed_target_ac_frontmatter(
+    tmp_path: Path, frontmatter: str, diagnostic: str
+) -> None:
+    repo, _ = make_approved_repo(tmp_path, handoff=False)
+    ac = repo / ".proofline/criteria/ac-0001.md"
+    ac.write_text(f"---\n{frontmatter}\n---\n", encoding="utf-8")
+    approval = commit_approval_and_handoff(repo, "malformed AC frontmatter")
+
+    result = run_script(repo, approval)
+
+    assert result.returncode == 2
+    assert diagnostic in result.stderr
     assert not (repo / ".worktrees/line-0007").exists()
 
 
@@ -596,6 +762,88 @@ def test_worktree_script_same_handoff_retry_is_idempotent(tmp_path: Path) -> Non
     worktree = repo / ".worktrees/line-0007"
     assert git(worktree, "rev-parse", "HEAD").stdout.strip() == handoff
     assert git(repo, "for-each-ref", "--format=%(refname)", "refs/heads/line/line-0007-implementation").stdout.count("\n") == 1
+
+
+@pytest.mark.parametrize("dirty_kind", ["tracked", "untracked"])
+def test_worktree_script_rejects_dirty_exact_h_idempotent_retry_without_mutation(
+    tmp_path: Path, dirty_kind: str
+) -> None:
+    repo, approval = make_approved_repo(tmp_path)
+    handoff = git(repo, "rev-parse", "HEAD").stdout.strip()
+    first = run_script(repo, approval)
+    assert first.returncode == 0, first.stderr
+    worktree = repo / ".worktrees/line-0007"
+    if dirty_kind == "tracked":
+        target = worktree / ".proofline/lines/line-0007/req-0007.md"
+        target.write_text(target.read_text(encoding="utf-8") + "dirty\n", encoding="utf-8")
+    else:
+        (worktree / "untracked.txt").write_text("dirty\n", encoding="utf-8")
+    status_before = git(
+        worktree, "status", "--porcelain=v1", "--untracked-files=all"
+    ).stdout
+    registration_before = git(repo, "worktree", "list", "--porcelain").stdout
+    refs_before = git(repo, "show-ref").stdout
+
+    retry = run_script(repo, approval)
+
+    assert retry.returncode == 2
+    assert "existing worktree is not clean" in retry.stderr
+    assert git(worktree, "status", "--porcelain=v1", "--untracked-files=all").stdout == status_before
+    assert git(repo, "worktree", "list", "--porcelain").stdout == registration_before
+    assert git(repo, "show-ref").stdout == refs_before
+    assert git(worktree, "rev-parse", "HEAD").stdout.strip() == handoff
+    assert git(worktree, "branch", "--show-current").stdout.strip() == (
+        "line/line-0007-implementation"
+    )
+
+
+@pytest.fixture(scope="module")
+def packaged_worktree_script(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    root = tmp_path_factory.mktemp("packaged-start-implementation")
+    dist = root / "dist"
+    build = subprocess.run(
+        ("uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)),
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert build.returncode == 0, build.stderr
+    wheel = next(dist.glob("proofline-*.whl"))
+    target = root / "create_worktree.py"
+    with zipfile.ZipFile(wheel) as archive:
+        target.write_bytes(
+            archive.read(
+                "proofline_home/skills/proofline-start-implementation/scripts/create_worktree.py"
+            )
+        )
+    assert target.read_bytes() == SCRIPT.read_bytes()
+    return target
+
+
+def test_packaged_worktree_script_pass_missing_ac_and_dirty_retry_parity(
+    tmp_path: Path, packaged_worktree_script: Path
+) -> None:
+    valid_repo, valid_approval = make_approved_repo(tmp_path / "valid")
+    valid = run_script(valid_repo, valid_approval, script=packaged_worktree_script)
+    assert valid.returncode == 0, valid.stderr
+
+    missing_repo, _ = make_approved_repo(tmp_path / "missing", handoff=False)
+    set_criteria_target(missing_repo, "create", ac_id="ac-9999", ac_status=None)
+    missing_approval = commit_approval_and_handoff(missing_repo, "missing packaged AC")
+    missing = run_script(missing_repo, missing_approval, script=packaged_worktree_script)
+    assert missing.returncode == 2
+    assert "ac-9999.md" in missing.stderr
+    assert not (missing_repo / ".worktrees/line-0007").exists()
+
+    worktree = valid_repo / ".worktrees/line-0007"
+    (worktree / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+    dirty = run_script(valid_repo, valid_approval, script=packaged_worktree_script)
+    assert dirty.returncode == 2
+    assert "existing worktree is not clean" in dirty.stderr
+    assert git(worktree, "rev-parse", "HEAD").stdout.strip() == git(
+        valid_repo, "rev-parse", "HEAD"
+    ).stdout.strip()
 
 
 def test_worktree_script_dirty_main_fails_without_mutation(tmp_path: Path) -> None:
