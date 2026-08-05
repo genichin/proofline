@@ -47,6 +47,8 @@ Review PASS 뒤 **사용자만** exact reviewed bytes의 approval authority를 �
 
 Current-validator migration인 Line 0020만 bootstrap exception으로 REQ·AC·Micro-SPEC combined exact draft를 같은 독립 review와 user-only approval 뒤 main의 status-only commit `S=A`에서 승인한다. Chronology는 `S=A < H < P < I < Q`이며 exact `H` 뒤 `S0/S`를 다시 만들지 않는다.
 
+이 authority 경계의 실행 가능한 read-only audit는 `proofline-approve-specification` skill의 `audit_approval_authority.py`를 사용한다. Helper는 외부 strict JSON review/user evidence를 소비하고 normal `S0/S` 또는 Line 0020 `pre-A/A`의 exact commit·tree, actor separation, direct-child와 status-only diff를 검사한다. Evidence schema와 bootstrap REQ·AC transition 범위는 [REQ와 AC 계약](requirements-and-criteria.md)이 소유한다. Helper는 evidence나 approval을 생성하지 않고 사용자를 인증하거나 대신하지 않는다.
+
 ### Implementation status
 
 `implementation_status`는 다음 세 값만 허용한다.

@@ -840,6 +840,9 @@ def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workfl
     resources = {
         "docs/contracts/line-delivery.md": "proofline_home/contracts/line-delivery.md",
         "docs/contracts/micro-spec-and-iqc.md": "proofline_home/contracts/micro-spec-and-iqc.md",
+        "docs/contracts/requirements-and-criteria.md": "proofline_home/contracts/requirements-and-criteria.md",
+        "skills/proofline-approve-specification/SKILL.md": "proofline_home/skills/proofline-approve-specification/SKILL.md",
+        "skills/proofline-approve-specification/scripts/audit_approval_authority.py": "proofline_home/skills/proofline-approve-specification/scripts/audit_approval_authority.py",
         "skills/proofline-start-implementation/SKILL.md": "proofline_home/skills/proofline-start-implementation/SKILL.md",
         "skills/proofline-start-implementation/scripts/create_worktree.py": "proofline_home/skills/proofline-start-implementation/scripts/create_worktree.py",
         "skills/proofline-run-iqc/SKILL.md": "proofline_home/skills/proofline-run-iqc/SKILL.md",

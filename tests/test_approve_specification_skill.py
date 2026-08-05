@@ -118,7 +118,7 @@ def test_approval_skill_has_valid_metadata_and_minimal_gate_policy() -> None:
     metadata = yaml.safe_load(frontmatter)
     assert metadata["name"] == "proofline-approve-specification"
     assert metadata["description"].startswith("Use when ")
-    assert metadata["version"] == "1.3.0"
+    assert metadata["version"] == "1.4.0"
     assert "~/.proofline/skills/proofline-approve-specification/" in body
     for required in [
         "## When to Use",
@@ -132,6 +132,10 @@ def test_approval_skill_has_valid_metadata_and_minimal_gate_policy() -> None:
         "사용자만",
         "S0",
         "S=A",
+        "proofline.independent-review/v1",
+        "proofline.user-approval/v1",
+        "audit_approval_authority.py",
+        "cryptographically authenticate",
     ]:
         assert required in body
 
@@ -154,6 +158,20 @@ def test_contract_separates_durable_acceptance_from_release_evidence() -> None:
         "version-independent product behavior",
         "새 version publication만으로 새 AC를 만들지 않는다",
         "Micro-SPEC implementation parameter와 IQC·DQC·release evidence",
+    ]:
+        assert required in text
+
+
+def test_contract_defines_external_exact_evidence_authority_gate() -> None:
+    text = CONTRACT.read_text(encoding="utf-8")
+    for required in [
+        "proofline.independent-review/v1",
+        "proofline.user-approval/v1",
+        "review_evidence_sha256",
+        "mutation_performed",
+        "operational identity label",
+        "암호학적으로 인증하지 않는다",
+        "read-only",
     ]:
         assert required in text
 
