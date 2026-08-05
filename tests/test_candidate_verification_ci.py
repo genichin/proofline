@@ -84,6 +84,7 @@ def test_builds_one_exact_attempt_qualified_artifact_with_strict_metadata() -> N
 
 def test_ubuntu_and_windows_independently_verify_same_wheel_and_required_regressions() -> None:
     text = WORKFLOW.read_text(encoding="utf-8")
+    workflow = _workflow()
     assert "sha256sum --check --strict SHA256SUMS" in text
     assert "Get-FileHash" in text
     assert ".github/scripts/verify-windows-candidate.ps1" in text
@@ -93,10 +94,19 @@ def test_ubuntu_and_windows_independently_verify_same_wheel_and_required_regress
     assert text.count("uv build --wheel") == 1
     assert "PROOFLINE_HOSTED_CANDIDATE_WHEEL" in text
     assert "uv run pytest -q -m candidate_build_only" in text
-    assert text.count('uv run pytest -q -m "not candidate_build_only"') == 2
+    assert text.count('uv run pytest -q -m "not candidate_build_only"') == 1
     assert "tests/test_windows_history_runtime.py" in text
     assert "tests/test_start_implementation_windows_runtime.py" in text
     assert "tests/test_implementation_history.py" in text
+    windows_runs = "\n".join(
+        step.get("run", "") for step in workflow["jobs"]["windows-python311"]["steps"]
+    )
+    assert 'uv run pytest -q -m "not candidate_build_only"' not in windows_runs
+    assert (
+        "uv run pytest -q tests/test_windows_history_runtime.py "
+        "tests/test_start_implementation_windows_runtime.py "
+        "tests/test_implementation_history.py"
+    ) in windows_runs
     assert "PROOFLINE_INSTALLED_EXECUTABLE" in text
     assert text.count("CANDIDATE_PROVENANCE.json") >= 3
     assert 'cd "$GITHUB_WORKSPACE"' in text

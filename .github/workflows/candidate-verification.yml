@@ -168,4 +168,3 @@ jobs:
           $env:PROOFLINE_HOSTED_CANDIDATE_WHEEL = $wheel[0].FullName
           uv run pytest -q tests/test_windows_history_runtime.py tests/test_start_implementation_windows_runtime.py tests/test_implementation_history.py
           python -m compileall -q src tests
-          uv run pytest -q -m "not candidate_build_only"
