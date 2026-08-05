@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import threading
@@ -27,6 +28,11 @@ def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProce
     )
 
 
+def unlink_git_object(path: Path) -> None:
+    path.chmod(path.stat().st_mode | stat.S_IWRITE)
+    path.unlink()
+
+
 @dataclass
 class HistoryRepo:
     path: Path
@@ -45,6 +51,7 @@ class HistoryRepo:
         git(path, "init", "-q", "-b", "main")
         git(path, "config", "user.email", "proofline@example.invalid")
         git(path, "config", "user.name", "ProofLine Test")
+        git(path, "config", "core.autocrlf", "false")
         git(path, "config", "gc.auto", "0")
         git(path, "config", "maintenance.auto", "false")
         repo = cls(path)
@@ -1272,7 +1279,7 @@ def test_missing_git_object_fails_closed(tmp_path: Path) -> None:
     blob = git(repo.path, "rev-parse", f'{repo.commits["baseline"]}:{LINE}').stdout.strip()
     object_path = repo.path / ".git/objects" / blob[:2] / blob[2:]
     assert object_path.is_file()
-    object_path.unlink()
+    unlink_git_object(object_path)
 
     assert_history_error(repo, LINE, "history.unavailable")
 
@@ -1373,7 +1380,7 @@ def run_source_with_env(
 ) -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(ROOT / "src")
-    if extra_env is None:
+    if extra_env is None and os.name != "nt":
         env["PATH"] = "/usr/bin:/bin"
     if extra_env:
         env.update(extra_env)
@@ -2125,7 +2132,7 @@ def parity_missing_object(tmp_path: Path) -> HistoryRepo:
     blob = git(repo.path, "rev-parse", f"{repo.commits['baseline']}:{LINE}").stdout.strip()
     object_path = repo.path / ".git/objects" / blob[:2] / blob[2:]
     assert object_path.is_file()
-    object_path.unlink()
+    unlink_git_object(object_path)
     return repo
 
 

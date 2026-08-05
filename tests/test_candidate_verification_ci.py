@@ -15,6 +15,9 @@ WORKFLOW = ROOT / ".github/workflows/candidate-verification.yml"
 WINDOWS_GATE = ROOT / ".github/scripts/verify-windows-candidate.ps1"
 HOME_INIT_TESTS = ROOT / "tests/test_home_init.py"
 WINDOWS_FIXTURE = ROOT / "tests/fixtures/valid-minimal"
+IMPLEMENTATION_HISTORY_TESTS = ROOT / "tests/test_implementation_history.py"
+WINDOWS_HISTORY_TESTS = ROOT / "tests/test_windows_history_runtime.py"
+LINE_INIT_TESTS = ROOT / "tests/test_line_init.py"
 JOBS = {"build-candidate", "ubuntu-python311", "windows-python311"}
 
 
@@ -142,6 +145,7 @@ def test_windows_gate_fixture_is_persisted_as_valid_terminal_history(tmp_path: P
     subprocess.run(("git", "init", "-q", "-b", "main"), cwd=project, check=True)
     subprocess.run(("git", "config", "user.name", "ProofLine Gate"), cwd=project, check=True)
     subprocess.run(("git", "config", "user.email", "proofline@example.invalid"), cwd=project, check=True)
+    subprocess.run(("git", "config", "core.autocrlf", "false"), cwd=project, check=True)
     subprocess.run(("git", "add", "-A"), cwd=project, check=True)
     subprocess.run(("git", "commit", "-qm", "fixture baseline"), cwd=project, check=True)
     environment = os.environ.copy()
@@ -161,3 +165,15 @@ def test_workflow_and_gate_preserve_governance_and_home_boundaries() -> None:
     home = HOME_INIT_TESTS.read_text(encoding="utf-8")
     assert 'monkeypatch.setenv("HOME", str(home))' in home
     assert 'monkeypatch.setenv("USERPROFILE", str(home))' in home
+
+
+def test_windows_consumer_history_harness_is_platform_neutral() -> None:
+    implementation = IMPLEMENTATION_HISTORY_TESTS.read_text(encoding="utf-8")
+    windows_runtime = WINDOWS_HISTORY_TESTS.read_text(encoding="utf-8")
+    line_init = LINE_INIT_TESTS.read_text(encoding="utf-8")
+    assert 'git(path, "config", "core.autocrlf", "false")' in implementation
+    assert 'if extra_env is None and os.name != "nt":' in implementation
+    assert "path.chmod(path.stat().st_mode | stat.S_IWRITE)" in implementation
+    assert "sys.stdout.buffer.write" in windows_runtime
+    assert "print('ok')" not in windows_runtime
+    assert 'fcntl = pytest.importorskip("fcntl")' in line_init

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import fcntl
 import os
 import shutil
 import subprocess
@@ -10,6 +9,8 @@ from pathlib import Path
 
 import pytest
 import yaml
+
+fcntl = pytest.importorskip("fcntl")
 
 from proofline import line_writer
 from proofline.identity_ledger import decode_ledger, encode_ledger

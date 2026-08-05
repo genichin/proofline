@@ -91,7 +91,10 @@ def test_git_capture_handles_eof_exit_race_and_closes_pipes(
     processes: list[subprocess.Popen[bytes]] = []
 
     def spawn(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
-        process = original((sys.executable, "-c", "print('ok')"), **kwargs)
+        process = original(
+            (sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'ok\\n')"),
+            **kwargs,
+        )
         processes.append(process)
         return process
 
