@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -344,6 +345,47 @@ def test_dqc_git_runner_ignores_inherited_git_routing_and_config(
 
     assert Path(top).resolve() == requested.resolve()
     assert not marker.exists()
+
+
+def test_dqc_status_neutralizes_included_repository_clean_filter(tmp_path: Path) -> None:
+    repo, m, q, v = make_candidate(tmp_path)
+    victim = repo / "base.txt"
+    marker = tmp_path / "clean-filter-ran"
+    filter_program = tmp_path / "evil_clean.py"
+    filter_program.write_text(
+        "import pathlib, sys\n"
+        f"pathlib.Path({str(marker)!r}).write_text('ran', encoding='utf-8')\n"
+        "sys.stdout.buffer.write(sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    included = tmp_path / "included-filter.config"
+    command_parts = (sys.executable, str(filter_program))
+    command = (
+        subprocess.list2cmdline(command_parts)
+        if os.name == "nt"
+        else shlex.join(command_parts)
+    )
+    git(repo, "config", "--file", str(included), "filter.evil.clean", command)
+    git(repo, "config", "--file", str(included), "filter.evil.required", "true")
+    git(repo, "config", "--local", "include.path", str(included))
+    (repo / ".gitattributes").write_text("base.txt filter=evil\n", encoding="utf-8")
+    git(repo, "add", ".gitattributes")
+    git(repo, "commit", "--amend", "--no-edit", "-q")
+    amended_v = git(repo, "rev-parse", "HEAD")
+    marker.unlink(missing_ok=True)
+    stat = victim.stat()
+    os.utime(victim, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+    assert git(repo, "status", "--porcelain=v1", "--untracked-files=all") == ""
+    assert marker.exists()
+    marker.unlink()
+    stat = victim.stat()
+    os.utime(victim, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+
+    result = run_helper(repo, m, q, amended_v)
+
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists()
+    assert victim.read_text(encoding="utf-8") == "base\n"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group regression")

@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import time
@@ -84,6 +85,7 @@ def make_repo(
     mode: str,
     approval_change: str = "status",
     bootstrap_criteria: str | None = None,
+    tracked_filter_victim: bool = False,
 ) -> tuple[Path, str, str]:
     repo = tmp_path / "project"
     repo.mkdir(parents=True)
@@ -101,6 +103,9 @@ def make_repo(
                               ("ac-0013", "active"), ("ac-0014", "active")):
             (criteria_dir / f"{ac_id}.md").write_text(bootstrap_ac(ac_id, status), encoding="utf-8")
     ms.write_text(micro_spec("draft"), encoding="utf-8")
+    if tracked_filter_victim:
+        (repo / ".gitattributes").write_text("victim filter=evil\n", encoding="utf-8")
+        (repo / "victim").write_text("unchanged victim\n", encoding="utf-8")
     target = commit(repo, "exact draft target")
 
     if mode == "bootstrap":
@@ -716,6 +721,105 @@ def test_authority_gate_ignores_inherited_git_routing_and_external_config(
     assert result.returncode == 0, result.stderr
     assert f"target={target} approval={approval}" in result.stdout
     assert not marker.exists()
+
+
+def configure_marker_clean_filter(
+    tmp_path: Path, repo: Path, *, included: bool
+) -> Path:
+    marker = tmp_path / "filter-command-ran"
+    filter_program = tmp_path / "marker-filter.py"
+    filter_program.write_text(
+        "import pathlib, sys\n"
+        "marker = pathlib.Path(sys.argv[1])\n"
+        "payload = sys.stdin.buffer.read()\n"
+        "marker.write_text('executed', encoding='utf-8')\n"
+        "sys.stdout.buffer.write(payload)\n",
+        encoding="utf-8",
+    )
+    command_parts = (sys.executable, str(filter_program), str(marker))
+    command = (
+        subprocess.list2cmdline(command_parts)
+        if os.name == "nt"
+        else shlex.join(command_parts)
+    )
+    if included:
+        included_config = tmp_path / "included-filter.config"
+        git(repo, "config", "--file", str(included_config), "filter.evil.clean", command)
+        git(repo, "config", "--file", str(included_config), "filter.evil.required", "true")
+        git(repo, "config", "--local", "include.path", str(included_config))
+    else:
+        git(repo, "config", "--local", "filter.evil.clean", command)
+        git(repo, "config", "--local", "filter.evil.required", "true")
+    return marker
+
+
+def make_stat_dirty(path: Path) -> None:
+    stat = path.stat()
+    os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 2_000_000_000))
+
+
+def test_status_filter_overrides_cover_every_configured_driver_in_sorted_order(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "project"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "config", "--local", "filter.zeta.process", "dangerous-process")
+    git(repo, "config", "--local", "filter.alpha.smudge", "dangerous-smudge")
+    git(repo, "config", "--local", "filter.middle.required", "true")
+    module = load_authority_module()
+
+    assert module.status_filter_overrides(repo) == (
+        "-c", "filter.alpha.clean=",
+        "-c", "filter.alpha.smudge=",
+        "-c", "filter.alpha.process=",
+        "-c", "filter.alpha.required=false",
+        "-c", "filter.middle.clean=",
+        "-c", "filter.middle.smudge=",
+        "-c", "filter.middle.process=",
+        "-c", "filter.middle.required=false",
+        "-c", "filter.zeta.clean=",
+        "-c", "filter.zeta.smudge=",
+        "-c", "filter.zeta.process=",
+        "-c", "filter.zeta.required=false",
+    )
+
+
+@pytest.mark.parametrize("included", [False, True], ids=("local", "local-include"))
+def test_authority_status_neutralizes_repository_clean_filters(
+    tmp_path: Path, included: bool
+) -> None:
+    repo, target, approval = make_repo(
+        tmp_path, mode="normal", tracked_filter_victim=True
+    )
+    review, user_approval = write_evidence(tmp_path, repo, target)
+    marker = configure_marker_clean_filter(tmp_path, repo, included=included)
+    victim = repo / "victim"
+
+    make_stat_dirty(victim)
+    assert git(repo, "status", "--porcelain=v1", "--untracked-files=all") == ""
+    assert marker.read_text(encoding="utf-8") == "executed"
+    marker.unlink()
+    make_stat_dirty(victim)
+    head_before = git(repo, "rev-parse", "HEAD")
+    refs_before = git(repo, "show-ref")
+    victim_before = victim.read_bytes()
+
+    result = run_gate(SCRIPT, repo, "normal", target, approval, review, user_approval)
+
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists()
+    assert git(repo, "rev-parse", "HEAD") == head_before
+    assert git(repo, "show-ref") == refs_before
+    assert victim.read_bytes() == victim_before
+    assert git(
+        repo,
+        "-c", "filter.evil.clean=",
+        "-c", "filter.evil.smudge=",
+        "-c", "filter.evil.process=",
+        "-c", "filter.evil.required=false",
+        "status", "--porcelain=v1", "--untracked-files=all",
+    ) == ""
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group regression")

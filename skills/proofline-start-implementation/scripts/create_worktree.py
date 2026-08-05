@@ -180,7 +180,10 @@ def _capture_validate_process(
 
 
 def _run_git(
-    repo: Path, *args: str, timeout: float = GIT_READ_TIMEOUT_SECONDS
+    repo: Path,
+    *args: str,
+    timeout: float = GIT_READ_TIMEOUT_SECONDS,
+    config_overrides: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[bytes]:
     environment = {
         key: value
@@ -203,6 +206,7 @@ def _run_git(
         "-c", "core.fsmonitor=false",
         "-c", f"core.hooksPath={os.devnull}",
         "-c", "diff.external=",
+        *config_overrides,
         "-C", str(repo),
         *args,
     )
@@ -300,10 +304,57 @@ def _run_git(
     )
 
 
+def _filter_overrides(
+    repo: Path, *, timeout: float = GIT_READ_TIMEOUT_SECONDS
+) -> tuple[str, ...]:
+    result = _run_git(
+        repo,
+        "config", "--local", "--includes", "--null", "--name-only",
+        "--get-regexp", r"^filter\..*\.(clean|smudge|process|required)$",
+        timeout=timeout,
+    )
+    if result.returncode == 1 and not result.stdout and not result.stderr:
+        return ()
+    if result.returncode != 0:
+        raise WorkflowError("repository filter configuration enumeration failed")
+    try:
+        text = result.stdout.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise WorkflowError("repository filter configuration is not UTF-8") from exc
+    if not text or not text.endswith("\0"):
+        raise WorkflowError("repository filter configuration is malformed")
+    keys = text[:-1].split("\0")
+    drivers: set[str] = set()
+    for key in keys:
+        match = re.fullmatch(
+            r"filter\.(.+)\.(?:clean|smudge|process|required)", key, re.IGNORECASE
+        )
+        if match is None:
+            raise WorkflowError("repository filter configuration is malformed")
+        driver = match.group(1)
+        if "=" in driver or any(ord(character) < 32 or ord(character) == 127 for character in driver):
+            raise WorkflowError("repository filter driver name is unsafe")
+        drivers.add(driver)
+    return tuple(
+        argument
+        for driver in sorted(drivers)
+        for argument in (
+            "-c", f"filter.{driver}.clean=",
+            "-c", f"filter.{driver}.smudge=",
+            "-c", f"filter.{driver}.process=",
+            "-c", f"filter.{driver}.required=false",
+        )
+    )
+
+
 def git(
     repo: Path, *args: str, check: bool = True, timeout: float = GIT_READ_TIMEOUT_SECONDS
 ) -> subprocess.CompletedProcess[str]:
-    raw = _run_git(repo, *args, timeout=timeout)
+    neutralize = bool(args) and (
+        args[0] == "status" or (len(args) > 1 and args[:2] == ("worktree", "add"))
+    )
+    overrides = _filter_overrides(repo, timeout=timeout) if neutralize else ()
+    raw = _run_git(repo, *args, timeout=timeout, config_overrides=overrides)
     try:
         stdout = raw.stdout.decode("utf-8")
         stderr = raw.stderr.decode("utf-8")
@@ -764,6 +815,10 @@ def create_worktree(
         raise WorkflowError("created worktree HEAD does not match handoff commit")
     if git(worktree, "branch", "--show-current").stdout.strip() != branch:
         raise WorkflowError("created worktree branch does not match")
+    if git(
+        worktree, "status", "--porcelain=v1", "--untracked-files=all"
+    ).stdout:
+        raise WorkflowError("created worktree is not clean")
     if git(repo, "branch", "--show-current").stdout.strip() != "main":
         raise WorkflowError("main checkout branch changed")
     if git(repo, "status", "--porcelain=v1", "--untracked-files=all").stdout:

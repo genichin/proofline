@@ -132,7 +132,9 @@ _UniqueLoader.add_constructor(
 )
 
 
-def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+def _run_git(
+    repo: Path, *args: str, config_overrides: tuple[str, ...] = ()
+) -> subprocess.CompletedProcess[bytes]:
     environment = {
         key: value
         for key, value in os.environ.items()
@@ -154,6 +156,7 @@ def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
         "-c", "core.fsmonitor=false",
         "-c", f"core.hooksPath={os.devnull}",
         "-c", "diff.external=",
+        *config_overrides,
         "-C", str(repo),
         *args,
     )
@@ -255,8 +258,49 @@ def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
     )
 
 
+def _filter_overrides(repo: Path) -> tuple[str, ...]:
+    result = _run_git(
+        repo,
+        "config", "--local", "--includes", "--null", "--name-only",
+        "--get-regexp", r"^filter\..*\.(clean|smudge|process|required)$",
+    )
+    if result.returncode == 1 and not result.stdout and not result.stderr:
+        return ()
+    if result.returncode != 0:
+        raise PreflightError("repository filter configuration enumeration failed")
+    try:
+        text = result.stdout.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise PreflightError("repository filter configuration is not UTF-8") from exc
+    if not text or not text.endswith("\0"):
+        raise PreflightError("repository filter configuration is malformed")
+    keys = text[:-1].split("\0")
+    drivers: set[str] = set()
+    for key in keys:
+        match = re.fullmatch(
+            r"filter\.(.+)\.(?:clean|smudge|process|required)", key, re.IGNORECASE
+        )
+        if match is None:
+            raise PreflightError("repository filter configuration is malformed")
+        driver = match.group(1)
+        if "=" in driver or any(ord(character) < 32 or ord(character) == 127 for character in driver):
+            raise PreflightError("repository filter driver name is unsafe")
+        drivers.add(driver)
+    return tuple(
+        argument
+        for driver in sorted(drivers)
+        for argument in (
+            "-c", f"filter.{driver}.clean=",
+            "-c", f"filter.{driver}.smudge=",
+            "-c", f"filter.{driver}.process=",
+            "-c", f"filter.{driver}.required=false",
+        )
+    )
+
+
 def git(repo: Path, *args: str) -> str:
-    result = _run_git(repo, *args)
+    overrides = _filter_overrides(repo) if args and args[0] == "status" else ()
+    result = _run_git(repo, *args, config_overrides=overrides)
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", errors="replace").strip()
         raise PreflightError(f"git read failed: {detail or args[0]}")

@@ -26,6 +26,10 @@ GIT_READ_TIMEOUT_SECONDS = 5
 GIT_READ_OUTPUT_LIMIT = 8 * 1024 * 1024
 PROCESS_CLEANUP_GRACE_SECONDS = 0.25
 LINE_RE = re.compile(r"line-[0-9]{4}\Z")
+FILTER_KEY_RE = re.compile(
+    r"filter\.([^\x00-\x1f\x7f=]+)\.(?:clean|process|smudge|required)\Z",
+    re.IGNORECASE,
+)
 REVIEW_SCHEMA = "proofline.independent-review/v1"
 USER_SCHEMA = "proofline.user-approval/v1"
 REVIEW_KEYS = {
@@ -234,6 +238,63 @@ def git(repo: Path, *args: str, scenario: str = "GIT_OBJECT") -> str:
         detail = stderr.strip() or stdout.strip() or "git command failed"
         fail(scenario, detail)
     return stdout
+
+
+def status_filter_overrides(repo: Path) -> tuple[str, ...]:
+    try:
+        result = run_git(
+            repo,
+            "config",
+            "--local",
+            "--includes",
+            "--null",
+            "--name-only",
+            "--get-regexp",
+            r"^filter\..*\.(clean|process|smudge|required)$",
+        )
+        stdout = decode_git(result.stdout)
+        stderr = decode_git(result.stderr)
+    except RuntimeError as exc:
+        fail("REPOSITORY", str(exc))
+    if result.returncode == 1 and not stdout and not stderr:
+        return ()
+    if result.returncode != 0:
+        detail = stderr.strip() or stdout.strip() or "git config enumeration failed"
+        fail("REPOSITORY", detail)
+    if not stdout or not stdout.endswith("\0"):
+        fail("REPOSITORY", "git filter configuration output is malformed")
+
+    drivers: set[str] = set()
+    for key in stdout[:-1].split("\0"):
+        if not key:
+            fail("REPOSITORY", "git filter configuration output is malformed")
+        match = FILTER_KEY_RE.fullmatch(key)
+        if match is None:
+            fail("REPOSITORY", "git filter configuration key is malformed")
+        drivers.add(match.group(1))
+
+    overrides: list[str] = []
+    for driver in sorted(drivers):
+        overrides.extend(
+            (
+                "-c", f"filter.{driver}.clean=",
+                "-c", f"filter.{driver}.smudge=",
+                "-c", f"filter.{driver}.process=",
+                "-c", f"filter.{driver}.required=false",
+            )
+        )
+    return tuple(overrides)
+
+
+def worktree_status(repo: Path) -> str:
+    return git(
+        repo,
+        *status_filter_overrides(repo),
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        scenario="REPOSITORY",
+    )
 
 
 def exact_actor(value: str, label: str) -> str:
@@ -584,7 +645,7 @@ def run(args: argparse.Namespace) -> None:
     review, review_raw = load_envelope(review_path, REVIEW_KEYS, "review")
     user, _ = load_envelope(user_path, USER_KEYS, "user approval")
 
-    status_before = git(repo, "status", "--porcelain=v1", "--untracked-files=all")
+    status_before = worktree_status(repo)
     head_before = git(repo, "rev-parse", "HEAD").strip()
     refs_before = git(repo, "show-ref")
     if status_before:
@@ -611,7 +672,7 @@ def run(args: argparse.Namespace) -> None:
 
     if (
         git(repo, "rev-parse", "HEAD").strip() != head_before
-        or git(repo, "status", "--porcelain=v1", "--untracked-files=all") != status_before
+        or worktree_status(repo) != status_before
         or git(repo, "show-ref") != refs_before
     ):
         fail("REPOSITORY_MUTATION", "repository HEAD, status, or refs changed during audit")

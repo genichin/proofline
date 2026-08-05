@@ -1,6 +1,7 @@
 from pathlib import Path
 import importlib.util
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -273,6 +274,48 @@ def test_worktree_git_runner_ignores_inherited_git_routing_and_config(
 
     assert Path(top).resolve() == requested.resolve()
     assert not marker.exists()
+
+
+def test_start_neutralizes_included_repository_filters_for_status_and_checkout(
+    tmp_path: Path,
+) -> None:
+    repo, _ = make_approved_repo(tmp_path, handoff=False)
+    attributes = repo / ".gitattributes"
+    victim = repo / "victim.txt"
+    attributes.write_text("victim.txt filter=evil\n", encoding="utf-8")
+    victim.write_text("unchanged\n", encoding="utf-8")
+    git(repo, "add", ".gitattributes", "victim.txt")
+    git(repo, "commit", "-qm", "approval with filtered victim")
+    approval = git(repo, "rev-parse", "HEAD").stdout.strip()
+    commit_handoff(repo)
+
+    marker = tmp_path / "filter-ran"
+    filter_program = tmp_path / "evil_filter.py"
+    filter_program.write_text(
+        "import pathlib, sys\n"
+        f"pathlib.Path({str(marker)!r}).write_text('ran', encoding='utf-8')\n"
+        "sys.stdout.buffer.write(sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    command_parts = (sys.executable, str(filter_program))
+    command = (
+        subprocess.list2cmdline(command_parts)
+        if os.name == "nt"
+        else shlex.join(command_parts)
+    )
+    included = tmp_path / "included-filter.config"
+    for key in ("clean", "smudge", "process"):
+        git(repo, "config", "--file", str(included), f"filter.evil.{key}", command)
+    git(repo, "config", "--file", str(included), "filter.evil.required", "true")
+    git(repo, "config", "--local", "include.path", str(included))
+    os.utime(victim, (time.time() + 10, time.time() + 10))
+
+    result = run_script(repo, approval)
+
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists()
+    assert victim.read_text(encoding="utf-8") == "unchanged\n"
+    assert (repo / ".worktrees/line-0007/victim.txt").read_text(encoding="utf-8") == "unchanged\n"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group regression")
