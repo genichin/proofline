@@ -39,9 +39,11 @@ def _line_text(line_id: str, status: str) -> str:
     )
 
 
-def _ms_text(*, status: str, spec_status: str = "approved") -> str:
+def _ms_text(
+    *, status: str, spec_status: str = "approved", ms_id: str = "ms-0007-001"
+) -> str:
     return (
-        '---\nid: "ms-0007-001"\nparent_req: "req-0007"\ncriteria:\n'
+        f'---\nid: "{ms_id}"\nparent_req: "req-0007"\ncriteria:\n'
         f'  - "ac-0001"\nspec_status: {spec_status}\nimplementation_status: {status}\n'
         "---\n\n# Micro-SPEC\n\n## Scope\n\n범위.\n\n## Implementation\n\n구현."
         "\n\n## Verification\n\n검증.\n"
@@ -76,6 +78,30 @@ def make_candidate(
         ms.parent.mkdir(parents=True)
         line.write_text(_line_text("line-0007", "not_started"), encoding="utf-8")
         ms.write_text(_ms_text(status="not_started"), encoding="utf-8")
+        if defect in {"withdrawn-retained-iqc", "withdrawn-mismatched-iqc"}:
+            withdrawn_ms = ms.parent / "ms-0007-002.md"
+            withdrawn_ms.write_text(
+                _ms_text(
+                    status="implemented",
+                    ms_id="ms-0007-002",
+                ),
+                encoding="utf-8",
+            )
+            withdrawn_binding = (
+                "ms-0007-999" if defect == "withdrawn-mismatched-iqc" else "ms-0007-002"
+            )
+            (ms.parent / "iqc-0007-002.md").write_text(
+                "---\n"
+                'id: "iqc-0007-002"\n'
+                f'micro_spec: "{withdrawn_binding}"\n'
+                "---\n\n# Historical IQC\n",
+                encoding="utf-8",
+            )
+        if defect == "unmatched-iqc":
+            (ms.parent / "iqc-0007-002.md").write_text(
+                "---\nid: \"iqc-0007-002\"\nmicro_spec: \"ms-0007-002\"\n---\n",
+                encoding="utf-8",
+            )
         specification = commit(repo, "approved specification")
         line.write_text(_line_text("line-0007", "in_progress"), encoding="utf-8")
         commit(repo, "Line handoff")
@@ -90,6 +116,15 @@ def make_candidate(
             encoding="utf-8",
         )
         ms.write_text(_ms_text(status="implemented"), encoding="utf-8")
+        if defect in {"withdrawn-retained-iqc", "withdrawn-mismatched-iqc"}:
+            (ms.parent / "ms-0007-002.md").write_text(
+                _ms_text(
+                    status="implemented",
+                    spec_status="withdrawn",
+                    ms_id="ms-0007-002",
+                ),
+                encoding="utf-8",
+            )
         iqc = repo / ".proofline/lines/line-0007/micro-specs/iqc-0007-001.md"
         if defect != "missing-iqc":
             iqc_result = "failed" if defect == "failed-iqc" else "passed"
@@ -209,6 +244,19 @@ def test_pre_admission_helper_passes_exact_m_q_v_without_mutation(tmp_path: Path
     assert snapshot(repo) == before
 
 
+def test_pre_admission_helper_allows_canonical_retained_iqc_for_withdrawn_ms_without_mutation(
+    tmp_path: Path,
+) -> None:
+    repo, m, q, v = make_candidate(tmp_path, defect="withdrawn-retained-iqc")
+    before = snapshot(repo)
+
+    result = run_helper(repo, m, q, v)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"pre-admission: passed M={m} Q={q} V={v}"
+    assert snapshot(repo) == before
+
+
 @pytest.mark.parametrize(
     ("defect", "diagnostic"),
     [
@@ -220,6 +268,8 @@ def test_pre_admission_helper_passes_exact_m_q_v_without_mutation(tmp_path: Path
         ("failed-iqc", "quality head IQC coverage/binding invalid: IQC iqc-0007-001 is not passed"),
         ("mismatched-iqc", "quality head IQC coverage/binding invalid: IQC iqc-0007-001 identity mismatch"),
         ("stale-iqc", "quality head IQC coverage/binding invalid: IQC iqc-0007-001 implementation binding is stale or invalid"),
+        ("withdrawn-mismatched-iqc", "quality head IQC coverage/binding invalid: IQC iqc-0007-002 identity mismatch"),
+        ("unmatched-iqc", "quality head IQC coverage/binding invalid: unmatched IQC artifact"),
         ("multi-line", "quality head contains multiple Lines"),
         ("unrelated-quality-change", "quality head transition contains unrelated paths"),
         ("not-quality-transition", "quality head is not the exact first-parent quality transition"),

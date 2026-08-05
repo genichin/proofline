@@ -61,6 +61,7 @@ EXPECTED_IDS = {
     "dqc.pass-then-failed-delivery.fail",
     "dqc.pass-then-blocked-delivery.fail",
     "preflight.valid.pass",
+    "preflight.withdrawn-retained-iqc.pass",
     "preflight.arbitrary-q.fail",
     "preflight.not-verifying.fail",
     "preflight.missing-iqc.fail",
@@ -72,7 +73,7 @@ def test_registry_has_fixed_approved_scenario_id_set() -> None:
 
     assert registry.schema_version == 1
     assert {scenario.scenario_id for scenario in registry.scenarios} == EXPECTED_IDS
-    assert len(registry.scenarios) == len(EXPECTED_IDS) == 49
+    assert len(registry.scenarios) == len(EXPECTED_IDS) == 50
 
 
 def test_registry_rejects_duplicate_scenario_ids(tmp_path: Path) -> None:

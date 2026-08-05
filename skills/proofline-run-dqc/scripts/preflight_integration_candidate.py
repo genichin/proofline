@@ -243,6 +243,7 @@ def validate_quality_head(repo: Path, line_id: str, q: str) -> None:
         raise PreflightError("quality head IQC coverage/binding invalid: no target Micro-SPEC")
 
     required_iqc_paths: set[str] = set()
+    canonical_iqc_paths: set[str] = set()
     for ms_path in canonical_ms_paths:
         ms_id = Path(ms_path).stem
         suffix = MS_ID.fullmatch(ms_id)
@@ -267,14 +268,25 @@ def validate_quality_head(repo: Path, line_id: str, q: str) -> None:
             raise PreflightError(
                 f"quality head IQC coverage/binding invalid: Micro-SPEC {ms_id} identity mismatch"
             )
+        iqc_id = ms_id.replace("ms-", "iqc-", 1)
+        iqc_path = f"{micro_directory}{iqc_id}.md"
+        canonical_iqc_paths.add(iqc_path)
         if ms_state.get("spec_status") == "withdrawn":
+            retained_iqc_text = object_text(repo, q, iqc_path, q_paths)
+            if retained_iqc_text is not None:
+                retained_iqc_state, _ = frontmatter(retained_iqc_text, f"IQC {iqc_id}")
+                if (
+                    retained_iqc_state.get("id") != iqc_id
+                    or retained_iqc_state.get("micro_spec") != ms_id
+                ):
+                    raise PreflightError(
+                        f"quality head IQC coverage/binding invalid: IQC {iqc_id} identity mismatch"
+                    )
             continue
         if ms_state.get("spec_status") != "approved" or ms_state.get("implementation_status") != "implemented":
             raise PreflightError(
                 f"quality head IQC coverage/binding invalid: Micro-SPEC {ms_id} is not approved and implemented"
             )
-        iqc_id = ms_id.replace("ms-", "iqc-", 1)
-        iqc_path = f"{micro_directory}{iqc_id}.md"
         required_iqc_paths.add(iqc_path)
         iqc_text = object_text(repo, q, iqc_path, q_paths)
         if iqc_text is None:
@@ -348,7 +360,7 @@ def validate_quality_head(repo: Path, line_id: str, q: str) -> None:
     if not any(allowed_iqc.fullmatch(path) for path in quality_changes):
         raise PreflightError("quality head is not the exact first-parent quality transition")
     extra_iqcs = sorted(
-        path for path in q_paths if path.startswith(micro_directory) and "/iqc-" in path and path not in required_iqc_paths
+        path for path in q_paths if path.startswith(micro_directory) and "/iqc-" in path and path not in canonical_iqc_paths
     )
     if extra_iqcs:
         raise PreflightError("quality head IQC coverage/binding invalid: unmatched IQC artifact")

@@ -524,6 +524,7 @@ def _preflight_scenario(
         "preflight.arbitrary-q.fail": "arbitrary",
         "preflight.not-verifying.fail": "not-verifying",
         "preflight.missing-iqc.fail": "missing-iqc",
+        "preflight.withdrawn-retained-iqc.pass": "withdrawn-retained-iqc",
     }
     repo, main, line_head, candidate = module.make_candidate(
         workspace, defect=defects[scenario_id]
