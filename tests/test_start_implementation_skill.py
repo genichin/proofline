@@ -318,6 +318,71 @@ def test_start_neutralizes_included_repository_filters_for_status_and_checkout(
     assert (repo / ".worktrees/line-0007/victim.txt").read_text(encoding="utf-8") == "unchanged\n"
 
 
+def test_start_neutralizes_linked_worktree_conditional_filter_during_checkout(
+    tmp_path: Path,
+) -> None:
+    repo, _ = make_approved_repo(tmp_path, handoff=False)
+    raw_victim = b"raw blob bytes\x00\r\n"
+    (repo / ".gitattributes").write_text("victim filter=evil\n", encoding="utf-8")
+    (repo / "victim").write_bytes(raw_victim)
+    git(repo, "add", ".gitattributes", "victim")
+    git(repo, "commit", "-qm", "approval with conditionally filtered victim")
+    approval = git(repo, "rev-parse", "HEAD").stdout.strip()
+    handoff = commit_handoff(repo)
+
+    marker = tmp_path / "conditional-filter-ran"
+    filter_program = tmp_path / "conditional_filter.py"
+    filter_program.write_text(
+        "import pathlib, sys\n"
+        f"pathlib.Path({str(marker)!r}).write_text('ran', encoding='utf-8')\n"
+        "sys.stdout.buffer.write(sys.stdin.buffer.read())\n",
+        encoding="utf-8",
+    )
+    command_parts = (sys.executable, str(filter_program))
+    command = (
+        subprocess.list2cmdline(command_parts)
+        if os.name == "nt"
+        else shlex.join(command_parts)
+    )
+    included = tmp_path / "linked-worktree-filter.config"
+    git(repo, "config", "--file", str(included), "filter.evil.smudge", command)
+    git(repo, "config", "--file", str(included), "filter.evil.required", "true")
+    git(
+        repo,
+        "config",
+        "--local",
+        "includeIf.onbranch:line/line-0007-implementation.path",
+        str(included),
+    )
+    main_head = git(repo, "rev-parse", "HEAD").stdout.strip()
+    main_branch = git(repo, "branch", "--show-current").stdout.strip()
+    main_victim = (repo / "victim").read_bytes()
+
+    result = run_script(repo, approval)
+
+    assert result.returncode == 0, result.stderr
+    worktree = repo / ".worktrees/line-0007"
+    assert not marker.exists()
+    assert (worktree / "victim").read_bytes() == raw_victim
+    assert git(worktree, "rev-parse", "HEAD").stdout.strip() == handoff
+    assert git(worktree, "branch", "--show-current").stdout.strip() == (
+        "line/line-0007-implementation"
+    )
+    assert git(
+        worktree,
+        "-c", "filter.evil.clean=",
+        "-c", "filter.evil.smudge=",
+        "-c", "filter.evil.process=",
+        "-c", "filter.evil.required=false",
+        "status", "--porcelain=v1", "--untracked-files=all",
+    ).stdout == ""
+    assert not marker.exists()
+    assert git(repo, "rev-parse", "HEAD").stdout.strip() == main_head
+    assert git(repo, "branch", "--show-current").stdout.strip() == main_branch == "main"
+    assert git(repo, "status", "--porcelain=v1", "--untracked-files=all").stdout == ""
+    assert (repo / "victim").read_bytes() == main_victim == raw_victim
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process-group regression")
 def test_worktree_git_runner_kills_descendant_holding_pipes_after_parent_exit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch

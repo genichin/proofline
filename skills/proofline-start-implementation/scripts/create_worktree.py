@@ -351,7 +351,8 @@ def git(
     repo: Path, *args: str, check: bool = True, timeout: float = GIT_READ_TIMEOUT_SECONDS
 ) -> subprocess.CompletedProcess[str]:
     neutralize = bool(args) and (
-        args[0] == "status" or (len(args) > 1 and args[:2] == ("worktree", "add"))
+        args[0] in {"reset", "status"}
+        or (len(args) > 1 and args[:2] == ("worktree", "add"))
     )
     overrides = _filter_overrides(repo, timeout=timeout) if neutralize else ()
     raw = _run_git(repo, *args, timeout=timeout, config_overrides=overrides)
@@ -807,7 +808,28 @@ def create_worktree(
         raise WorkflowError("worktree branch registration collision")
 
     git(
-        repo, "worktree", "add", str(relative_path), "-b", branch, handoff_commit,
+        repo, "worktree", "add", "--no-checkout", str(relative_path),
+        "-b", branch, handoff_commit,
+        timeout=GIT_WORKTREE_TIMEOUT_SECONDS,
+    )
+
+    created_root = Path(
+        git(worktree, "rev-parse", "--show-toplevel").stdout.strip()
+    ).resolve(strict=True)
+    if created_root != worktree:
+        raise WorkflowError("created worktree root does not match target path")
+    created_gitdir = Path(
+        git(worktree, "rev-parse", "--absolute-git-dir").stdout.strip()
+    ).resolve(strict=True)
+    if not created_gitdir.is_dir():
+        raise WorkflowError("created worktree gitdir is invalid")
+    if git(worktree, "rev-parse", "HEAD").stdout.strip() != handoff_commit:
+        raise WorkflowError("created worktree HEAD does not match handoff commit")
+    if git(worktree, "branch", "--show-current").stdout.strip() != branch:
+        raise WorkflowError("created worktree branch does not match")
+
+    git(
+        worktree, "reset", "--hard", handoff_commit,
         timeout=GIT_WORKTREE_TIMEOUT_SECONDS,
     )
 
