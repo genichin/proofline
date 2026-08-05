@@ -402,6 +402,30 @@ def _history(
     return commits, [_tree_paths(session, commit) for commit in commits]
 
 
+def _is_line_quality_head(
+    session: _GitSession, line_path: str, line_head: str
+) -> bool:
+    line_head_paths = _tree_paths(session, line_head)
+    try:
+        line_state = _frontmatter(_file(session, line_head, line_path, line_head_paths) or b"")
+        line_head_changes = _git(
+            session, "diff", "--name-only", "--no-renames", f"{line_head}^1", line_head
+        ).decode("utf-8").splitlines()
+    except (HistoryUnavailable, UnicodeError):
+        return False
+    line_directory = line_path.rsplit("/", 1)[0]
+    quality_paths = [
+        path
+        for path in line_head_changes
+        if IQC_PATH.fullmatch(path) and path.startswith(f"{line_directory}/micro-specs/")
+    ]
+    return (
+        line_state.get("execution_status") == "verifying"
+        and line_path in line_head_changes
+        and bool(quality_paths)
+    )
+
+
 def _integration_spine(
     session: _GitSession,
     line_path: str,
@@ -425,13 +449,48 @@ def _integration_spine(
         if len(values) < 3:
             continue
         main_parent, line_head = values[1], values[2]
-        if line_path in _tree_paths(session, line_head):
+        commit_paths = main_trees[index]
+        introduces_manifest = (
+            manifest_path in commit_paths
+            and manifest_path not in _tree_paths(session, main_parent)
+        )
+        if line_path in _tree_paths(session, line_head) and (
+            introduces_manifest or _is_line_quality_head(session, line_path, line_head)
+        ):
             candidates.append((index, commit, main_parent, line_head))
     if not candidates:
         return main_commits, main_trees, []
 
     candidate_index, candidate, main_parent, line_head = candidates[-1]
     candidate_paths = main_trees[candidate_index]
+    parent_line = _git(session, "rev-list", "--parents", "-n", "1", candidate)
+    try:
+        parent_values = parent_line.decode("ascii").split()
+    except UnicodeError as error:
+        raise HistoryUnavailable from error
+    if len(parent_values) != 3:
+        return main_commits, main_trees, [
+            _line_error(
+                manifest_path,
+                "history.integration.parent",
+                "integration candidate는 main과 단일 Line head의 exactly two parents여야 합니다.",
+            )
+        ]
+
+    main_parent_paths = _tree_paths(session, main_parent)
+    introduced_manifests = sorted(
+        path
+        for path in candidate_paths - main_parent_paths
+        if Path(path).name.startswith("integration-") and path.endswith(".md")
+    )
+    if introduced_manifests != [manifest_path]:
+        return main_commits, main_trees, [
+            _line_error(
+                manifest_path,
+                "history.integration.manifest",
+                "integration candidate는 target Line의 canonical manifest 하나만 새로 포함해야 합니다.",
+            )
+        ]
     manifest_bytes = _file(session, candidate, manifest_path, candidate_paths)
     if manifest_bytes is None:
         return main_commits, main_trees, [
@@ -459,7 +518,25 @@ def _integration_spine(
             )
         ]
 
-    merge_tree_output = _git(session, "merge-tree", "--write-tree", main_parent, line_head)
+    if not _is_line_quality_head(session, line_path, line_head):
+        return main_commits, main_trees, [
+            _line_error(
+                manifest_path,
+                "history.integration.parent",
+                "designated second parent는 Line verifying transition과 IQC를 포함한 exact Q여야 합니다.",
+            )
+        ]
+
+    try:
+        merge_tree_output = _git(session, "merge-tree", "--write-tree", main_parent, line_head)
+    except HistoryUnavailable:
+        return main_commits, main_trees, [
+            _line_error(
+                manifest_path,
+                "history.integration.tree",
+                "conflict 없는 deterministic merge result를 입증할 수 없습니다.",
+            )
+        ]
     try:
         expected_tree = merge_tree_output.decode("ascii").splitlines()[0]
         changed = _git(
@@ -484,7 +561,87 @@ def _integration_spine(
     line_commits, line_trees = _history(session, line_head)
     later_commits = main_commits[candidate_index:]
     later_trees = main_trees[candidate_index:]
-    return line_commits + later_commits, line_trees + later_trees, []
+    dqc_errors = _validate_integration_dqc(
+        session,
+        line_number,
+        candidate,
+        later_commits,
+        later_trees,
+    )
+    return line_commits + later_commits, line_trees + later_trees, dqc_errors
+
+
+def _validate_integration_dqc(
+    session: _GitSession,
+    line_number: str,
+    candidate: str,
+    commits: list[str],
+    trees: list[set[str]],
+) -> list[HistoryError]:
+    """Bind post-integration DQC PASS and delivery on the main first parent."""
+    line_path = f".proofline/lines/line-{line_number}/line-{line_number}.md"
+    dqc_path = f".proofline/lines/line-{line_number}/dqc-{line_number}.md"
+    dqc_states: list[dict[str, object] | None] = []
+    line_states: list[dict[str, object] | None] = []
+    for commit, paths in zip(commits, trees, strict=True):
+        dqc_content = _file(session, commit, dqc_path, paths)
+        line_content = _file(session, commit, line_path, paths)
+        try:
+            dqc_states.append(_frontmatter(dqc_content) if dqc_content is not None else None)
+            line_states.append(_frontmatter(line_content) if line_content is not None else None)
+        except HistoryUnavailable:
+            return [_unavailable(dqc_path)]
+
+    delivery = next(
+        (
+            index
+            for index, state in enumerate(line_states[1:], start=1)
+            if state is not None and state.get("execution_status") == "delivered"
+        ),
+        None,
+    )
+    present = [index for index, state in enumerate(dqc_states) if state is not None]
+    if not present:
+        if delivery is None:
+            return []
+        return [
+            _line_error(
+                dqc_path,
+                "history.integration.dqc",
+                "delivery 전 exact integration candidate를 bind한 DQC PASS가 필요합니다.",
+            )
+        ]
+
+    for state in (dqc_states[index] for index in present):
+        assert state is not None
+        if (
+            state.get("id") != f"dqc-{line_number}"
+            or state.get("line") != f"line-{line_number}"
+            or state.get("candidate_commit") != candidate
+        ):
+            return [
+                _line_error(
+                    dqc_path,
+                    "history.integration.dqc",
+                    "DQC는 containing integration candidate와 Line identity를 exact하게 bind해야 합니다.",
+                )
+            ]
+    passed: list[int] = []
+    previous_result: object = None
+    for index, state in enumerate(dqc_states):
+        result = state.get("result") if state is not None else None
+        if result == "passed" and previous_result != "passed":
+            passed.append(index)
+        previous_result = result
+    if delivery is not None and (len(passed) != 1 or not (0 < passed[0] < delivery)):
+        return [
+            _line_error(
+                dqc_path,
+                "history.integration.dqc",
+                "main first-parent에는 V → DQC PASS → delivery 순서가 필요합니다.",
+            )
+        ]
+    return []
 
 
 def _repository_activation(
