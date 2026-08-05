@@ -14,7 +14,8 @@ templates/
     │   ├── acceptance-criterion.md
     │   ├── micro-spec.md
     │   ├── iqc.md
-    │   └── dqc.md
+    │   ├── dqc.md
+    │   └── integration.md
     └── derived/
         └── requirements.md
 ```
@@ -31,6 +32,7 @@ templates/
 - 필요하지 않은 선택 section과 예시 행은 생성할 때 제거한다. 필수 H1·H2 section은 제거하지 않는다.
 - 템플릿은 lifecycle 권한을 부여하지 않는다. 상태 전환과 판정은 canonical artifact와 Git history가 소유한다.
 - 생성 결과는 `docs/contracts/`의 해당 artifact contract와 validator를 통과해야 한다.
+- `integration.md`는 pre-admission candidate의 exact main parent와 Line head를 결속하는 frontmatter-only manifest다.
 
 ## 파생 요구사항 문서 렌더링
 

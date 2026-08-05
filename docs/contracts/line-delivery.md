@@ -29,7 +29,7 @@ main integration
 
 - Line 생성부터 Discovery confirm과 REQ approve까지는 main의 직렬화된 governance 흐름에서 수행한다.
 - REQ approval commit은 해당 Line의 REQ와 대상 AC exact bytes를 고정하는 canonical specification baseline이다.
-- implementation branch는 REQ approval commit에서 생성해야 한다.
+- Lead/orchestrator는 exact REQ approval baseline `A`의 direct first-parent child로 대상 Line 한 파일의 `not_started → in_progress`만 기록한 status-only handoff `H`를 main에 만든다. Implementation branch와 linked worktree는 exact `H`에서 생성해야 한다.
 - Micro-SPEC, 구현 및 구현 검증은 implementation branch에서 수행한다.
 - Micro-SPEC과 구현은 branch base에 고정된 승인 REQ 및 AC baseline을 따라야 한다.
 - 검증을 통과한 implementation 결과만 main 통합 대상으로 삼는다.
@@ -37,13 +37,15 @@ main integration
 
 ### Implementation linked worktree
 
-Main repository checkout은 `main`의 직렬화된 governance workspace로 유지한다. Implementation branch는 같은 Line의 exact REQ approval commit에서 다음 deterministic repository-local path에 Git linked worktree로 생성한다.
+Main repository checkout은 `main`의 직렬화된 governance workspace로 유지한다. Implementation branch는 같은 Line의 exact status-only handoff commit `H`에서 다음 deterministic repository-local path에 Git linked worktree로 생성한다.
 
 ```text
 .worktrees/line-NNNN/
 ```
 
-Worktree 생성 전에 main checkout cleanliness, approval commit과 canonical Line·Discovery·REQ 상태, target path, branch 및 기존 worktree registration 충돌을 모두 확인한다. Preflight 실패는 Git ref, worktree registration과 filesystem target을 변경하지 않는 no-mutation failure여야 한다. 생성 후에는 linked worktree의 HEAD와 branch base가 exact REQ approval commit인지, main checkout이 `main`과 clean state를 유지하는지 검증한다.
+Worktree 생성 전에 main checkout cleanliness, exact approval baseline `A`의 canonical Line·Discovery·REQ·AC 상태, `H`의 direct-child/status-only diff, target path, branch 및 기존 worktree registration 충돌을 모두 확인한다. Preflight 실패는 Git ref, worktree registration과 filesystem target을 변경하지 않는 no-mutation failure여야 한다. 생성 후에는 linked worktree의 HEAD와 branch base가 exact `H`인지, main checkout이 attached `main` at `H`이고 clean state인지 검증한다.
+
+`H`가 persisted된 뒤 worktree 생성이나 read-back이 실패해도 main history를 reset/rewrite하거나 Line을 `not_started`로 되돌리지 않는다. Line은 `in_progress`와 exact `H`를 유지한다. 원인을 제거한 뒤 branch·path·registration의 expected state만 허용하는 idempotent preflight로 같은 exact `H`에서 재시도한다. 이미 exact expected branch/worktree가 clean `H`에 수렴한 retry는 성공으로 판정한다. 다른 identity 또는 partial collision은 자동 삭제·강제 복구하지 않는다. 복구 불가능한 종료는 정상 `in_progress → cancelled` transition을 사용한다.
 
 Main과 모든 Line worktree의 ProofLine governance command는 user-level `uv tool`에 설치된 공용 `proofline` executable을 사용한다. Line worktree에는 ProofLine 전용 `.venv`를 생성하지 않는다. 구현 대상 project가 source build·test에 사용하는 environment는 해당 project의 개발 계약이 소유하며 ProofLine governance environment가 아니다.
 
@@ -223,6 +225,37 @@ verifying   ─→ cancelled
 
 ### Main 통합 gate
 
+#### Main-first integration candidate와 manifest
+
+Line 0020의 Line spine은 bootstrap `S=A < H < P < I < Q`이며 post-H `S0/S`를 만들지 않는다. Updated workflow를 사용하는 후속 Line은 `A < H < S0 < S < P < I < Q`다. `Q`는 모든 대상 implementation, passed IQC와 Line `verifying` transition을 포함한 clean exact Line head다. Main은 `H` 이후 다른 governance를 진행할 수 있으며 Line worktree는 main을 merge/rebase하지 않는다.
+
+DQC lead는 latest main `M`에서 collision 없는 별도 integration candidate branch/worktree를 만들고 exact `Q`를 `--no-ff`로 merge하여 candidate `V`를 만든다. `V`는 exactly two parents이고 `V.parent[0]=M`, `V.parent[1]=Q`여야 한다. Parent reversal, octopus, multi-Line/arbitrary second parent, unresolved conflict는 admission 실패다. `V`의 merge tree는 deterministic merge result와 아래 manifest addition만 포함하며 manifest 외 merge-only source·test·build/runtime 수정이나 conflict resolution이 필요하면 owner Line으로 반환한다.
+
+`V`가 새로 포함하는 canonical path는 다음 하나다.
+
+```text
+.proofline/lines/line-<NNNN>/integration-<NNNN>.md
+```
+
+Manifest는 frontmatter-only이며 schema는 다음과 같다.
+
+```yaml
+---
+id: integration-0001
+line_id: line-0001
+main_parent: "<exact M>"
+line_head: "<exact Q>"
+---
+```
+
+필수 field는 `id`, `line_id`, `main_parent`, `line_head`이고 다른 field와 본문은 금지한다. `candidate_commit` self-reference는 기록하지 않는다. Containing commit 자체가 `V`이며 path·identity, `main_parent == V.parent[0] == M`, `line_head == V.parent[1] == Q`가 exact target Line 하나에 결속돼야 한다. DQC는 후속 artifact의 `candidate_commit: V`로 이를 bind한다.
+
+#### Pre-admission mutable gate와 post-integration immutable chronology
+
+Candidate 생성부터 hosted evidence admission, DQC PASS와 main fast-forward 직전까지의 **pre-integration** operational gate는 mutable refs를 직접 확인한다. Exact current `refs/heads/main == M`, canonical clean Line ref/head `== Q`, clean/collision-safe candidate worktree와 exact two-parent/manifest binding이 필요하다. Main이 old `V`를 포함하지 않은 채 진행하면 old `V`는 stale이다. 같은 exact `Q`를 rewrite하지 않고 fresh latest main에서 fresh `V`, manifest, hosted evidence와 DQC를 만든다. `Q`가 진행한 경우에도 fresh verification head와 fresh `V`가 필요하다.
+
+Main이 DQC PASS descendant로 fast-forward된 뒤의 **post-integration** historical validation은 current refs equality를 요구하지 않는다. Immutable Git object인 `V`, actual parents, contained manifest, DQC `candidate_commit: V`, main first-parent의 연속된 `M → V → DQC PASS → delivery`와 designated Line first-parent spine을 검증한다. Clean worktree cleanup이나 후속 unrelated main commit 뒤에도 이 chronology는 유효하다.
+
 Line implementation branch는 다음 조건을 모두 만족해야 main에 통합할 수 있다.
 
 ```text
@@ -245,7 +278,7 @@ Line verification 또는 delivery까지 해소하기로 한 deferred Open Questi
 - REQ의 대상 AC 집합과 각 AC lifecycle이 승인 baseline에 일치해야 한다.
 - `Exit Condition`이 Line verification 또는 delivery를 가리키는 deferred Open Question은 DQC PASS 전에 해소하고 답을 canonical owner section에 반영해야 한다.
 - DQC PASS를 기록한 뒤 main 통합 전까지 제품 source, test, build 또는 runtime configuration을 변경할 수 없다. 변경하면 새 `candidate_commit`을 고정하고 영향받는 IQC와 DQC를 다시 수행한다.
-- Main 통합은 commit identity를 바꾸지 않는 fast-forward 방식만 허용한다. Main이 진행되어 fast-forward할 수 없으면 implementation branch에 새 main을 반영하고 candidate를 다시 고정한 뒤 DQC를 다시 수행한다.
+- Main 통합은 commit identity를 바꾸지 않고 exact `V`의 DQC PASS descendant로 fast-forward하는 방식만 허용한다. Main이 `M`에서 진행해 old candidate로 fast-forward할 수 없으면 Line branch나 `Q`를 rewrite·merge·rebase하지 않고 fresh latest main에서 같은 exact `Q`를 designated second parent로 하는 fresh `V`, hosted evidence와 DQC를 다시 수행한다.
 - Squash, cherry-pick 또는 commit을 다시 작성하는 통합은 기존 IQC와 DQC binding을 무효화하므로 허용하지 않는다.
 
 ### Line delivery 판정
@@ -255,7 +288,7 @@ Main 통합과 Line delivery는 다음 순서로 수행한다.
 ```text
 DQC passed
 → main 통합 gate 확인
-→ implementation branch를 main에 fast-forward
+→ DQC PASS descendant integration branch를 main에 fast-forward
 → 통합된 exact commit과 canonical artifact를 확인
 → main에서 Line.execution_status를 delivered로 전환
 ```
@@ -263,9 +296,9 @@ DQC passed
 `verifying → delivered` transition은 다음 조건을 모두 만족해야 한다.
 
 - DQC가 `result: passed`이고 그 `candidate_commit`이 main history에 exact commit으로 존재해야 한다.
-- Main에 통합된 branch head는 DQC PASS 이후 제품 source, test, build 또는 runtime configuration을 변경하지 않아야 한다.
+- Main에 통합된 DQC PASS descendant는 candidate `V` 이후 제품 source, test, build 또는 runtime configuration을 변경하지 않아야 한다.
 - Main에서 canonical artifact validation이 통과해야 한다.
-- Delivery transition commit은 main의 직렬화된 governance 흐름에서 작성하며, 그 직전 parent는 통합된 implementation branch head여야 한다.
+- Delivery transition commit은 main의 직렬화된 governance 흐름에서 작성하며, 그 직전 parent는 통합된 DQC PASS descendant head여야 한다.
 - 위 조건을 만족하기 전에는 Line을 `delivered`로 기록할 수 없다.
 
 통합 확인에 실패하면 Line은 `verifying`에 남는다. 구현 변경이 필요하면 `verifying → in_progress`로 되돌리고 영향받는 IQC와 DQC를 다시 수행한다.

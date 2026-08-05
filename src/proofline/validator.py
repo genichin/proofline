@@ -33,6 +33,7 @@ ARTIFACT_FIELDS = {
         "result",
     },
     "dqc": {"id", "line", "candidate_commit", "result"},
+    "integration": {"id", "line_id", "main_parent", "line_head"},
 }
 
 ARTIFACT_OPTIONAL_FIELDS = {
@@ -58,6 +59,7 @@ ARTIFACT_STATUSES = {
     },
     "iqc": {"result": {"draft", "passed", "failed", "blocked"}},
     "dqc": {"result": {"draft", "passed", "failed", "blocked"}},
+    "integration": {},
 }
 
 REQUIRED_H2 = {
@@ -86,6 +88,9 @@ ARTIFACT_PATHS = {
         r"^\.proofline/lines/line-(\d{4})/micro-specs/iqc-\1-\d{3}\.md$"
     ),
     "dqc": re.compile(r"^\.proofline/lines/line-(\d{4})/dqc-\1\.md$"),
+    "integration": re.compile(
+        r"^\.proofline/lines/line-(\d{4})/integration-\1\.md$"
+    ),
 }
 
 LEGACY_CRITERIA_KEYS = {"create", "update", "retire"}
@@ -118,7 +123,7 @@ def _headings(body: str) -> tuple[list[str], list[str]]:
 
 
 def _headings_are_valid(kind: str, body: str) -> bool:
-    if kind == "line":
+    if kind in {"line", "integration"}:
         return not body.strip()
     h1, h2 = _headings(body)
     if len(h1) != 1:
@@ -705,7 +710,11 @@ def _validate_criteria_bindings(
                 )
 
         line_dir = req_path.rsplit("/", 1)[0]
+        line_path = f"{line_dir}/{line_dir.rsplit('/', 1)[-1]}.md"
+        line = artifacts.get(line_path)
+        line_status = line[1].get("execution_status") if line is not None else None
         covered: set[str] = set()
+        implementation_statuses: list[object] = []
         for ms_path, (ms_kind, ms) in artifacts.items():
             if (
                 ms_kind != "ms"
@@ -714,6 +723,7 @@ def _validate_criteria_bindings(
                 or ms.get("spec_status") == "withdrawn"
             ):
                 continue
+            implementation_statuses.append(ms.get("implementation_status"))
             ms_criteria = ms.get("criteria")
             if not isinstance(ms_criteria, list):
                 continue
@@ -729,7 +739,10 @@ def _validate_criteria_bindings(
                 )
             covered.update(ms_ids & targets)
         uncovered = sorted(targets - covered)
-        if req.get("status") != "withdrawn" and uncovered:
+        drafting_state = line_status in {"not_started", "in_progress"} and all(
+            status == "not_started" for status in implementation_statuses
+        )
+        if req.get("status") != "withdrawn" and uncovered and not drafting_state:
             errors.append(
                 ValidationError(
                     req_path,

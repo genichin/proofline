@@ -1,7 +1,7 @@
 ---
 name: proofline-start-implementation
 description: Use when starting implementation for an approved ProofLine Line in an exact-baseline Git linked worktree while preserving main as the governance checkout.
-version: 1.3.0
+version: 1.4.0
 author: ProofLine
 license: MIT
 metadata:
@@ -14,7 +14,7 @@ metadata:
 
 ## Overview
 
-승인된 Line의 implementation을 exact REQ approval commit에서 `.worktrees/line-NNNN/` linked worktree로 시작한다. Main checkout은 `main`의 clean governance workspace로 유지한다. 이 workflow는 Git을 명시적으로 운용하지만 ProofLine CLI가 Git branch, worktree, commit, merge 또는 lifecycle transition을 수행하도록 확장하지 않는다.
+승인된 Line의 implementation을 main-owned status-only handoff commit exact `H`에서 `.worktrees/line-NNNN/` linked worktree로 시작한다. `H`는 exact REQ·AC approval baseline `A`의 direct first-parent child다. Main checkout은 `main`의 clean governance workspace로 유지한다. 이 workflow는 Git을 명시적으로 운용하지만 ProofLine CLI가 Git branch, worktree, commit, merge 또는 lifecycle transition을 수행하도록 확장하지 않는다.
 
 Main과 모든 Line worktree의 governance 명령은 user-level `uv tool`에 설치된 공용 `proofline` executable을 사용한다. Worktree에는 ProofLine 전용 `.venv`를 생성하지 않는다. 구현 대상 project의 source build·test environment는 그 project의 계약을 따른다.
 
@@ -22,7 +22,7 @@ Main과 모든 Line worktree의 governance 명령은 user-level `uv tool`에 설
 
 - Confirmed Discovery와 approved REQ가 있는 Line의 implementation을 시작할 때
 - Main checkout을 governance 전용으로 유지하면서 별도 linked worktree가 필요할 때
-- 기존 worktree의 exact approval base, branch, path와 shared tool 경계를 검증할 때
+- 기존 worktree의 exact `H`, branch, path와 shared tool 경계를 검증하거나 failed creation을 같은 `H`에서 idempotent recovery할 때
 
 다음에는 사용하지 않는다.
 
@@ -38,6 +38,7 @@ Main과 모든 Line worktree의 governance 명령은 user-level `uv tool`에 설
 LINE_ID=line-NNNN
 REQ_ID=req-NNNN
 APPROVAL_COMMIT=<exact REQ approval commit>
+HANDOFF_COMMIT=<exact status-only direct child H; current main HEAD>
 BRANCH=<명시적으로 선택한 implementation branch>
 WORKTREE_PATH=.worktrees/line-NNNN
 ```
@@ -61,7 +62,7 @@ git show "$APPROVAL_COMMIT:.proofline/lines/line-NNNN/req-NNNN.md"
 git show "$APPROVAL_COMMIT:.proofline/lines/line-NNNN/line-NNNN.md"
 ```
 
-직접 읽은 exact approval commit의 artifact에서 다음 상태를 확인한다.
+직접 읽은 exact approval commit `A`의 artifact에서 다음 상태를 확인한다.
 
 ```text
 Discovery.status = confirmed
@@ -69,7 +70,10 @@ REQ.status = approved
 Line.execution_status = not_started
 Line.implementation_history = first_parent (새 policy-bearing Line; 기존 fieldless도 허용)
 REQ identity와 Line identity의 NNNN 일치
+REQ criteria의 대상 AC가 A에서 승인 상태
 ```
+
+현재 attached main HEAD를 `H`로 고정하고 `H.parent=A`, changed path가 대상 `line-NNNN.md` 하나뿐이며 exact bytes 차이가 `execution_status: not_started → in_progress` 한 줄뿐인지 검사한다. 이것이 exact A→H status-only handoff다. Script는 handoff commit이나 lifecycle transition을 만들지 않고 이미 기록된 `H`를 검증한다.
 
 그 다음 path 충돌, branch 충돌과 기존 worktree registration을 확인한다.
 
@@ -79,7 +83,7 @@ test ! -e "$WORKTREE_PATH"
 git worktree list --porcelain
 ```
 
-`git worktree list --porcelain`에 같은 path 또는 branch가 있으면 중단한다. 실패를 수동 삭제, 다른 ID 또는 `--force`로 우회하지 않는다.
+`git worktree list --porcelain`에 같은 path 또는 branch가 있으면 기본적으로 중단한다. 단, exact expected branch·path·registration이 모두 존재하고 clean HEAD가 같은 exact `H`인 retry는 idempotent success다. 일부만 존재하거나 다른 identity이면 partial collision으로 중단한다. 실패를 수동 삭제, 다른 ID 또는 `--force`로 우회하지 않는다.
 
 ### 2. Worktree 생성
 
@@ -98,7 +102,7 @@ Canonical target은 `.worktrees/line-NNNN/`이다. Clone을 만들거나 main ch
 ### 3. 생성 후 검증
 
 ```bash
-test "$(git -C "$WORKTREE_PATH" rev-parse HEAD)" = "$APPROVAL_COMMIT"
+test "$(git -C "$WORKTREE_PATH" rev-parse HEAD)" = "$HANDOFF_COMMIT"
 test "$(git -C "$WORKTREE_PATH" branch --show-current)" = "$BRANCH"
 test "$(git branch --show-current)" = main
 test -z "$(git status --porcelain)"
@@ -112,10 +116,13 @@ Worktree에서 공용 `proofline` executable을 사용해 canonical tree를 확�
 (cd "$WORKTREE_PATH" && proofline validate)
 ```
 
-검증 실패 시 worktree를 자동으로 강제 삭제하지 않는다. 실제 branch, HEAD, registration, path와 main status를 보고하고 수동 recovery 결정을 받는다.
+검증 실패 시 worktree를 자동으로 강제 삭제하지 않는다. Main history도 reset/rewrite하지 않는다. Persisted `H`와 Line `in_progress`를 유지하고 실제 branch, HEAD, registration, path와 main status를 보고한다. 원인을 제거한 뒤 같은 exact `H`에서 script를 재실행한다. Recovery가 불가능한 종료만 정상 `in_progress → cancelled` transition을 사용한다.
 
 ### 4. Implementation handoff
 
+- Line 0020 bootstrap은 user-approved combined specification `S=A < H < P < I < Q`를 사용하고 post-H `S0/S`를 만들지 않는다.
+- Updated workflow의 후속 Line에서는 구현 에이전트가 clean exact Micro-SPEC draft `S0`를 만든 뒤 mutation을 멈춘다. 독립 specification reviewer는 read-only PASS/correction만 제공하고, **사용자만** exact reviewed bytes를 승인한다. Governance lead는 clean exact `S0` 위 status-only `S`를 기록하는 recorder이며 `S.parent=S0`와 substantive bytes 불변을 read-back한 뒤 exact `S`를 구현 에이전트에게 handback한다. 따라서 `A < H < S0 < S < P < I < Q`다.
+- Self-approval, reviewer mutation, stale review, governance lead 단독 approval, approval과 substantive body 변경 혼합은 허용하지 않는다.
 - 새 policy-bearing Line은 approval baseline `B` 뒤 별도 lifecycle-only `in_progress` commit `P`를 persist하여 `B < P < I < Q`로 진행한다.
 - 기존 fieldless non-terminal Line은 fieldless lifecycle-only `in_progress`만 포함한 별도 commit `P`를 먼저 만들고, 그 다음 `implementation_history: first_parent`만 추가한 별도 commit `B`를 만든다. 따라서 `P < B < I < Q`이며 두 commit을 합치지 않는다.
 - 엄격한 validator가 `P`와 `B` 사이에 보고하는 `history.line.policy.missing`이 유일한 history-policy error(sole history-policy error)이고 모든 non-history validation이 clean일 때만 이 narrow transitional gate를 통과한다. 다른 history 또는 schema·artifact·ledger 오류는 무시하지 않는다. `B` 이후 full `proofline validate`가 PASS해야 한다.
@@ -148,7 +155,7 @@ Dirty 또는 untracked file이 있으면 중단한다. `--force`를 자동 사�
 ## Common Pitfalls
 
 1. **Main checkout에서 implementation branch로 전환함.** Main은 직렬화된 governance workspace다.
-2. **Latest main에서 branch를 만듦.** Base는 같은 Line의 exact REQ approval commit이다.
+2. **Approval `A`에서 직접 branch를 만듦.** Base는 main-owned exact status-only handoff `H`다.
 3. **Worktree마다 ProofLine `.venv`를 만듦.** 모든 governance workspace는 공용 `proofline`을 사용한다.
 4. **Project build environment와 ProofLine tool environment를 혼동함.** 전자는 project-owned, 후자는 user-level shared tool이다.
 5. **충돌을 `--force`로 우회함.** Preflight 실패는 no-mutation으로 끝낸다.
@@ -158,9 +165,9 @@ Dirty 또는 untracked file이 있으면 중단한다. `--force`를 자동 사�
 ## Verification Checklist
 
 - [ ] Main branch가 `main`이고 clean하다.
-- [ ] Exact approval commit의 Discovery·REQ·Line 상태를 직접 확인했다.
+- [ ] Exact approval commit `A`의 Discovery·REQ·AC·Line 상태와 exact A→H status-only diff를 직접 확인했다.
 - [ ] Path, branch와 worktree registration 충돌이 없다.
-- [ ] Linked worktree HEAD가 exact approval commit이다.
+- [ ] Linked worktree HEAD가 exact `H`다.
 - [ ] Main checkout branch와 status가 변하지 않았다.
 - [ ] Worktree에 ProofLine 전용 `.venv`가 없다.
 - [ ] Worktree에서 공용 `proofline validate`가 통과한다.

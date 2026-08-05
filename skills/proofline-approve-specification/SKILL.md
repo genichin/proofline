@@ -1,7 +1,7 @@
 ---
 name: proofline-approve-specification
 description: Use when presenting, approving, or auditing a ProofLine REQ and newly created AC specification without turning optional transition evidence into an implementation gate.
-version: 1.2.0
+version: 1.4.0
 author: ProofLine
 license: MIT
 metadata:
@@ -14,7 +14,7 @@ metadata:
 
 ## Overview
 
-사용자가 검토한 REQ·AC를 승인하고 exact specification baseline을 보존한다. Draft→status-only approval은 권장 감사 경로이지만 direct approval도 유효하다. Transition evidence가 `not recorded`여도 approval이나 implementation을 차단하지 않는다.
+사용자가 검토한 REQ·AC와 해당되는 Micro-SPEC을 승인하고 exact specification baseline을 보존한다. **사용자만** approval authority를 가지며 independent reviewer는 read-only recommendation, governance lead는 status-only recorder다. Draft→status-only approval은 권장 감사 경로이지만 direct approval도 유효하다. Transition evidence가 `not recorded`여도 approval이나 implementation을 차단하지 않는다.
 
 ## When to Use
 
@@ -34,11 +34,54 @@ metadata:
 
 Hermes는 REQ objective·scope·non-goals와 AC criterion·verification을 사용자에게 보여주고 명시적 approval을 기다린다. 사용자의 승인 없이 REQ를 `approved` 또는 AC를 `active`로 전환하지 않는다.
 
+Micro-SPEC도 사용자만 exact reviewed bytes를 승인한다. Draft author의 self-approval, independent specification reviewer의 mutation·approval, governance lead의 단독 approval은 금지한다. Reviewer는 exact clean commit을 read-only로 검토해 PASS 또는 correction recommendation만 제공한다. Recorder는 사용자 approval 뒤 status-only transition만 기록하며 substantive bytes를 고치지 않는다.
+
 `criteria.satisfy` 대상은 승인된 active AC의 의미를 변경하지 않는 binding이다. Approval 전후에 대상 AC body와 status를 변경하지 않으며 의미 변경이 필요하면 REQ를 `criteria.update`로 고쳐 다시 승인한다.
 
 Git commit, branch, worktree, merge와 push는 ProofLine CLI 책임이 아니다. Agent가 사용자의 결정 후 Git 명령을 실행하더라도 실제 상태와 exact commit을 보고한다.
 
 ## Approval Paths
+
+### Normal Micro-SPEC: `S0 → S`
+
+1. 구현 에이전트가 Line worktree에 clean exact draft commit `S0`를 만들고 mutation을 멈춘다.
+2. 독립 specification reviewer가 exact `S0`의 Micro-SPEC bytes, REQ·AC 범위와 coverage를 read-only로 검토한다. Correction에는 fresh `S0`와 fresh review가 필요하다.
+3. Review PASS 뒤 사용자만 exact `S0`를 승인한다.
+4. Governance lead는 worktree가 clean이고 HEAD가 `S0`임을 확인한 뒤 `spec_status: draft → approved`만 바꾼 status-only `S`를 기록한다.
+5. `S.parent=S0`, substantive bytes 불변을 read-back한 뒤 exact `S`를 구현 에이전트에게 handback한다.
+
+### Line 0020 bootstrap exception: `S=A`
+
+Line 0020은 current-validator migration이므로 REQ·AC·bootstrap Micro-SPEC combined exact draft를 independent read-only review하고 사용자가 함께 승인한다. Governance lead는 main에서 lifecycle status만 바꾼 combined approval `S=A`를 기록한다. 이후 chronology는 `S=A < H < P < I < Q`이며 post-H `S0/S`를 다시 만들지 않는다. 이 exception을 후속 Line에 재사용하지 않는다. 후속 Line은 `A < H < S0 < S < P < I < Q`를 따른다.
+
+## Exact-Evidence Authority Audit
+
+`audit_approval_authority.py`는 외부에서 공급된 review와 user approval evidence를 **읽기만** 하여 normal `S0 → S` 또는 Line 0020 bootstrap `pre-A → A`가 exact authority·status-only 조건을 만족하는지 검사한다. Evidence를 만들거나 보완하지 않으며 commit, file, ref, approval, lifecycle transition을 생성·수정·삭제하지 않는다. Tool이나 governance recorder는 user evidence를 mint하거나 대신할 수 없다.
+
+Evidence는 canonical `.proofline/` 밖의 strict JSON file로 공급한다. 최소 versioned envelope는 다음과 같고 key 추가·누락은 fail-closed다.
+
+```json
+{"schema":"proofline.independent-review/v1","target_commit":"<S0-or-pre-A>","target_tree":"<exact-tree>","result":"PASS","reviewer_actor_id":"reviewer-1","mutation_performed":false}
+```
+
+```json
+{"schema":"proofline.user-approval/v1","target_commit":"<S0-or-pre-A>","target_tree":"<exact-tree>","decision":"approved","user_actor_id":"user-1","actor_role":"user","review_evidence_sha256":"<sha256-of-exact-review-file-bytes>"}
+```
+
+모든 actor ID는 비어 있지 않은 operational identity label이다. Draft author, independent reviewer, user, governance recorder는 서로 달라야 한다. 이 검사는 supplied authority evidence의 exact binding과 역할 분리를 검증할 뿐 사람을 cryptographically authenticate하지 않으며 secret·signature claim을 하지 않는다.
+
+```bash
+python3 ~/.proofline/skills/proofline-approve-specification/scripts/audit_approval_authority.py \
+  --repo "$PWD" --mode normal --line-id line-NNNN \
+  --target-commit "$S0" --target-tree "$S0_TREE" \
+  --approval-commit "$S" --approval-tree "$S_TREE" \
+  --review-evidence "$REVIEW_JSON" \
+  --user-approval-evidence "$USER_APPROVAL_JSON" \
+  --draft-author-actor-id "$AUTHOR_ID" \
+  --governance-recorder-actor-id "$RECORDER_ID"
+```
+
+Bootstrap에서는 `--mode bootstrap`, target=`pre-A`, approval=`A`를 사용한다. 성공하려면 repository가 clean이고 HEAD가 exact approval commit이어야 하며 approval은 target의 direct non-merge child여야 한다. Normal approval은 Micro-SPEC `spec_status: draft → approved`만 허용한다. Bootstrap approval은 REQ, target create/update/retire AC, bootstrap Micro-SPEC의 계약상 lifecycle status transition만 허용한다. Body 변경, unrelated/concurrent path, stale commit/tree/review digest, review FAIL·mutation, missing/denied user approval은 stable `approval-authority[SCENARIO_ID]` diagnostic과 exit `2`로 거부한다.
 
 ### 권장: Draft transition 기록
 
@@ -80,7 +123,7 @@ Audit는 no-mutation이다. Canonical artifact, working tree, index, ref, branch
 
 ## Implementation Handoff
 
-Worktree preflight에는 full exact approval commit을 전달한다. Preflight는 current commit의 Discovery `confirmed`, REQ `approved`, Line `not_started`와 Git·filesystem collision을 확인한다. Draft transition history는 요구하지 않는다.
+Worktree preflight에는 full exact approval commit `A`를 전달한다. Preflight는 `A`의 Discovery `confirmed`, REQ `approved`, target AC approval과 Line `not_started`, current main HEAD의 direct status-only handoff `H` 및 Git·filesystem collision을 확인한다. Draft transition history는 요구하지 않는다.
 
 ```text
 recorded approval → implementation 허용

@@ -314,11 +314,13 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
         assert "proofline_schema_v1_templates/artifacts/line.md" in names
         assert "proofline_schema_v1_templates/artifacts/discovery.md" in names
         assert "proofline_schema_v1_templates/artifacts/dqc.md" in names
+        assert "proofline_schema_v1_templates/artifacts/integration.md" in names
         assert "proofline_schema_v1_templates/project/proofline.yaml" in names
         assert "proofline_schema_v1_templates/project/lines.gitkeep" in names
         assert "proofline_schema_v1_templates/project/criteria.gitkeep" in names
         assert "proofline_home/contracts/storage-and-retention.md" in names
         assert "proofline_home/templates/schema-v1/artifacts/line.md" in names
+        assert "proofline_home/templates/schema-v1/artifacts/integration.md" in names
         assert "proofline_home/skills/proofline-start-line/SKILL.md" in names
         run_iqc = "proofline_home/skills/proofline-run-iqc/SKILL.md"
         assert run_iqc in names
@@ -838,9 +840,15 @@ def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workfl
     resources = {
         "docs/contracts/line-delivery.md": "proofline_home/contracts/line-delivery.md",
         "docs/contracts/micro-spec-and-iqc.md": "proofline_home/contracts/micro-spec-and-iqc.md",
+        "docs/contracts/requirements-and-criteria.md": "proofline_home/contracts/requirements-and-criteria.md",
+        "skills/proofline-approve-specification/SKILL.md": "proofline_home/skills/proofline-approve-specification/SKILL.md",
+        "skills/proofline-approve-specification/scripts/audit_approval_authority.py": "proofline_home/skills/proofline-approve-specification/scripts/audit_approval_authority.py",
         "skills/proofline-start-implementation/SKILL.md": "proofline_home/skills/proofline-start-implementation/SKILL.md",
         "skills/proofline-start-implementation/scripts/create_worktree.py": "proofline_home/skills/proofline-start-implementation/scripts/create_worktree.py",
         "skills/proofline-run-iqc/SKILL.md": "proofline_home/skills/proofline-run-iqc/SKILL.md",
+        "skills/proofline-run-dqc/SKILL.md": "proofline_home/skills/proofline-run-dqc/SKILL.md",
+        "skills/proofline-run-dqc/scripts/preflight_integration_candidate.py": "proofline_home/skills/proofline-run-dqc/scripts/preflight_integration_candidate.py",
+        "templates/schema-v1/artifacts/integration.md": "proofline_home/templates/schema-v1/artifacts/integration.md",
     }
     with zipfile.ZipFile(wheel) as archive:
         for source, packaged in resources.items():

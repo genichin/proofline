@@ -544,9 +544,39 @@ def test_micro_spec_rejects_ac_outside_parent_req_scope(tmp_path: Path) -> None:
     assert "ac-0003" in scope_errors[0].message
 
 
-def test_req_rejects_target_uncovered_by_micro_specs(tmp_path: Path) -> None:
+@pytest.mark.parametrize("line_status", ["not_started", "in_progress"])
+def test_req_allows_partial_coverage_while_every_micro_spec_is_not_started(
+    tmp_path: Path, line_status: str
+) -> None:
     project = copy_valid_project(tmp_path)
+    line = project / ".proofline/lines/line-0001/line-0001.md"
     ms = project / MS
+    replace(line, "execution_status: verifying", f"execution_status: {line_status}")
+    replace(ms, "implementation_status: implemented", "implementation_status: not_started")
+    replace(ms, "  - ac-0003\n", "")
+
+    assert not any(error.code == "criteria.uncovered" for error in errors_for(project, REQ))
+
+
+@pytest.mark.parametrize(
+    ("line_status", "implementation_status"),
+    [
+        ("not_started", "in_progress"),
+        ("in_progress", "in_progress"),
+        ("in_progress", "implemented"),
+        ("verifying", "not_started"),
+        ("delivered", "not_started"),
+        ("cancelled", "not_started"),
+    ],
+)
+def test_req_requires_full_coverage_outside_unstarted_drafting_state(
+    tmp_path: Path, line_status: str, implementation_status: str
+) -> None:
+    project = copy_valid_project(tmp_path)
+    line = project / ".proofline/lines/line-0001/line-0001.md"
+    ms = project / MS
+    replace(line, "execution_status: verifying", f"execution_status: {line_status}")
+    replace(ms, "implementation_status: implemented", f"implementation_status: {implementation_status}")
     replace(ms, "  - ac-0003\n", "")
 
     coverage_errors = [
@@ -556,7 +586,7 @@ def test_req_rejects_target_uncovered_by_micro_specs(tmp_path: Path) -> None:
     assert "ac-0003" in coverage_errors[0].message
 
 
-def test_withdrawn_micro_spec_does_not_supply_coverage(tmp_path: Path) -> None:
+def test_withdrawn_micro_spec_does_not_supply_required_coverage(tmp_path: Path) -> None:
     project = copy_valid_project(tmp_path)
     ms = project / MS
     replace(ms, "spec_status: approved", "spec_status: withdrawn")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -20,6 +21,9 @@ MS_PATH = re.compile(
 IQC_PATH = re.compile(
     r"^\.proofline/lines/line-(\d{4})/micro-specs/iqc-\1-\d{3}\.md$"
 )
+INTEGRATION_PATH = re.compile(
+    r"^\.proofline/lines/line-(\d{4})/integration-\1\.md$"
+)
 GIT_TIMEOUT_SECONDS = 5
 GIT_OUTPUT_LIMIT = 8 * 1024 * 1024
 GIT_SESSION_COMMAND_LIMIT = 20_000
@@ -29,6 +33,10 @@ GIT_SESSION_DEADLINE_SECONDS = 120
 PROCESS_CLEANUP_GRACE_SECONDS = 0.1
 _REAPER_LOCK = threading.Lock()
 _REAPER_REGISTRY: dict[int, subprocess.Popen[bytes]] = {}
+_LS_TREE_RECORD = re.compile(
+    rb"(040000|100644|100755|120000|160000) (blob|tree|commit) "
+    rb"([0-9a-f]{40}|[0-9a-f]{64})\t(.+)"
+)
 
 
 @dataclass(frozen=True, order=True)
@@ -46,9 +54,12 @@ class HistoryUnavailable(Exception):
 class _GitSession:
     root: Path
     cache: dict[tuple[str, ...], bytes] = field(default_factory=dict)
+    tree_entries: dict[str, dict[str, tuple[str, str, str]]] = field(default_factory=dict)
+    tree_paths: dict[str, set[str]] = field(default_factory=dict)
     commands: int = 0
     output_bytes: int = 0
     cache_bytes: int = 0
+    tree_cache_bytes: int = 0
     started: float = field(default_factory=time.monotonic)
 
 
@@ -172,11 +183,16 @@ def _capture_process(
             reader.join(timeout=PROCESS_CLEANUP_GRACE_SECONDS)
 
 
-def _git(session: _GitSession, *arguments: str) -> bytes:
+def _git(
+    session: _GitSession,
+    *arguments: str,
+    environment_overrides: dict[str, str] | None = None,
+    cache: bool = True,
+) -> bytes:
     command_key = tuple(arguments)
     if time.monotonic() - session.started >= GIT_SESSION_DEADLINE_SECONDS:
         raise HistoryUnavailable
-    if command_key in session.cache:
+    if cache and command_key in session.cache:
         return session.cache[command_key]
     environment = os.environ.copy()
     environment.update(
@@ -187,6 +203,8 @@ def _git(session: _GitSession, *arguments: str) -> bytes:
             "GIT_TERMINAL_PROMPT": "0",
         }
     )
+    if environment_overrides:
+        environment.update(environment_overrides)
     if session.commands >= GIT_SESSION_COMMAND_LIMIT:
         raise HistoryUnavailable
     session.commands += 1
@@ -221,11 +239,73 @@ def _git(session: _GitSession, *arguments: str) -> bytes:
         raise
     if returncode != 0:
         raise HistoryUnavailable
-    if session.cache_bytes + len(stdout) > GIT_SESSION_CACHE_LIMIT:
-        raise HistoryUnavailable
-    session.cache[command_key] = stdout
-    session.cache_bytes += len(stdout)
+    if cache:
+        if (
+            session.cache_bytes + session.tree_cache_bytes + len(stdout)
+            > GIT_SESSION_CACHE_LIMIT
+        ):
+            raise HistoryUnavailable
+        session.cache[command_key] = stdout
+        session.cache_bytes += len(stdout)
     return stdout
+
+
+def _alternate_object_directory(path: Path) -> str:
+    """Quote one alternate ODB path using Git's C-style environment syntax."""
+    text = str(path).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{text}"'
+
+
+def _quarantined_integration_changes(
+    session: _GitSession, main_parent: str, line_head: str, candidate: str
+) -> list[str]:
+    """Compute the deterministic merge tree without writing reviewed Git objects."""
+    try:
+        common_text = _git(session, "rev-parse", "--git-common-dir").decode("utf-8").strip()
+        common_dir = Path(common_text)
+        if not common_dir.is_absolute():
+            common_dir = session.root / common_dir
+        reviewed_objects = (common_dir.resolve(strict=True) / "objects").resolve(strict=True)
+    except (OSError, UnicodeError) as error:
+        raise HistoryUnavailable from error
+
+    inherited_alternates = os.environ.get("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+    with tempfile.TemporaryDirectory(prefix="proofline-git-objects-") as directory:
+        quarantine = Path(directory) / "objects"
+        try:
+            quarantine.mkdir()
+        except OSError as error:
+            raise HistoryUnavailable from error
+        alternates = _alternate_object_directory(reviewed_objects)
+        if inherited_alternates:
+            alternates = alternates + os.pathsep + inherited_alternates
+        overrides = {
+            "GIT_OBJECT_DIRECTORY": str(quarantine),
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES": alternates,
+        }
+        merge_tree_output = _git(
+            session,
+            "merge-tree",
+            "--write-tree",
+            main_parent,
+            line_head,
+            environment_overrides=overrides,
+            cache=False,
+        )
+        try:
+            expected_tree = merge_tree_output.decode("ascii").splitlines()[0]
+            return _git(
+                session,
+                "diff",
+                "--name-only",
+                "--no-renames",
+                expected_tree,
+                candidate,
+                environment_overrides=overrides,
+                cache=False,
+            ).decode("utf-8").splitlines()
+        except (UnicodeError, IndexError) as error:
+            raise HistoryUnavailable from error
 
 
 def _frontmatter(content: bytes) -> dict[str, object]:
@@ -267,8 +347,10 @@ def _yaml_has_duplicate_mapping(payload: bytes) -> bool:
     return visit(document) if document is not None else False
 
 
-def _spec_revision_bytes(content: bytes | None) -> bytes | None:
-    """Return Micro-SPEC bytes with lifecycle-only status normalized away."""
+def _frontmatter_field_revision_bytes(
+    content: bytes | None, field_name: str, allowed_values: set[str]
+) -> bytes | None:
+    """Return artifact bytes with one top-level lifecycle field normalized away."""
     if content is None:
         return None
     try:
@@ -299,19 +381,14 @@ def _spec_revision_bytes(content: bytes | None) -> bytes | None:
     matches = [
         (key, value)
         for key, value in document.value
-        if isinstance(key, yaml.ScalarNode)
-        and key.value == "implementation_status"
+        if isinstance(key, yaml.ScalarNode) and key.value == field_name
     ]
     if not matches:
         return content
     if len(matches) != 1:
         raise HistoryUnavailable
     key, value = matches[0]
-    if not isinstance(value, yaml.ScalarNode) or value.value not in {
-        "not_started",
-        "in_progress",
-        "implemented",
-    }:
+    if not isinstance(value, yaml.ScalarNode) or value.value not in allowed_values:
         raise HistoryUnavailable
     key_line = yaml_text.count("\n", 0, key.start_mark.index)
     value_line = yaml_text.count("\n", 0, value.end_mark.index)
@@ -332,20 +409,73 @@ def _spec_revision_bytes(content: bytes | None) -> bytes | None:
     return content[:removed_start] + content[removed_end:]
 
 
-def _tree_paths(session: _GitSession, commit: str) -> set[str]:
-    output = _git(
-        session, "ls-tree", "-r", "--name-only", commit, "--", ".proofline/lines"
+def _spec_revision_bytes(content: bytes | None) -> bytes | None:
+    """Return Micro-SPEC bytes with lifecycle-only status normalized away."""
+    return _frontmatter_field_revision_bytes(
+        content,
+        "implementation_status",
+        {"not_started", "in_progress", "implemented"},
     )
-    try:
-        return set(output.decode("utf-8").splitlines())
-    except UnicodeError as error:
-        raise HistoryUnavailable from error
+
+
+def _tree_paths(session: _GitSession, commit: str) -> set[str]:
+    cached = session.tree_paths.get(commit)
+    if cached is not None:
+        return cached
+
+    output = _git(session, "ls-tree", "-r", "-t", "-z", "--full-tree", commit)
+    if output and not output.endswith(b"\0"):
+        raise HistoryUnavailable
+    entries: dict[str, tuple[str, str, str]] = {}
+    cache_charge = 128
+    for raw_record in output.split(b"\0")[:-1] if output else ():
+        match = _LS_TREE_RECORD.fullmatch(raw_record)
+        if match is None:
+            raise HistoryUnavailable
+        mode_bytes, type_bytes, oid_bytes, path_bytes = match.groups()
+        if (
+            (type_bytes == b"blob" and mode_bytes not in {b"100644", b"100755", b"120000"})
+            or (type_bytes == b"tree" and mode_bytes != b"040000")
+            or (type_bytes == b"commit" and mode_bytes != b"160000")
+        ):
+            raise HistoryUnavailable
+        try:
+            path = path_bytes.decode("utf-8", errors="strict")
+            mode = mode_bytes.decode("ascii")
+            object_type = type_bytes.decode("ascii")
+            oid = oid_bytes.decode("ascii")
+        except UnicodeError as error:
+            raise HistoryUnavailable from error
+        if path in entries:
+            raise HistoryUnavailable
+        entries[path] = (mode, object_type, oid)
+        cache_charge += (
+            256 + len(path_bytes) + len(mode_bytes) + len(type_bytes) + len(oid_bytes)
+        )
+
+    if session.cache_bytes + session.tree_cache_bytes + cache_charge > GIT_SESSION_CACHE_LIMIT:
+        raise HistoryUnavailable
+    paths = set(entries)
+    session.tree_entries[commit] = entries
+    session.tree_paths[commit] = paths
+    session.tree_cache_bytes += cache_charge
+    return paths
 
 
 def _file(session: _GitSession, commit: str, path: str, paths: set[str]) -> bytes | None:
     if path not in paths:
         return None
-    return _git(session, "show", f"{commit}:{path}")
+    entries = session.tree_entries.get(commit)
+    if entries is None:
+        raise HistoryUnavailable
+    entry = entries.get(path)
+    if (
+        entry is None
+        or entry[0] not in {"100644", "100755"}
+        or entry[1] != "blob"
+    ):
+        raise HistoryUnavailable
+    return _git(session, "cat-file", "blob", entry[2])
 
 
 def _current_artifacts(root: Path) -> tuple[dict[str, dict[str, object]], list[str]]:
@@ -361,6 +491,7 @@ def _current_artifacts(root: Path) -> tuple[dict[str, dict[str, object]], list[s
             LINE_PATH.fullmatch(relative)
             or MS_PATH.fullmatch(relative)
             or IQC_PATH.fullmatch(relative)
+            or INTEGRATION_PATH.fullmatch(relative)
         ):
             continue
         try:
@@ -383,12 +514,12 @@ def _line_error(path: str, code: str, message: str) -> HistoryError:
 
 
 def _history(
-    session: _GitSession,
+    session: _GitSession, head: str = "HEAD"
 ) -> tuple[list[str], list[set[str]]]:
     shallow = _git(session, "rev-parse", "--is-shallow-repository").strip()
     if shallow != b"false":
         raise HistoryUnavailable
-    output = _git(session, "rev-list", "--first-parent", "--reverse", "HEAD")
+    output = _git(session, "rev-list", "--first-parent", "--reverse", head)
     try:
         commits = output.decode("ascii").splitlines()
     except UnicodeError as error:
@@ -396,6 +527,289 @@ def _history(
     if not commits:
         raise HistoryUnavailable
     return commits, [_tree_paths(session, commit) for commit in commits]
+
+
+def _first_parent_parent_rows(
+    session: _GitSession, main_commits: list[str]
+) -> list[list[str]]:
+    """Collect exact first-parent topology in one validated Git query."""
+    if not main_commits:
+        raise HistoryUnavailable
+    output = _git(
+        session,
+        "rev-list",
+        "--first-parent",
+        "--parents",
+        "--reverse",
+        main_commits[-1],
+    )
+    try:
+        lines = output.decode("ascii").splitlines()
+    except UnicodeError as error:
+        raise HistoryUnavailable from error
+    if len(lines) != len(main_commits):
+        raise HistoryUnavailable
+
+    oid_length = len(main_commits[0])
+    rows: list[list[str]] = []
+    for index, (expected, line) in enumerate(zip(main_commits, lines, strict=True)):
+        values = line.split()
+        if (
+            not values
+            or values[0] != expected
+            or (index == 0 and len(values) != 1)
+            or (index > 0 and len(values) < 2)
+            or any(
+                len(value) != oid_length or re.fullmatch(r"[0-9a-f]+", value) is None
+                for value in values
+            )
+        ):
+            raise HistoryUnavailable
+        rows.append(values)
+    return rows
+
+
+def _is_line_quality_head(
+    session: _GitSession, line_path: str, line_head: str
+) -> bool:
+    line_head_paths = _tree_paths(session, line_head)
+    try:
+        line_state = _frontmatter(_file(session, line_head, line_path, line_head_paths) or b"")
+        line_head_changes = _git(
+            session, "diff", "--name-only", "--no-renames", f"{line_head}^1", line_head
+        ).decode("utf-8").splitlines()
+    except (HistoryUnavailable, UnicodeError):
+        return False
+    line_directory = line_path.rsplit("/", 1)[0]
+    quality_paths = [
+        path
+        for path in line_head_changes
+        if IQC_PATH.fullmatch(path) and path.startswith(f"{line_directory}/micro-specs/")
+    ]
+    return (
+        line_state.get("execution_status") == "verifying"
+        and line_path in line_head_changes
+        and bool(quality_paths)
+    )
+
+
+def _integration_spine(
+    session: _GitSession,
+    line_path: str,
+    main_commits: list[str],
+    main_trees: list[set[str]],
+) -> tuple[list[str], list[set[str]], list[HistoryError]]:
+    """Select and validate a main-first integration candidate for one Line."""
+    line_match = LINE_PATH.fullmatch(line_path)
+    assert line_match is not None
+    line_number = line_match.group(1)
+    manifest_path = (
+        f".proofline/lines/line-{line_number}/integration-{line_number}.md"
+    )
+    candidates: list[tuple[int, str, str, str]] = []
+    parent_rows = _first_parent_parent_rows(session, main_commits)
+    for index, (commit, values) in enumerate(
+        zip(main_commits, parent_rows, strict=True)
+    ):
+        if len(values) < 3:
+            continue
+        main_parent, line_head = values[1], values[2]
+        commit_paths = main_trees[index]
+        introduces_manifest = (
+            manifest_path in commit_paths
+            and manifest_path not in _tree_paths(session, main_parent)
+        )
+        line_head_paths = _tree_paths(session, line_head)
+        if introduces_manifest or (
+            line_path in line_head_paths
+            and _is_line_quality_head(session, line_path, line_head)
+        ):
+            candidates.append((index, commit, main_parent, line_head))
+    if not candidates:
+        return main_commits, main_trees, []
+
+    candidate_index, candidate, main_parent, line_head = candidates[-1]
+    candidate_paths = main_trees[candidate_index]
+    parent_values = parent_rows[candidate_index]
+    if len(parent_values) != 3:
+        return main_commits, main_trees, [
+            _line_error(
+                manifest_path,
+                "history.integration.parent",
+                "integration candidate는 main과 단일 Line head의 exactly two parents여야 합니다.",
+            )
+        ]
+
+    main_parent_paths = _tree_paths(session, main_parent)
+    introduced_manifests = sorted(
+        path
+        for path in candidate_paths - main_parent_paths
+        if Path(path).name.startswith("integration-") and path.endswith(".md")
+    )
+    if introduced_manifests != [manifest_path]:
+        return main_commits, main_trees, [
+            _line_error(
+                manifest_path,
+                "history.integration.manifest",
+                "integration candidate는 target Line의 canonical manifest 하나만 새로 포함해야 합니다.",
+            )
+        ]
+    manifest_bytes = _file(session, candidate, manifest_path, candidate_paths)
+    if manifest_bytes is None:
+        return main_commits, main_trees, [
+            _line_error(
+                manifest_path,
+                "history.integration.manifest",
+                "main-first integration candidate에는 Line integration manifest가 필요합니다.",
+            )
+        ]
+    try:
+        manifest = _frontmatter(manifest_bytes)
+    except HistoryUnavailable:
+        return main_commits, main_trees, [_unavailable(manifest_path)]
+    if (
+        manifest.get("id") != f"integration-{line_number}"
+        or manifest.get("line_id") != f"line-{line_number}"
+        or manifest.get("main_parent") != main_parent
+        or manifest.get("line_head") != line_head
+    ):
+        return main_commits, main_trees, [
+            _line_error(
+                manifest_path,
+                "history.integration.parent",
+                "integration manifest는 path/Line identity와 candidate parent를 exact하게 bind해야 합니다.",
+            )
+        ]
+
+    line_head_paths = _tree_paths(session, line_head)
+    line_head_bytes = _file(session, line_head, line_path, line_head_paths)
+    if line_head_bytes is None:
+        return main_commits, main_trees, [
+            _line_error(
+                manifest_path,
+                "history.integration.parent",
+                "designated second parent에는 target Line이 canonical identity로 존재해야 합니다.",
+            )
+        ]
+    try:
+        line_head_state = _frontmatter(line_head_bytes)
+    except HistoryUnavailable:
+        return main_commits, main_trees, [_unavailable(line_path)]
+    if line_head_state.get("id") != f"line-{line_number}":
+        return main_commits, main_trees, [
+            _line_error(
+                manifest_path,
+                "history.integration.parent",
+                "designated second parent에는 target Line이 canonical identity로 존재해야 합니다.",
+            )
+        ]
+
+    if not _is_line_quality_head(session, line_path, line_head):
+        return main_commits, main_trees, [
+            _line_error(
+                manifest_path,
+                "history.integration.parent",
+                "designated second parent는 Line verifying transition과 IQC를 포함한 exact Q여야 합니다.",
+            )
+        ]
+
+    try:
+        changed = _quarantined_integration_changes(
+            session, main_parent, line_head, candidate
+        )
+    except HistoryUnavailable:
+        return main_commits, main_trees, [
+            _line_error(
+                manifest_path,
+                "history.integration.tree",
+                "conflict 없는 deterministic merge result를 입증할 수 없습니다.",
+            )
+        ]
+    if changed != [manifest_path]:
+        return main_commits, main_trees, [
+            _line_error(
+                manifest_path,
+                "history.integration.tree",
+                "integration candidate tree에는 merge result와 manifest 외 변경이 없어야 합니다.",
+            )
+        ]
+
+    line_commits, line_trees = _history(session, line_head)
+    later_commits = main_commits[candidate_index:]
+    later_trees = main_trees[candidate_index:]
+    dqc_errors = _validate_integration_dqc(
+        session,
+        line_number,
+        candidate,
+        later_commits,
+        later_trees,
+    )
+    return line_commits + later_commits, line_trees + later_trees, dqc_errors
+
+
+def _validate_integration_dqc(
+    session: _GitSession,
+    line_number: str,
+    candidate: str,
+    commits: list[str],
+    trees: list[set[str]],
+) -> list[HistoryError]:
+    """Bind post-integration DQC PASS and delivery on the main first parent."""
+    line_path = f".proofline/lines/line-{line_number}/line-{line_number}.md"
+    dqc_path = f".proofline/lines/line-{line_number}/dqc-{line_number}.md"
+    dqc_states: list[dict[str, object] | None] = []
+    line_states: list[dict[str, object] | None] = []
+    for commit, paths in zip(commits, trees, strict=True):
+        dqc_content = _file(session, commit, dqc_path, paths)
+        line_content = _file(session, commit, line_path, paths)
+        try:
+            dqc_states.append(_frontmatter(dqc_content) if dqc_content is not None else None)
+            line_states.append(_frontmatter(line_content) if line_content is not None else None)
+        except HistoryUnavailable:
+            return [_unavailable(dqc_path)]
+
+    delivery = next(
+        (
+            index
+            for index, state in enumerate(line_states[1:], start=1)
+            if state is not None and state.get("execution_status") == "delivered"
+        ),
+        None,
+    )
+    present = [index for index, state in enumerate(dqc_states) if state is not None]
+    if delivery is not None:
+        effective = dqc_states[delivery - 1]
+        if (
+            effective is None
+            or effective.get("id") != f"dqc-{line_number}"
+            or effective.get("line") != f"line-{line_number}"
+            or effective.get("candidate_commit") != candidate
+            or effective.get("result") != "passed"
+        ):
+            return [
+                _line_error(
+                    dqc_path,
+                    "history.integration.dqc",
+                    "delivery 직전 effective DQC는 exact integration candidate와 Line을 bind한 PASS여야 합니다.",
+                )
+            ]
+        return []
+
+    for state in (dqc_states[index] for index in present):
+        assert state is not None
+        if (
+            state.get("id") != f"dqc-{line_number}"
+            or state.get("line") != f"line-{line_number}"
+            or state.get("candidate_commit") != candidate
+        ):
+            return [
+                _line_error(
+                    dqc_path,
+                    "history.integration.dqc",
+                    "DQC는 containing integration candidate와 Line identity를 exact하게 bind해야 합니다.",
+                )
+            ]
+    return []
 
 
 def _repository_activation(
@@ -737,6 +1151,345 @@ def _validate_historical_cycles(
     return []
 
 
+def _artifact_at(session: _GitSession, commit: str, path: str) -> bytes | None:
+    paths = _tree_paths(session, commit)
+    return _file(session, commit, path, paths)
+
+
+def _changed_paths(session: _GitSession, commit: str) -> list[str]:
+    output = _git(
+        session, "diff", "--name-only", "--no-renames", f"{commit}^1", commit
+    )
+    try:
+        return [path for path in output.decode("utf-8").splitlines() if path]
+    except UnicodeError as error:
+        raise HistoryUnavailable from error
+
+
+def _status_only_change(
+    before: bytes | None,
+    after: bytes | None,
+    field_name: str,
+    before_value: str,
+    after_value: str,
+    allowed_values: set[str],
+) -> bool:
+    if before is None or after is None:
+        return False
+    try:
+        before_state = _frontmatter(before)
+        after_state = _frontmatter(after)
+        return (
+            before_state.get(field_name) == before_value
+            and after_state.get(field_name) == after_value
+            and _frontmatter_field_revision_bytes(before, field_name, allowed_values)
+            == _frontmatter_field_revision_bytes(after, field_name, allowed_values)
+        )
+    except HistoryUnavailable:
+        return False
+
+
+def _approval_index(
+    session: _GitSession,
+    req_path: str,
+    commits: list[str],
+    baseline: int,
+) -> int | None:
+    previous: object = None
+    for index, commit in enumerate(commits):
+        content = _artifact_at(session, commit, req_path)
+        state = _frontmatter(content) if content is not None else None
+        status = state.get("status") if state is not None else None
+        if index >= baseline and status == "approved" and previous != "approved":
+            return index
+        previous = status
+    return None
+
+
+def _specification_chronology_activation(
+    session: _GitSession, commits: list[str], trees: list[set[str]]
+) -> int | None:
+    """Return the AC-0022 admission that makes A/H/S0/S prospective."""
+    path = ".proofline/criteria/ac-0022.md"
+    previous: object = None
+    for index, (commit, _paths) in enumerate(zip(commits, trees, strict=True)):
+        content = _artifact_at(session, commit, path)
+        state = _frontmatter(content) if content is not None else None
+        status = state.get("status") if state is not None else None
+        if status == "active" and previous != "active":
+            return index
+        previous = status
+    return None
+
+
+def _approval_criterion_admissions(
+    requirement: dict[str, object],
+) -> dict[str, tuple[str, ...]] | None:
+    """Parse exact, disjoint canonical AC admission sets from an approved REQ."""
+    raw = requirement.get("criteria")
+    actions = ("create", "update", "retire", "satisfy")
+    if not isinstance(raw, dict) or set(raw) != set(actions):
+        return None
+    admissions: dict[str, tuple[str, ...]] = {}
+    seen: set[str] = set()
+    for action in actions:
+        values = raw.get(action)
+        if not isinstance(values, list):
+            return None
+        parsed: list[str] = []
+        for value in values:
+            if (
+                not isinstance(value, str)
+                or re.fullmatch(r"ac-\d{4}", value) is None
+                or value in seen
+            ):
+                return None
+            seen.add(value)
+            parsed.append(value)
+        admissions[action] = tuple(parsed)
+    return admissions if seen else None
+
+
+def _validate_approval_baseline(
+    session: _GitSession,
+    line_path: str,
+    ms_path: str,
+    approval: int,
+    commits: list[str],
+    trees: list[set[str]],
+) -> bool:
+    if approval == 0:
+        return False
+    line_number = LINE_PATH.fullmatch(line_path)
+    assert line_number is not None
+    req_path = (
+        f".proofline/lines/line-{line_number.group(1)}/req-{line_number.group(1)}.md"
+    )
+    before_commit, approval_commit = commits[approval - 1], commits[approval]
+    before_req = _artifact_at(session, before_commit, req_path)
+    approved_req = _artifact_at(session, approval_commit, req_path)
+    if not _status_only_change(
+        before_req,
+        approved_req,
+        "status",
+        "draft",
+        "approved",
+        {"draft", "approved", "withdrawn"},
+    ):
+        return False
+    requirement = _frontmatter(approved_req or b"")
+    admissions = _approval_criterion_admissions(requirement)
+    if admissions is None:
+        return False
+    criterion_ids = {
+        criterion_id for values in admissions.values() for criterion_id in values
+    }
+    criterion_paths = {f".proofline/criteria/{value}.md" for value in criterion_ids}
+    bootstrap_paths = {
+        path
+        for path in trees[approval]
+        if MS_PATH.fullmatch(path)
+        and path.startswith(line_path.rsplit("/", 1)[0] + "/micro-specs/")
+        and (_frontmatter(_file(session, approval_commit, path, trees[approval]) or b"").get("spec_status") == "approved")
+        and (
+            path not in trees[approval - 1]
+            or _frontmatter(_file(session, before_commit, path, trees[approval - 1]) or b"").get("spec_status")
+            != "approved"
+        )
+    }
+    allowed_paths = {req_path} | criterion_paths | bootstrap_paths
+    changed = set(_changed_paths(session, approval_commit))
+    if not changed or not changed <= allowed_paths or req_path not in changed:
+        return False
+    transitions = {
+        "create": ("draft", "active"),
+        "update": ("draft", "active"),
+        "retire": ("active", "retired"),
+    }
+    for action, criterion_ids_for_action in admissions.items():
+        for criterion_id in criterion_ids_for_action:
+            path = f".proofline/criteria/{criterion_id}.md"
+            before = _artifact_at(session, before_commit, path)
+            after = _artifact_at(session, approval_commit, path)
+            if before is None or after is None:
+                return False
+            try:
+                if (
+                    _frontmatter(before).get("id") != criterion_id
+                    or _frontmatter(after).get("id") != criterion_id
+                ):
+                    return False
+            except HistoryUnavailable:
+                return False
+            if action == "satisfy":
+                if before != after:
+                    return False
+                continue
+            old_status, new_status = transitions[action]
+            if not _status_only_change(
+                before,
+                after,
+                "status",
+                old_status,
+                new_status,
+                {"draft", "active", "retired"},
+            ):
+                return False
+    for path in bootstrap_paths:
+        if not _status_only_change(
+            _artifact_at(session, before_commit, path),
+            _artifact_at(session, approval_commit, path),
+            "spec_status",
+            "draft",
+            "approved",
+            {"draft", "approved", "withdrawn"},
+        ):
+            return False
+    return ms_path in bootstrap_paths or ms_path not in changed
+
+
+def _validate_specification_chronology(
+    session: _GitSession,
+    line_path: str,
+    ms_path: str,
+    baseline: int,
+    line_states: list[dict[str, object] | None],
+    ms_states: list[dict[str, object] | None],
+    commits: list[str],
+    trees: list[set[str]],
+) -> list[HistoryError]:
+    """Validate prospective A/H/S0/S handoff without rewriting legacy cycles."""
+    line_number = LINE_PATH.fullmatch(line_path)
+    assert line_number is not None
+    req_path = (
+        f".proofline/lines/line-{line_number.group(1)}/req-{line_number.group(1)}.md"
+    )
+    activation = _specification_chronology_activation(session, commits, trees)
+    approval = _approval_index(
+        session,
+        req_path,
+        commits,
+        max(baseline, activation) if activation is not None else baseline,
+    )
+    if approval is None:
+        # REQ approval predating policy admission is legacy and remains governed
+        # by the existing P/I/Q and rework validator.
+        return []
+
+    def error() -> list[HistoryError]:
+        return [
+            _line_error(
+                ms_path,
+                "history.spec.chronology",
+                "prospective specification에는 exact A → H → S0 → S → P chronology가 필요합니다.",
+            )
+        ]
+
+    if not _validate_approval_baseline(
+        session, line_path, ms_path, approval, commits, trees
+    ):
+        return error()
+
+    handoffs = [
+        index
+        for index in range(1, len(line_states))
+        if line_states[index] is not None
+        and line_states[index].get("execution_status") == "in_progress"
+        and (previous := line_states[index - 1]) is not None
+        and previous.get("execution_status") == "not_started"
+        and index >= approval
+    ]
+    if len(handoffs) != 1:
+        return error()
+    handoff = handoffs[0]
+    if handoff != approval + 1 or _changed_paths(session, commits[handoff]) != [line_path]:
+        return error()
+    if not _status_only_change(
+        _artifact_at(session, commits[handoff - 1], line_path),
+        _artifact_at(session, commits[handoff], line_path),
+        "execution_status",
+        "not_started",
+        "in_progress",
+        {"not_started", "in_progress", "verifying", "delivered", "cancelled"},
+    ):
+        return error()
+
+    starts = [
+        index
+        for index in range(1, len(ms_states))
+        if ms_states[index] is not None
+        and ms_states[index].get("implementation_status") == "in_progress"
+        and (
+            ms_states[index - 1] is None
+            or ms_states[index - 1].get("implementation_status") != "in_progress"
+        )
+        and index > approval
+    ]
+    start = starts[0] if starts else None
+    approvals = [
+        index
+        for index in range(1, len(ms_states))
+        if ms_states[index] is not None
+        and ms_states[index].get("spec_status") == "approved"
+        and (
+            ms_states[index - 1] is None
+            or ms_states[index - 1].get("spec_status") != "approved"
+        )
+        and index > approval
+    ]
+    approved_at_a = (
+        ms_states[approval] is not None
+        and ms_states[approval].get("spec_status") == "approved"
+        and (
+            approval == 0
+            or ms_states[approval - 1] is None
+            or ms_states[approval - 1].get("spec_status") != "approved"
+        )
+    )
+
+    if approved_at_a:
+        if approvals or (start is not None and start <= handoff):
+            return error()
+    else:
+        if start is None and not approvals:
+            return []
+        if len(approvals) != 1:
+            return error()
+        specification = approvals[0]
+        draft = specification - 1
+        if not (handoff < draft < specification and (start is None or specification < start)):
+            return error()
+        if ms_states[draft] is None or ms_states[draft].get("spec_status") != "draft":
+            return error()
+        if _changed_paths(session, commits[draft]) != [ms_path]:
+            return error()
+        if _changed_paths(session, commits[specification]) != [ms_path]:
+            return error()
+        if not _status_only_change(
+            _artifact_at(session, commits[draft], ms_path),
+            _artifact_at(session, commits[specification], ms_path),
+            "spec_status",
+            "draft",
+            "approved",
+            {"draft", "approved", "withdrawn"},
+        ):
+            return error()
+
+    if start is not None:
+        if start <= handoff or _changed_paths(session, commits[start]) != [ms_path]:
+            return error()
+        if not _status_only_change(
+            _artifact_at(session, commits[start - 1], ms_path),
+            _artifact_at(session, commits[start], ms_path),
+            "implementation_status",
+            "not_started",
+            "in_progress",
+            {"not_started", "in_progress", "implemented"},
+        ):
+            return error()
+    return []
+
+
 def _validate_micro_spec(
     session: _GitSession,
     path: str,
@@ -992,6 +1745,7 @@ def validate_implementation_history(
         return [_unavailable(path) for path in line_paths]
 
     positions = {commit: index for index, commit in enumerate(commits)}
+    main_commits, main_trees = commits, trees
     malformed_history_paths: set[str] = set()
     historical_artifact_paths = sorted(
         {
@@ -1003,8 +1757,8 @@ def validate_implementation_history(
             or IQC_PATH.fullmatch(path)
         }
     )
-    try:
-        for artifact_path in historical_artifact_paths:
+    for artifact_path in historical_artifact_paths:
+        try:
             for commit, paths in zip(commits, trees, strict=True):
                 content = _file(session, commit, artifact_path, paths)
                 if content is None:
@@ -1017,13 +1771,21 @@ def validate_implementation_history(
                     # normalized or deleted in a later first-parent commit.
                     malformed_history_paths.add(artifact_path)
                     break
-    except HistoryUnavailable:
-        return [_unavailable(path) for path in line_paths]
+        except HistoryUnavailable:
+            malformed_history_paths.add(artifact_path)
     errors: list[HistoryError] = [
         _unavailable(path) for path in sorted(malformed_history_paths)
     ]
     for line_path in line_paths:
         try:
+            commits, trees, integration_errors = _integration_spine(
+                session, line_path, main_commits, main_trees
+            )
+            errors.extend(integration_errors)
+            if integration_errors:
+                continue
+            positions = {commit: index for index, commit in enumerate(commits)}
+            activation = _repository_activation(session, commits, trees)
             if line_path in malformed_history_paths:
                 errors.append(_unavailable(line_path))
                 continue
@@ -1089,6 +1851,20 @@ def validate_implementation_history(
                         current_path.read_bytes() if current_path.is_file() else None
                     )
                     head_ms_bytes = _file(session, commits[-1], ms_path, trees[-1])
+                    ms_states = _line_states(session, ms_path, commits, trees)
+                    chronology_errors = _validate_specification_chronology(
+                        session,
+                        line_path,
+                        ms_path,
+                        baseline,
+                        states,
+                        ms_states,
+                        commits,
+                        trees,
+                    )
+                    errors.extend(chronology_errors)
+                    if chronology_errors:
+                        continue
                     errors.extend(
                         _validate_micro_spec(
                             session,

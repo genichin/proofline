@@ -105,6 +105,12 @@ AC는 사양의 atomic unit이고 Micro-SPEC은 기술적 구현 unit이므로 �
 - 독립적인 구현·검증 경계를 가진 AC를 하나의 Micro-SPEC에 불필요하게 묶지 않는다.
 - 새로운 사양이 구현 중 발견되면 Micro-SPEC에 바로 추가하지 않고 AC와 REQ 범위를 먼저 갱신한다.
 
+### Lifecycle-aware criteria coverage drafting gate
+
+Direct reference와 각 Micro-SPEC criteria의 non-empty subset 규칙은 항상 적용한다. 다만 Line이 `not_started` 또는 `in_progress`이고 모든 non-withdrawn Micro-SPEC의 `implementation_status`가 `not_started`인 drafting phase에는 zero 또는 partial criteria coverage를 허용한다. 어떤 Micro-SPEC이라도 `in_progress` 또는 `implemented`로 전환하려면 전체 non-withdrawn Micro-SPEC criteria 합집합이 REQ target 전체와 정확히 같아야 한다. Line이 `verifying` 또는 `delivered`인 경우에도 exact coverage가 필수다.
+
+이 `ac-0003` coverage drafting gate는 reference/coverage만 소유한다. Integration manifest의 path·schema·parent binding과 Git ancestry는 [Line 검증·통합·Delivery 계약](line-delivery.md)이 별도로 소유하며 criteria coverage 판정과 혼합하지 않는다.
+
 집합 불변식은 다음과 같다.
 
 ```text
@@ -168,6 +174,22 @@ draft ───────→ approved
 - `approved` 상태를 유지한 채 REQ 또는 대상 AC의 의미를 변경하는 것은 허용하지 않는다.
 - implementation branch는 REQ `approved`와 대상 AC의 승인 상태를 포함한 exact main commit에서 생성한다. Prior draft transition history는 요구하지 않는다.
 - 구현·검증·delivery 진행 상태는 REQ `status`에 기록하지 않는다.
+
+### 외부 exact-evidence approval authority audit
+
+Normal `S0 → S`와 Line 0020 bootstrap `pre-A → A`의 운영 감사에서는 canonical `.proofline/` 밖에서 공급된 다음 strict JSON v1 envelope를 read-only 입력으로 사용할 수 있다. 이 evidence file은 canonical repository artifact가 아니며 tool 또는 recorder가 생성하거나 user approval을 대신해서는 안 된다.
+
+```json
+{"schema":"proofline.independent-review/v1","target_commit":"<exact-commit>","target_tree":"<exact-tree>","result":"PASS","reviewer_actor_id":"<actor-id>","mutation_performed":false}
+```
+
+```json
+{"schema":"proofline.user-approval/v1","target_commit":"<same-exact-commit>","target_tree":"<same-exact-tree>","decision":"approved","user_actor_id":"<actor-id>","actor_role":"user","review_evidence_sha256":"<sha256-of-exact-review-file-bytes>"}
+```
+
+Draft author, independent reviewer, user와 governance recorder의 ID는 각각 비어 있지 않고 서로 다른 operational identity label이어야 한다. Reviewer는 exact target commit·tree에 `PASS`와 `mutation_performed=false`를 기록해야 한다. User evidence는 같은 target commit·tree, `decision=approved`, `actor_role=user`와 exact review file digest에 결속되어야 한다. Recorder-only, self-approval, stale review/tree/digest, failed review, reviewer mutation, missing 또는 denied user evidence는 fail-closed다.
+
+Read-only helper는 clean worktree/index와 exact approval HEAD를 확인하고 target과 approval commit·tree를 read-back한다. Approval은 target의 direct non-merge child여야 한다. Normal `S`는 Micro-SPEC `spec_status: draft → approved`만 변경할 수 있다. Line 0020 bootstrap `A`는 REQ `draft → approved`, target create/update AC `draft → active`, retire AC `active → retired`, bootstrap Micro-SPEC `spec_status: draft → approved`만 변경할 수 있으며 body 또는 unrelated/concurrent path 변경은 거부한다. Helper는 supplied authority evidence를 검증하지만 사람을 암호학적으로 인증하지 않는다. Actor ID는 secret 또는 signature가 아니다.
 
 다음 값은 REQ `status`가 아니다.
 

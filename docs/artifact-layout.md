@@ -28,6 +28,7 @@ ProofLine artifact의 역할은 다음과 같이 구분한다.
 | Micro-SPEC | REQ를 구현 가능한 단위로 분해 | 담당 AC 부분집합, 구현 범위와 검증 방법 |
 | IQC | Micro-SPEC 구현의 검증 결과 | exact Micro-SPEC과 implementation commit에 대한 검사, AC별 결과 및 전체 판정 |
 | DQC | Line 통합 후보의 전체 검증 결과 | 모든 IQC를 종합한 exact candidate commit의 전체 판정 |
+| Integration manifest | main-first 통합 후보의 immutable parent binding | target Line, exact main parent `M`, exact Line head `Q` |
 
 핵심 source-of-truth 규칙은 다음과 같다.
 
@@ -38,6 +39,7 @@ AC         = 시스템이 만족해야 하는 최소 canonical 사양
 Micro-SPEC = 승인된 REQ의 일부를 어떻게 구현하고 검증하는가
 IQC        = exact Micro-SPEC과 구현 commit의 검증 결과는 무엇인가
 DQC        = exact Line integration candidate의 전체 검증 결과는 무엇인가
+Integration manifest = candidate `V`가 어느 Line의 `M`과 `Q`를 결속하는가
 Git        = 고정 파일명의 개정 이력
 ```
 
@@ -57,11 +59,12 @@ REQ             req-NNNN
 Micro-SPEC      ms-NNNN-SSS
 IQC             iqc-NNNN-SSS
 DQC             dqc-NNNN
+Integration     integration-NNNN
 ```
 
 - `NNNN`은 `0001`부터 시작하는 4자리 decimal Line ID이다.
 - `SSS`는 같은 Line 안에서 `001`부터 시작하는 3자리 Micro-SPEC ID이다.
-- 하나의 Line에는 정확히 하나의 Line artifact, 하나의 Discovery identity, 하나의 REQ identity와 하나의 DQC identity만 존재한다.
+- 하나의 Line에는 정확히 하나의 Line artifact, 하나의 Discovery identity, 하나의 REQ identity와 하나의 DQC identity만 존재한다. Integration manifest는 pre-admission candidate `V`가 만들어질 때 같은 Line에 정확히 하나가 새로 생긴다.
 - Line directory, Line artifact, Discovery, REQ, Micro-SPEC, IQC 및 DQC의 `NNNN`은 반드시 일치해야 한다.
 - IQC의 `NNNN-SSS`는 검증 대상 Micro-SPEC의 `NNNN-SSS`와 일치해야 한다.
 - 하나의 REQ는 여러 Micro-SPEC으로 분해할 수 있다.
@@ -76,6 +79,7 @@ line-0001/
 ├── dcy-0001.md
 ├── req-0001.md
 ├── dqc-0001.md
+├── integration-0001.md
 └── micro-specs/
     ├── ms-0001-001.md
     ├── iqc-0001-001.md
@@ -98,6 +102,7 @@ line-0001/
 │   │   │   ├── dcy-0001.md
 │   │   │   ├── req-0001.md
 │   │   │   ├── dqc-0001.md
+│   │   │   ├── integration-0001.md
 │   │   │   └── micro-specs/
 │   │   │       ├── ms-0001-001.md
 │   │   │       ├── iqc-0001-001.md
@@ -125,6 +130,7 @@ REQ             .proofline/lines/line-<NNNN>/req-<NNNN>.md
 Micro-SPEC      .proofline/lines/line-<NNNN>/micro-specs/ms-<NNNN>-<SSS>.md
 IQC             .proofline/lines/line-<NNNN>/micro-specs/iqc-<NNNN>-<SSS>.md
 DQC             .proofline/lines/line-<NNNN>/dqc-<NNNN>.md
+Integration     .proofline/lines/line-<NNNN>/integration-<NNNN>.md
 AC              .proofline/criteria/ac-<NNNN>.md
 ```
 
@@ -161,7 +167,7 @@ Schema version 1의 fresh project는 `.proofline/lines/.gitkeep`과 `.proofline/
 | Discovery 작성·확인 | [Discovery 계약](contracts/discovery.md), [문서 형식과 완결성](contracts/document-format.md) | Discovery 상태, transition, 확인 조건과 문서 schema |
 | REQ·AC 작성·승인 | [REQ와 AC 계약](contracts/requirements-and-criteria.md), [문서 형식과 완결성](contracts/document-format.md) | AC 변경 집합, binding, REQ·AC lifecycle과 문서 schema |
 | Micro-SPEC 작성·구현·IQC | [Micro-SPEC과 IQC 계약](contracts/micro-spec-and-iqc.md), [문서 형식과 완결성](contracts/document-format.md) | Micro-SPEC·IQC 상태와 문서 schema |
-| DQC·main 통합·delivery | [Line 검증·통합·Delivery 계약](contracts/line-delivery.md), [문서 형식과 완결성](contracts/document-format.md) | branch lifecycle, Line·DQC 상태, 통합·delivery gate와 문서 schema |
+| DQC·main 통합·delivery | [Line 검증·통합·Delivery 계약](contracts/line-delivery.md), [문서 형식과 완결성](contracts/document-format.md) | branch lifecycle, Line·DQC 상태, integration manifest, 통합·delivery gate와 문서 schema |
 | 파생 문서·보존·프로젝트 설정 | [저장·파생 문서·보존 계약](contracts/storage-and-retention.md) | `docs/requirements.md`, 보존·폐기, `proofline.yaml` |
 | 공통 형식·placeholder·validator | [문서 형식과 완결성](contracts/document-format.md) | 공통 frontmatter·Markdown 규칙, metadata policy, placeholder와 완결성 gate |
 

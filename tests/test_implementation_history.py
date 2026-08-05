@@ -106,6 +106,17 @@ class HistoryRepo:
             encoding="utf-8",
         )
 
+    def write_requirement_admissions(self) -> None:
+        path = self.path / ".proofline/lines/line-0001/req-0001.md"
+        path.write_text(
+            '---\nid: "req-0001"\nstatus: draft\ndiscovery: "dcy-0001"\n'
+            'criteria:\n  create:\n    - "ac-0001"\n  update:\n    - "ac-0002"\n'
+            '  retire:\n    - "ac-0003"\n  satisfy:\n    - "ac-0004"\n'
+            "---\n\n# Requirement\n\n## Objective\n\n목표이다.\n\n## Scope\n\n범위이다."
+            "\n\n## Non-Goals\n\n비목표이다.\n",
+            encoding="utf-8",
+        )
+
     def write_ac(self, number: int) -> None:
         path = self.path / f".proofline/criteria/ac-{number:04d}.md"
         path.write_text(
@@ -121,14 +132,19 @@ class HistoryRepo:
         *,
         malformed: bool = False,
         spec_status: str = "approved",
+        criteria_numbers: tuple[int, ...] | None = None,
     ) -> None:
         path = self.path / f".proofline/lines/line-0001/micro-specs/ms-0001-{number:03d}.md"
         if malformed:
             path.write_text("---\nid: [\n---\n", encoding="utf-8")
             return
+        criteria = "".join(
+            f'  - "ac-{criterion:04d}"\n'
+            for criterion in (criteria_numbers or (number,))
+        )
         path.write_text(
             f'---\nid: "ms-0001-{number:03d}"\nparent_req: "req-0001"\ncriteria:\n'
-            f'  - "ac-{number:04d}"\nspec_status: {spec_status}\nimplementation_status: {status}\n---\n\n'
+            f'{criteria}spec_status: {spec_status}\nimplementation_status: {status}\n---\n\n'
             f"# Micro-SPEC {number}\n\n## Scope\n\n범위이다.\n\n## Implementation\n\n구현한다."
             "\n\n## Verification\n\n검증한다.\n",
             encoding="utf-8",
@@ -191,9 +207,10 @@ class HistoryRepo:
         *,
         numbers: tuple[int, ...] = (1,),
         micro_spec_commit: str | None = None,
+        criteria_numbers: tuple[int, ...] | None = None,
     ) -> str:
         for number in numbers:
-            self.write_ms(number, "implemented")
+            self.write_ms(number, "implemented", criteria_numbers=criteria_numbers)
             self.write_iqc(number, implementation, micro_spec_commit=micro_spec_commit)
         return self.commit(name, name)
 
@@ -233,6 +250,341 @@ def history_codes(repo: HistoryRepo | Path) -> set[tuple[str, str]]:
 
 def assert_history_error(repo: HistoryRepo, path: str, code: str) -> None:
     assert (path, code) in history_codes(repo)
+
+
+def commit_index_mode(repo: HistoryRepo, path: str, mode: str, message: str) -> str:
+    """Commit existing artifact bytes with an exact index mode, without OS symlinks."""
+    payload = (repo.path / path).read_bytes()
+    hashed = subprocess.run(
+        ("git", "hash-object", "-w", "--stdin"),
+        cwd=repo.path,
+        input=payload,
+        text=False,
+        capture_output=True,
+        check=True,
+    )
+    oid = hashed.stdout.decode("ascii").strip()
+    git(repo.path, "update-index", "--add", "--cacheinfo", f"{mode},{oid},{path}")
+    git(repo.path, "commit", "-qm", message)
+    return oid
+
+
+def parity_symlink_canonical_artifact(tmp_path: Path, path: str = IQC) -> HistoryRepo:
+    repo = build_valid_cycle(tmp_path)
+    git(repo.path, "config", "core.symlinks", "false")
+    oid = commit_index_mode(repo, path, "120000", "symlink-mode canonical artifact")
+    git(repo.path, "update-index", "--cacheinfo", f"100644,{oid},{path}")
+    git(repo.path, "commit", "-qm", "restore regular canonical artifact")
+    return repo
+
+
+def parity_tree_canonical_artifact(tmp_path: Path, path: str = LINE) -> HistoryRepo:
+    repo = HistoryRepo.create(tmp_path)
+    artifact = repo.path / path
+    artifact.unlink()
+    artifact.mkdir()
+    (artifact / "child").write_text("historical tree entry\n", encoding="utf-8")
+    tree_commit = repo.commit("tree-artifact", "tree-mode canonical artifact")
+    tree_entry = git(repo.path, "ls-tree", tree_commit, "--", path).stdout
+    assert tree_entry.startswith("040000 tree ")
+    shutil.rmtree(artifact)
+    repo.write_line("not_started", policy=None)
+    repo.commit("restore-artifact", "restore regular canonical artifact")
+    repo.adopt()
+    repo.start()
+    implementation = repo.product_commit()
+    repo.finish(implementation)
+    return repo
+
+
+def replace_frontmatter_status(repo: HistoryRepo, path: str, field: str, value: str) -> None:
+    artifact = repo.path / path
+    text = artifact.read_text(encoding="utf-8")
+    current = next(line for line in text.splitlines() if line.startswith(f"{field}:"))
+    artifact.write_text(text.replace(current, f"{field}: {value}", 1), encoding="utf-8")
+
+
+def chronology_repo(
+    tmp_path: Path,
+    *,
+    bootstrap: bool,
+    defect: str | None = None,
+    complete: bool = True,
+) -> HistoryRepo:
+    """Build a prospective Real-Git A/H/S0/S/P/I/Q history."""
+    repo = HistoryRepo.create(tmp_path)
+    for number in (2, 3, 4, 5):
+        repo.write_ac(number)
+    repo.write_requirement_admissions()
+    repo.write_ac(22)
+    replace_frontmatter_status(repo, ".proofline/criteria/ac-0022.md", "status", "draft")
+    replace_frontmatter_status(repo, ".proofline/criteria/ac-0001.md", "status", "draft")
+    replace_frontmatter_status(repo, ".proofline/criteria/ac-0002.md", "status", "draft")
+    if defect == "a-create-wrong-old-status":
+        replace_frontmatter_status(repo, ".proofline/criteria/ac-0001.md", "status", "active")
+    if defect == "a-update-wrong-old-status":
+        replace_frontmatter_status(repo, ".proofline/criteria/ac-0002.md", "status", "active")
+    if defect == "a-retire-wrong-old-status":
+        replace_frontmatter_status(repo, ".proofline/criteria/ac-0003.md", "status", "draft")
+    repo.write_ms(1, "not_started", spec_status="draft", criteria_numbers=(1, 2, 3, 4))
+    repo.write_line("not_started", policy="first_parent")
+    repo.commit("prospective", "record draft chronology policy")
+
+    replace_frontmatter_status(repo, ".proofline/criteria/ac-0022.md", "status", "active")
+    repo.commit("policy-A", "activate prospective chronology")
+
+    replace_frontmatter_status(repo, ".proofline/lines/line-0001/req-0001.md", "status", "approved")
+    replace_frontmatter_status(repo, ".proofline/criteria/ac-0001.md", "status", "active")
+    replace_frontmatter_status(repo, ".proofline/criteria/ac-0002.md", "status", "active")
+    replace_frontmatter_status(repo, ".proofline/criteria/ac-0003.md", "status", "retired")
+    if defect in {"a-create-body", "a-update-body", "a-retire-body", "a-satisfy-body"}:
+        number = {"a-create-body": 1, "a-update-body": 2, "a-retire-body": 3, "a-satisfy-body": 4}[defect]
+        ac = repo.path / f".proofline/criteria/ac-{number:04d}.md"
+        ac.write_text(
+            ac.read_text(encoding="utf-8").replace("조건이다.", "승인에서 바꾼 조건이다."),
+            encoding="utf-8",
+        )
+    if defect == "a-create-wrong-new-status":
+        replace_frontmatter_status(repo, ".proofline/criteria/ac-0001.md", "status", "retired")
+    if defect == "a-update-wrong-new-status":
+        replace_frontmatter_status(repo, ".proofline/criteria/ac-0002.md", "status", "retired")
+    if defect == "a-retire-wrong-new-status":
+        replace_frontmatter_status(repo, ".proofline/criteria/ac-0003.md", "status", "active")
+    if defect == "a-satisfy-status":
+        replace_frontmatter_status(repo, ".proofline/criteria/ac-0004.md", "status", "retired")
+    if defect == "a-missing-target":
+        (repo.path / ".proofline/criteria/ac-0004.md").unlink()
+    if defect == "a-path-id-mismatch":
+        ac = repo.path / ".proofline/criteria/ac-0004.md"
+        ac.write_text(
+            ac.read_text(encoding="utf-8").replace('id: "ac-0004"', 'id: "ac-9999"'),
+            encoding="utf-8",
+        )
+    if defect == "a-unrelated-ac":
+        ac = repo.path / ".proofline/criteria/ac-0005.md"
+        ac.write_text(ac.read_text(encoding="utf-8") + "unrelated\n", encoding="utf-8")
+    if defect == "a-req-body":
+        req = repo.path / ".proofline/lines/line-0001/req-0001.md"
+        req.write_text(
+            req.read_text(encoding="utf-8").replace("목표이다.", "승인에서 바꾼 목표이다."),
+            encoding="utf-8",
+        )
+    if bootstrap and defect != "a-not-combined":
+        repo.write_ms(1, "not_started", spec_status="approved", criteria_numbers=(1, 2, 3, 4))
+        if defect == "a-ms-body":
+            ms = repo.path / MS
+            ms.write_text(
+                ms.read_text(encoding="utf-8").replace("범위이다.", "승인에서 바꾼 범위이다."),
+                encoding="utf-8",
+            )
+    repo.commit("A", "approve REQ and AC baseline")
+    if bootstrap and defect == "a-not-combined":
+        repo.write_ms(1, "not_started", spec_status="approved", criteria_numbers=(1, 2, 3, 4))
+        repo.commit("late-bootstrap-spec", "approve bootstrap spec separately")
+
+    if defect == "p-before-h":
+        repo.write_ms(1, "in_progress", spec_status="approved")
+        repo.commit("P", "start before handoff")
+
+    if defect != "h-missing":
+        if defect == "h-non-direct":
+            (repo.path / "handoff-note.txt").write_text("intervening\n", encoding="utf-8")
+            repo.commit("between-A-H", "intervene between approval and handoff")
+        repo.write_line("in_progress", policy="first_parent")
+        if defect == "h-body":
+            (repo.path / LINE).write_text(
+                (repo.path / LINE).read_text(encoding="utf-8").replace(
+                    'id: "line-0001"', "id: line-0001"
+                ),
+                encoding="utf-8",
+            )
+        if defect == "h-multi-file":
+            (repo.path / "handoff-extra.txt").write_text("not status-only\n", encoding="utf-8")
+        repo.commit("H", "handoff Line")
+
+    if bootstrap:
+        if defect == "duplicate-s":
+            repo.write_ms(
+                1, "not_started", spec_status="draft", criteria_numbers=(1, 2, 3, 4)
+            )
+            repo.commit("duplicate-S0", "duplicate draft after handoff")
+            repo.write_ms(
+                1, "not_started", spec_status="approved", criteria_numbers=(1, 2, 3, 4)
+            )
+            repo.commit("duplicate-S", "duplicate approval after handoff")
+    else:
+        if defect not in {"missing-s0-s", "p-before-s"}:
+            ms = repo.path / MS
+            ms.write_text(
+                ms.read_text(encoding="utf-8").replace("범위이다.", "후속 Line 범위이다."),
+                encoding="utf-8",
+            )
+            repo.commit("S0", "persist clean draft")
+            if defect == "s-not-direct":
+                (repo.path / ".proofline/review-note.md").write_text("stale review\n", encoding="utf-8")
+                repo.commit("between-S0-S", "mutate after reviewed draft")
+            replace_frontmatter_status(repo, MS, "spec_status", "approved")
+            if defect == "s-body":
+                ms.write_text(
+                    ms.read_text(encoding="utf-8").replace("후속 Line 범위이다.", "승인 때 바꾼 범위이다."),
+                    encoding="utf-8",
+                )
+            repo.commit("S", "record user-approved specification")
+            if defect == "duplicate-s":
+                repo.write_ms(
+                    1, "not_started", spec_status="draft", criteria_numbers=(1, 2, 3, 4)
+                )
+                repo.commit("second-S0", "second draft")
+                repo.write_ms(
+                    1, "not_started", spec_status="approved", criteria_numbers=(1, 2, 3, 4)
+                )
+                repo.commit("second-S", "duplicate approval")
+        elif defect == "p-before-s":
+            repo.write_ms(
+                1, "in_progress", spec_status="draft", criteria_numbers=(1, 2, 3, 4)
+            )
+            repo.commit("early-P", "start before approval")
+            repo.write_ms(
+                1, "in_progress", spec_status="approved", criteria_numbers=(1, 2, 3, 4)
+            )
+            repo.commit("late-S", "approve after start")
+
+    if defect not in {"p-before-h", "p-before-s"}:
+        replace_frontmatter_status(repo, MS, "implementation_status", "in_progress")
+        repo.commit("P", "start implementation")
+    if complete:
+        implementation = repo.product_commit("I")
+        micro_spec_commit = repo.commits.get("S", repo.commits.get("A"))
+        if bootstrap:
+            repo.finish(
+                implementation,
+                "Q",
+                micro_spec_commit=micro_spec_commit,
+                criteria_numbers=(1, 2, 3, 4),
+            )
+        else:
+            replace_frontmatter_status(repo, MS, "implementation_status", "implemented")
+            repo.write_iqc(1, implementation, micro_spec_commit=micro_spec_commit)
+            repo.commit("Q", "Q")
+    return repo
+
+
+def test_bootstrap_a_h_p_i_q_chronology_passes(tmp_path: Path) -> None:
+    repo = chronology_repo(tmp_path, bootstrap=True)
+
+    assert validate_project(repo.path) == []
+
+    parent = repo.commits["A"] + "^"
+    transitions = {
+        1: ("draft", "active"),
+        2: ("draft", "active"),
+        3: ("active", "retired"),
+    }
+    for number, (old, new) in transitions.items():
+        path = f".proofline/criteria/ac-{number:04d}.md"
+        before = git(repo.path, "show", f"{parent}:{path}").stdout.encode()
+        after = git(repo.path, "show", f"{repo.commits['A']}:{path}").stdout.encode()
+        assert implementation_history._status_only_change(
+            before, after, "status", old, new, {"draft", "active", "retired"}
+        )
+    satisfy = ".proofline/criteria/ac-0004.md"
+    assert git(repo.path, "show", f"{parent}:{satisfy}").stdout == git(
+        repo.path, "show", f"{repo.commits['A']}:{satisfy}"
+    ).stdout
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "h-missing",
+        "h-non-direct",
+        "h-body",
+        "h-multi-file",
+        "a-not-combined",
+        "p-before-h",
+        "duplicate-s",
+    ],
+)
+def test_bootstrap_chronology_fails_closed(tmp_path: Path, defect: str) -> None:
+    repo = chronology_repo(tmp_path, bootstrap=True, defect=defect, complete=False)
+
+    assert (MS, "history.spec.chronology") in history_codes(repo)
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "a-create-body",
+        "a-update-body",
+        "a-retire-body",
+        "a-satisfy-body",
+        "a-create-wrong-old-status",
+        "a-create-wrong-new-status",
+        "a-update-wrong-old-status",
+        "a-update-wrong-new-status",
+        "a-retire-wrong-old-status",
+        "a-retire-wrong-new-status",
+        "a-satisfy-status",
+        "a-missing-target",
+        "a-path-id-mismatch",
+        "a-unrelated-ac",
+        "a-req-body",
+        "a-ms-body",
+    ],
+)
+def test_bootstrap_admission_transition_fails_closed(tmp_path: Path, defect: str) -> None:
+    repo = chronology_repo(tmp_path, bootstrap=True, defect=defect, complete=False)
+
+    assert (MS, "history.spec.chronology") in history_codes(repo)
+
+
+def test_future_a_h_s0_s_p_i_q_chronology_passes(tmp_path: Path) -> None:
+    repo = chronology_repo(tmp_path, bootstrap=False)
+
+    assert validate_project(repo.path) == []
+
+
+def test_future_chronology_accepts_verifying_to_in_progress_rework_start(
+    tmp_path: Path,
+) -> None:
+    repo = chronology_repo(tmp_path, bootstrap=False)
+    repo.write_line("verifying", policy="first_parent")
+    repo.commit("verified", "complete hosted verification")
+    repo.write_line("in_progress", policy="first_parent")
+    repo.write_ms(1, "in_progress", criteria_numbers=(1, 2, 3, 4))
+    repo.commit("rework-P", "start hosted correction")
+
+    assert validate_project(repo.path) == []
+
+
+def test_future_chronology_rejects_an_extra_initial_handoff(tmp_path: Path) -> None:
+    repo = chronology_repo(tmp_path, bootstrap=False, complete=False)
+    repo.write_line("not_started", policy="first_parent")
+    repo.commit("invalid-reset", "reset Line after initial handoff")
+    repo.write_line("in_progress", policy="first_parent")
+    repo.commit("duplicate-H", "repeat initial handoff")
+
+    assert (MS, "history.spec.chronology") in history_codes(repo)
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "missing-s0-s",
+        "s-not-direct",
+        "s-body",
+        "p-before-s",
+        "duplicate-s",
+    ],
+)
+def test_future_specification_handoff_fails_closed(tmp_path: Path, defect: str) -> None:
+    repo = chronology_repo(tmp_path, bootstrap=False, defect=defect, complete=False)
+
+    assert (MS, "history.spec.chronology") in history_codes(repo)
+
+
+def test_current_line_0020_bootstrap_history_remains_valid_at_in_progress_head() -> None:
+    assert validate_project(ROOT) == []
 
 
 @pytest.mark.parametrize("order", ["baseline-first", "start-first"])
@@ -1316,6 +1668,86 @@ def test_shallow_history_fails_closed(tmp_path: Path) -> None:
     assert_history_error(repo, LINE, "history.unavailable")
 
 
+@pytest.mark.parametrize("canonical_path", [LINE, IQC], ids=["line", "iqc"])
+def test_historical_symlink_mode_canonical_artifact_fails_closed_without_mutation(
+    tmp_path: Path, canonical_path: str
+) -> None:
+    repo = parity_symlink_canonical_artifact(tmp_path, canonical_path)
+    assert git(repo.path, "config", "--get", "core.symlinks").stdout.strip() == "false"
+    symlink_commit = git(repo.path, "rev-parse", "HEAD^").stdout.strip()
+    assert git(repo.path, "ls-tree", symlink_commit, "--", canonical_path).stdout.startswith(
+        "120000 blob "
+    )
+    assert (repo.path / canonical_path).is_file()
+    before = repository_snapshot(repo.path)
+
+    history_errors = [
+        (error.path, error.code)
+        for error in validate_project(repo.path)
+        if error.code.startswith("history.")
+    ]
+
+    assert history_errors == [(canonical_path, "history.unavailable")]
+    assert repository_snapshot(repo.path) == before
+
+
+def test_historical_tree_mode_canonical_artifact_fails_closed_without_mutation(
+    tmp_path: Path,
+) -> None:
+    repo = parity_tree_canonical_artifact(tmp_path)
+    before = repository_snapshot(repo.path)
+
+    history_errors = [
+        (error.path, error.code)
+        for error in validate_project(repo.path)
+        if error.code.startswith("history.")
+    ]
+
+    assert history_errors == [(LINE, "history.unavailable")]
+    assert repository_snapshot(repo.path) == before
+
+
+@pytest.mark.parametrize("regular_mode", ["100644", "100755"])
+def test_tree_cache_retains_exact_mode_type_oid_and_reuses_blob_read(
+    tmp_path: Path, regular_mode: str
+) -> None:
+    repo = HistoryRepo.create(tmp_path)
+    if regular_mode == "100755":
+        git(repo.path, "update-index", "--chmod=+x", LINE)
+        git(repo.path, "commit", "-qm", "executable canonical artifact")
+    commit = git(repo.path, "rev-parse", "HEAD").stdout.strip()
+    oid = git(repo.path, "rev-parse", f"{commit}:{LINE}").stdout.strip()
+    session = implementation_history._GitSession(repo.path)
+
+    paths = implementation_history._tree_paths(session, commit)
+
+    assert session.tree_entries[commit][LINE] == (regular_mode, "blob", oid)
+    assert implementation_history._file(session, commit, LINE, paths) == (repo.path / LINE).read_bytes()
+    commands_after_first_read = session.commands
+    assert implementation_history._file(session, commit, LINE, paths) == (repo.path / LINE).read_bytes()
+    assert session.commands == commands_after_first_read
+
+
+@pytest.mark.parametrize(
+    "tree_output",
+    [
+        b"0100644 blob " + b"a" * 40 + b"\t" + LINE.encode() + b"\0",
+        b"100644 blob " + b"a" * 40 + b"\t" + LINE.encode() + b"\0"
+        + b"100755 blob " + b"b" * 40 + b"\t" + LINE.encode() + b"\0",
+    ],
+    ids=["non-six-character-mode", "duplicate-path"],
+)
+def test_tree_cache_rejects_non_exact_mode_and_duplicate_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tree_output: bytes
+) -> None:
+    repo = HistoryRepo.create(tmp_path)
+    session = implementation_history._GitSession(repo.path)
+    monkeypatch.setattr(implementation_history, "_git", lambda *args, **kwargs: tree_output)
+
+    with pytest.raises(implementation_history.HistoryUnavailable):
+        implementation_history._tree_paths(session, "a" * 40)
+
+
 def test_one_invalid_micro_spec_is_reported_among_multiple(tmp_path: Path) -> None:
     repo = HistoryRepo.create(tmp_path, specs=2)
     repo.adopt()
@@ -1342,7 +1774,13 @@ def repository_snapshot(repo: Path) -> dict[str, object]:
     git_dir = Path(git(repo, "rev-parse", "--git-dir").stdout.strip())
     if not git_dir.is_absolute():
         git_dir = repo / git_dir
+    git_dir = git_dir.resolve()
+    common_dir = Path(git(repo, "rev-parse", "--git-common-dir").stdout.strip())
+    if not common_dir.is_absolute():
+        common_dir = repo / common_dir
+    common_dir = common_dir.resolve()
     status = git(repo, "status", "--porcelain=v1", "--untracked-files=all").stdout
+
     def digest(path: Path) -> str:
         hasher = hashlib.sha256()
         with path.open("rb") as stream:
@@ -1350,10 +1788,14 @@ def repository_snapshot(repo: Path) -> dict[str, object]:
                 hasher.update(chunk)
         return hasher.hexdigest()
 
-    database = {
-        path.relative_to(git_dir).as_posix(): digest(path)
-        for path in sorted(git_dir.rglob("*"))
-        if path.is_file() and path.name not in {"COMMIT_EDITMSG"}
+    object_database = {
+        path.relative_to(common_dir / "objects").as_posix(): (
+            "symlink" if path.is_symlink() else "file",
+            path.lstat().st_size,
+            digest(path),
+        )
+        for path in sorted((common_dir / "objects").rglob("*"))
+        if path.is_symlink() or path.is_file()
     }
     canonical = {
         path.relative_to(repo).as_posix(): path.read_bytes()
@@ -1363,10 +1805,15 @@ def repository_snapshot(repo: Path) -> dict[str, object]:
     return {
         "canonical": canonical,
         "index": (git_dir / "index").read_bytes(),
+        "index_sha256": digest(git_dir / "index"),
         "head": (git_dir / "HEAD").read_bytes(),
-        "symbolic_head": git(repo, "symbolic-ref", "-q", "HEAD").stdout,
-        "refs": git(repo, "for-each-ref", "--format=%(refname):%(objectname)").stdout,
-        "object_database": database,
+        "symbolic_head": git(repo, "symbolic-ref", "-q", "HEAD", check=False).stdout,
+        "refs": git(
+            repo,
+            "for-each-ref",
+            "--format=%(refname):%(objectname):%(symref)",
+        ).stdout,
+        "object_database": object_database,
         "status": status,
     }
 
@@ -2602,3 +3049,70 @@ def test_installed_wheel_cli_matches_source_history_diagnostics(
         assert wheel.returncode != 0
         assert f": {scenario.expected_code}:" in source.stderr
         assert f": {scenario.expected_code}:" in wheel.stderr
+
+
+@pytest.mark.parametrize("conflict", [False, True], ids=["positive", "conflict"])
+def test_installed_wheel_and_source_preserve_integration_object_store(
+    tmp_path: Path, installed_wheel_cli: Path, conflict: bool
+) -> None:
+    from test_integration_history import build_candidate, quarantined_merge_tree
+
+    repo, main_parent, line_head, _ = build_candidate(
+        tmp_path / "candidate", conflict_resolution=conflict
+    )
+    if not conflict:
+        expected_tree = quarantined_merge_tree(repo.path, main_parent, line_head)
+        expected_object = Path(
+            git(
+                repo.path,
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-path",
+                f"objects/{expected_tree[:2]}/{expected_tree[2:]}",
+            ).stdout.strip()
+        )
+        assert expected_object.is_file()
+        expected_object.unlink()
+    before = repository_snapshot(repo.path)
+
+    source = run_source(repo.path)
+    assert repository_snapshot(repo.path) == before
+    wheel = run_wheel(installed_wheel_cli, repo.path)
+    assert repository_snapshot(repo.path) == before
+
+    assert (wheel.returncode, wheel.stdout, wheel.stderr) == (
+        source.returncode,
+        source.stdout,
+        source.stderr,
+    )
+    if conflict:
+        assert source.returncode != 0
+        assert ": history.integration.tree:" in source.stderr
+    else:
+        assert source.returncode == 0
+
+
+@pytest.mark.parametrize("effective_result", ["failed", "blocked"])
+def test_installed_wheel_matches_source_effective_dqc_delivery_diagnostic(
+    tmp_path: Path, installed_wheel_cli: Path, effective_result: str
+) -> None:
+    from test_integration_history import build_candidate, deliver, write_dqc
+
+    repo, _, _, candidate = build_candidate(tmp_path / effective_result)
+    write_dqc(repo, candidate)
+    write_dqc(repo, candidate, result=effective_result)
+    deliver(repo)
+    before = repository_snapshot(repo.path)
+
+    source = run_source(repo.path)
+    assert repository_snapshot(repo.path) == before
+    wheel = run_wheel(installed_wheel_cli, repo.path)
+    assert repository_snapshot(repo.path) == before
+
+    assert (wheel.returncode, wheel.stdout, wheel.stderr) == (
+        source.returncode,
+        source.stdout,
+        source.stderr,
+    )
+    assert source.returncode != 0
+    assert ": history.integration.dqc:" in source.stderr
