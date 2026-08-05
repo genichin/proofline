@@ -270,8 +270,10 @@ def _yaml_has_duplicate_mapping(payload: bytes) -> bool:
     return visit(document) if document is not None else False
 
 
-def _spec_revision_bytes(content: bytes | None) -> bytes | None:
-    """Return Micro-SPEC bytes with lifecycle-only status normalized away."""
+def _frontmatter_field_revision_bytes(
+    content: bytes | None, field_name: str, allowed_values: set[str]
+) -> bytes | None:
+    """Return artifact bytes with one top-level lifecycle field normalized away."""
     if content is None:
         return None
     try:
@@ -302,19 +304,14 @@ def _spec_revision_bytes(content: bytes | None) -> bytes | None:
     matches = [
         (key, value)
         for key, value in document.value
-        if isinstance(key, yaml.ScalarNode)
-        and key.value == "implementation_status"
+        if isinstance(key, yaml.ScalarNode) and key.value == field_name
     ]
     if not matches:
         return content
     if len(matches) != 1:
         raise HistoryUnavailable
     key, value = matches[0]
-    if not isinstance(value, yaml.ScalarNode) or value.value not in {
-        "not_started",
-        "in_progress",
-        "implemented",
-    }:
+    if not isinstance(value, yaml.ScalarNode) or value.value not in allowed_values:
         raise HistoryUnavailable
     key_line = yaml_text.count("\n", 0, key.start_mark.index)
     value_line = yaml_text.count("\n", 0, value.end_mark.index)
@@ -333,6 +330,15 @@ def _spec_revision_bytes(content: bytes | None) -> bytes | None:
     removed_start = len(prefix_bytes) + len(before)
     removed_end = len(prefix_bytes) + len(yaml_text[:line_end].encode("utf-8"))
     return content[:removed_start] + content[removed_end:]
+
+
+def _spec_revision_bytes(content: bytes | None) -> bytes | None:
+    """Return Micro-SPEC bytes with lifecycle-only status normalized away."""
+    return _frontmatter_field_revision_bytes(
+        content,
+        "implementation_status",
+        {"not_started", "in_progress", "implemented"},
+    )
 
 
 def _tree_paths(session: _GitSession, commit: str) -> set[str]:
@@ -983,6 +989,305 @@ def _validate_historical_cycles(
     return []
 
 
+def _artifact_at(session: _GitSession, commit: str, path: str) -> bytes | None:
+    listed = _git(session, "ls-tree", "--name-only", commit, "--", path)
+    try:
+        paths = listed.decode("utf-8").splitlines()
+    except UnicodeError as error:
+        raise HistoryUnavailable from error
+    if paths != [path]:
+        return None
+    return _git(session, "show", f"{commit}:{path}")
+
+
+def _changed_paths(session: _GitSession, commit: str) -> list[str]:
+    output = _git(
+        session, "diff", "--name-only", "--no-renames", f"{commit}^1", commit
+    )
+    try:
+        return [path for path in output.decode("utf-8").splitlines() if path]
+    except UnicodeError as error:
+        raise HistoryUnavailable from error
+
+
+def _status_only_change(
+    before: bytes | None,
+    after: bytes | None,
+    field_name: str,
+    before_value: str,
+    after_value: str,
+    allowed_values: set[str],
+) -> bool:
+    if before is None or after is None:
+        return False
+    try:
+        before_state = _frontmatter(before)
+        after_state = _frontmatter(after)
+        return (
+            before_state.get(field_name) == before_value
+            and after_state.get(field_name) == after_value
+            and _frontmatter_field_revision_bytes(before, field_name, allowed_values)
+            == _frontmatter_field_revision_bytes(after, field_name, allowed_values)
+        )
+    except HistoryUnavailable:
+        return False
+
+
+def _approval_index(
+    session: _GitSession,
+    req_path: str,
+    commits: list[str],
+    baseline: int,
+) -> int | None:
+    previous: object = None
+    for index, commit in enumerate(commits):
+        content = _artifact_at(session, commit, req_path)
+        state = _frontmatter(content) if content is not None else None
+        status = state.get("status") if state is not None else None
+        if index >= baseline and status == "approved" and previous != "approved":
+            return index
+        previous = status
+    return None
+
+
+def _specification_chronology_activation(
+    session: _GitSession, commits: list[str], trees: list[set[str]]
+) -> int | None:
+    """Return the AC-0022 admission that makes A/H/S0/S prospective."""
+    path = ".proofline/criteria/ac-0022.md"
+    previous: object = None
+    for index, (commit, _paths) in enumerate(zip(commits, trees, strict=True)):
+        content = _artifact_at(session, commit, path)
+        state = _frontmatter(content) if content is not None else None
+        status = state.get("status") if state is not None else None
+        if status == "active" and previous != "active":
+            return index
+        previous = status
+    return None
+
+
+def _validate_approval_baseline(
+    session: _GitSession,
+    line_path: str,
+    ms_path: str,
+    approval: int,
+    commits: list[str],
+    trees: list[set[str]],
+) -> bool:
+    if approval == 0:
+        return False
+    line_number = LINE_PATH.fullmatch(line_path)
+    assert line_number is not None
+    req_path = (
+        f".proofline/lines/line-{line_number.group(1)}/req-{line_number.group(1)}.md"
+    )
+    before_commit, approval_commit = commits[approval - 1], commits[approval]
+    before_req = _artifact_at(session, before_commit, req_path)
+    approved_req = _artifact_at(session, approval_commit, req_path)
+    if not _status_only_change(
+        before_req,
+        approved_req,
+        "status",
+        "draft",
+        "approved",
+        {"draft", "approved", "withdrawn"},
+    ):
+        return False
+    requirement = _frontmatter(approved_req or b"")
+    criteria = requirement.get("criteria")
+    if not isinstance(criteria, dict):
+        return False
+    criterion_ids = {
+        value
+        for action in ("create", "update", "retire", "satisfy")
+        for value in (criteria.get(action) or [])  # type: ignore[union-attr]
+        if isinstance(value, str) and re.fullmatch(r"ac-\d{4}", value)
+    }
+    criterion_paths = {f".proofline/criteria/{value}.md" for value in criterion_ids}
+    bootstrap_paths = {
+        path
+        for path in trees[approval]
+        if MS_PATH.fullmatch(path)
+        and path.startswith(line_path.rsplit("/", 1)[0] + "/micro-specs/")
+        and (_frontmatter(_file(session, approval_commit, path, trees[approval]) or b"").get("spec_status") == "approved")
+        and (
+            path not in trees[approval - 1]
+            or _frontmatter(_file(session, before_commit, path, trees[approval - 1]) or b"").get("spec_status")
+            != "approved"
+        )
+    }
+    allowed_paths = {req_path} | criterion_paths | bootstrap_paths
+    changed = set(_changed_paths(session, approval_commit))
+    if not changed or not changed <= allowed_paths or req_path not in changed:
+        return False
+    for path in changed & criterion_paths:
+        before = _artifact_at(session, before_commit, path)
+        after = _artifact_at(session, approval_commit, path)
+        before_state = _frontmatter(before) if before is not None else None
+        old_status = before_state.get("status") if before_state is not None else None
+        if old_status not in {"draft", "active"}:
+            return False
+        if old_status == "draft" and not _status_only_change(
+            before, after, "status", "draft", "active", {"draft", "active", "retired"}
+        ):
+            return False
+    for path in bootstrap_paths:
+        if not _status_only_change(
+            _artifact_at(session, before_commit, path),
+            _artifact_at(session, approval_commit, path),
+            "spec_status",
+            "draft",
+            "approved",
+            {"draft", "approved", "withdrawn"},
+        ):
+            return False
+    return ms_path in bootstrap_paths or ms_path not in changed
+
+
+def _validate_specification_chronology(
+    session: _GitSession,
+    line_path: str,
+    ms_path: str,
+    baseline: int,
+    line_states: list[dict[str, object] | None],
+    ms_states: list[dict[str, object] | None],
+    commits: list[str],
+    trees: list[set[str]],
+) -> list[HistoryError]:
+    """Validate prospective A/H/S0/S handoff without rewriting legacy cycles."""
+    line_number = LINE_PATH.fullmatch(line_path)
+    assert line_number is not None
+    req_path = (
+        f".proofline/lines/line-{line_number.group(1)}/req-{line_number.group(1)}.md"
+    )
+    activation = _specification_chronology_activation(session, commits, trees)
+    approval = _approval_index(
+        session,
+        req_path,
+        commits,
+        max(baseline, activation) if activation is not None else baseline,
+    )
+    if approval is None:
+        # REQ approval predating policy admission is legacy and remains governed
+        # by the existing P/I/Q and rework validator.
+        return []
+
+    def error() -> list[HistoryError]:
+        return [
+            _line_error(
+                ms_path,
+                "history.spec.chronology",
+                "prospective specification에는 exact A → H → S0 → S → P chronology가 필요합니다.",
+            )
+        ]
+
+    if not _validate_approval_baseline(
+        session, line_path, ms_path, approval, commits, trees
+    ):
+        return error()
+
+    handoffs = [
+        index
+        for index in range(1, len(line_states))
+        if line_states[index] is not None
+        and line_states[index].get("execution_status") == "in_progress"
+        and (
+            line_states[index - 1] is None
+            or line_states[index - 1].get("execution_status") != "in_progress"
+        )
+        and index >= approval
+    ]
+    if len(handoffs) != 1:
+        return error()
+    handoff = handoffs[0]
+    if handoff != approval + 1 or _changed_paths(session, commits[handoff]) != [line_path]:
+        return error()
+    if not _status_only_change(
+        _artifact_at(session, commits[handoff - 1], line_path),
+        _artifact_at(session, commits[handoff], line_path),
+        "execution_status",
+        "not_started",
+        "in_progress",
+        {"not_started", "in_progress", "verifying", "delivered", "cancelled"},
+    ):
+        return error()
+
+    starts = [
+        index
+        for index in range(1, len(ms_states))
+        if ms_states[index] is not None
+        and ms_states[index].get("implementation_status") == "in_progress"
+        and (
+            ms_states[index - 1] is None
+            or ms_states[index - 1].get("implementation_status") != "in_progress"
+        )
+        and index > approval
+    ]
+    start = starts[0] if starts else None
+    approvals = [
+        index
+        for index in range(1, len(ms_states))
+        if ms_states[index] is not None
+        and ms_states[index].get("spec_status") == "approved"
+        and (
+            ms_states[index - 1] is None
+            or ms_states[index - 1].get("spec_status") != "approved"
+        )
+        and index > approval
+    ]
+    approved_at_a = (
+        ms_states[approval] is not None
+        and ms_states[approval].get("spec_status") == "approved"
+        and (
+            approval == 0
+            or ms_states[approval - 1] is None
+            or ms_states[approval - 1].get("spec_status") != "approved"
+        )
+    )
+
+    if approved_at_a:
+        if approvals or (start is not None and start <= handoff):
+            return error()
+    else:
+        if start is None and not approvals:
+            return []
+        if len(approvals) != 1:
+            return error()
+        specification = approvals[0]
+        draft = specification - 1
+        if not (handoff < draft < specification and (start is None or specification < start)):
+            return error()
+        if ms_states[draft] is None or ms_states[draft].get("spec_status") != "draft":
+            return error()
+        if _changed_paths(session, commits[draft]) != [ms_path]:
+            return error()
+        if _changed_paths(session, commits[specification]) != [ms_path]:
+            return error()
+        if not _status_only_change(
+            _artifact_at(session, commits[draft], ms_path),
+            _artifact_at(session, commits[specification], ms_path),
+            "spec_status",
+            "draft",
+            "approved",
+            {"draft", "approved", "withdrawn"},
+        ):
+            return error()
+
+    if start is not None:
+        if start <= handoff or _changed_paths(session, commits[start]) != [ms_path]:
+            return error()
+        if not _status_only_change(
+            _artifact_at(session, commits[start - 1], ms_path),
+            _artifact_at(session, commits[start], ms_path),
+            "implementation_status",
+            "not_started",
+            "in_progress",
+            {"not_started", "in_progress", "implemented"},
+        ):
+            return error()
+    return []
+
+
 def _validate_micro_spec(
     session: _GitSession,
     path: str,
@@ -1344,6 +1649,20 @@ def validate_implementation_history(
                         current_path.read_bytes() if current_path.is_file() else None
                     )
                     head_ms_bytes = _file(session, commits[-1], ms_path, trees[-1])
+                    ms_states = _line_states(session, ms_path, commits, trees)
+                    chronology_errors = _validate_specification_chronology(
+                        session,
+                        line_path,
+                        ms_path,
+                        baseline,
+                        states,
+                        ms_states,
+                        commits,
+                        trees,
+                    )
+                    errors.extend(chronology_errors)
+                    if chronology_errors:
+                        continue
                     errors.extend(
                         _validate_micro_spec(
                             session,

@@ -235,6 +235,166 @@ def assert_history_error(repo: HistoryRepo, path: str, code: str) -> None:
     assert (path, code) in history_codes(repo)
 
 
+def replace_frontmatter_status(repo: HistoryRepo, path: str, field: str, value: str) -> None:
+    artifact = repo.path / path
+    text = artifact.read_text(encoding="utf-8")
+    current = next(line for line in text.splitlines() if line.startswith(f"{field}:"))
+    artifact.write_text(text.replace(current, f"{field}: {value}", 1), encoding="utf-8")
+
+
+def chronology_repo(
+    tmp_path: Path,
+    *,
+    bootstrap: bool,
+    defect: str | None = None,
+    complete: bool = True,
+) -> HistoryRepo:
+    """Build a prospective Real-Git A/H/S0/S/P/I/Q history."""
+    repo = HistoryRepo.create(tmp_path)
+    repo.write_ac(22)
+    replace_frontmatter_status(repo, ".proofline/criteria/ac-0022.md", "status", "draft")
+    replace_frontmatter_status(repo, ".proofline/lines/line-0001/req-0001.md", "status", "draft")
+    replace_frontmatter_status(repo, ".proofline/criteria/ac-0001.md", "status", "draft")
+    repo.write_ms(1, "not_started", spec_status="draft")
+    repo.write_line("not_started", policy="first_parent")
+    repo.commit("prospective", "record draft chronology policy")
+
+    replace_frontmatter_status(repo, ".proofline/criteria/ac-0022.md", "status", "active")
+    repo.commit("policy-A", "activate prospective chronology")
+
+    replace_frontmatter_status(repo, ".proofline/lines/line-0001/req-0001.md", "status", "approved")
+    replace_frontmatter_status(repo, ".proofline/criteria/ac-0001.md", "status", "active")
+    if bootstrap and defect != "a-not-combined":
+        repo.write_ms(1, "not_started", spec_status="approved")
+    repo.commit("A", "approve REQ and AC baseline")
+    if bootstrap and defect == "a-not-combined":
+        repo.write_ms(1, "not_started", spec_status="approved")
+        repo.commit("late-bootstrap-spec", "approve bootstrap spec separately")
+
+    if defect == "p-before-h":
+        repo.write_ms(1, "in_progress", spec_status="approved")
+        repo.commit("P", "start before handoff")
+
+    if defect != "h-missing":
+        if defect == "h-non-direct":
+            (repo.path / "handoff-note.txt").write_text("intervening\n", encoding="utf-8")
+            repo.commit("between-A-H", "intervene between approval and handoff")
+        repo.write_line("in_progress", policy="first_parent")
+        if defect == "h-body":
+            (repo.path / LINE).write_text(
+                (repo.path / LINE).read_text(encoding="utf-8").replace(
+                    'id: "line-0001"', "id: line-0001"
+                ),
+                encoding="utf-8",
+            )
+        if defect == "h-multi-file":
+            (repo.path / "handoff-extra.txt").write_text("not status-only\n", encoding="utf-8")
+        repo.commit("H", "handoff Line")
+
+    if bootstrap:
+        if defect == "duplicate-s":
+            repo.write_ms(1, "not_started", spec_status="draft")
+            repo.commit("duplicate-S0", "duplicate draft after handoff")
+            repo.write_ms(1, "not_started", spec_status="approved")
+            repo.commit("duplicate-S", "duplicate approval after handoff")
+    else:
+        if defect not in {"missing-s0-s", "p-before-s"}:
+            ms = repo.path / MS
+            ms.write_text(
+                ms.read_text(encoding="utf-8").replace("범위이다.", "후속 Line 범위이다."),
+                encoding="utf-8",
+            )
+            repo.commit("S0", "persist clean draft")
+            if defect == "s-not-direct":
+                (repo.path / ".proofline/review-note.md").write_text("stale review\n", encoding="utf-8")
+                repo.commit("between-S0-S", "mutate after reviewed draft")
+            replace_frontmatter_status(repo, MS, "spec_status", "approved")
+            if defect == "s-body":
+                ms.write_text(
+                    ms.read_text(encoding="utf-8").replace("후속 Line 범위이다.", "승인 때 바꾼 범위이다."),
+                    encoding="utf-8",
+                )
+            repo.commit("S", "record user-approved specification")
+            if defect == "duplicate-s":
+                repo.write_ms(1, "not_started", spec_status="draft")
+                repo.commit("second-S0", "second draft")
+                repo.write_ms(1, "not_started", spec_status="approved")
+                repo.commit("second-S", "duplicate approval")
+        elif defect == "p-before-s":
+            repo.write_ms(1, "in_progress", spec_status="draft")
+            repo.commit("early-P", "start before approval")
+            repo.write_ms(1, "in_progress", spec_status="approved")
+            repo.commit("late-S", "approve after start")
+
+    if defect not in {"p-before-h", "p-before-s"}:
+        replace_frontmatter_status(repo, MS, "implementation_status", "in_progress")
+        repo.commit("P", "start implementation")
+    if complete:
+        implementation = repo.product_commit("I")
+        micro_spec_commit = repo.commits.get("S", repo.commits.get("A"))
+        if bootstrap:
+            repo.finish(
+                implementation,
+                "Q",
+                micro_spec_commit=micro_spec_commit,
+            )
+        else:
+            replace_frontmatter_status(repo, MS, "implementation_status", "implemented")
+            repo.write_iqc(1, implementation, micro_spec_commit=micro_spec_commit)
+            repo.commit("Q", "Q")
+    return repo
+
+
+def test_bootstrap_a_h_p_i_q_chronology_passes(tmp_path: Path) -> None:
+    repo = chronology_repo(tmp_path, bootstrap=True)
+
+    assert validate_project(repo.path) == []
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "h-missing",
+        "h-non-direct",
+        "h-body",
+        "h-multi-file",
+        "a-not-combined",
+        "p-before-h",
+        "duplicate-s",
+    ],
+)
+def test_bootstrap_chronology_fails_closed(tmp_path: Path, defect: str) -> None:
+    repo = chronology_repo(tmp_path, bootstrap=True, defect=defect, complete=False)
+
+    assert (MS, "history.spec.chronology") in history_codes(repo)
+
+
+def test_future_a_h_s0_s_p_i_q_chronology_passes(tmp_path: Path) -> None:
+    repo = chronology_repo(tmp_path, bootstrap=False)
+
+    assert validate_project(repo.path) == []
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "missing-s0-s",
+        "s-not-direct",
+        "s-body",
+        "p-before-s",
+        "duplicate-s",
+    ],
+)
+def test_future_specification_handoff_fails_closed(tmp_path: Path, defect: str) -> None:
+    repo = chronology_repo(tmp_path, bootstrap=False, defect=defect, complete=False)
+
+    assert (MS, "history.spec.chronology") in history_codes(repo)
+
+
+def test_current_line_0020_bootstrap_history_remains_valid_at_in_progress_head() -> None:
+    assert validate_project(ROOT) == []
+
+
 @pytest.mark.parametrize("order", ["baseline-first", "start-first"])
 def test_valid_first_cycle_accepts_both_baseline_start_orders(
     tmp_path: Path, order: str
