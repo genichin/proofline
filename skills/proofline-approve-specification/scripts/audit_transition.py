@@ -9,6 +9,9 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import threading
+import time
+from typing import Any
 
 
 LINE_RE = re.compile(r"line-[0-9]{4}\Z")
@@ -22,57 +25,104 @@ class AuditError(RuntimeError):
     """Invalid audit target rather than absent optional evidence."""
 
 
-def git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+def run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+    command = ("git", "-C", str(repo), *args)
     environment = os.environ.copy()
-    environment.update(
-        {
-            "GIT_NO_LAZY_FETCH": "1",
-            "GIT_NO_REPLACE_OBJECTS": "1",
-            "GIT_OPTIONAL_LOCKS": "0",
-            "GIT_TERMINAL_PROMPT": "0",
-        }
-    )
+    environment.update({
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_TERMINAL_PROMPT": "0",
+        "LC_ALL": "C",
+    })
     try:
-        result = subprocess.run(
-            ("git", "-C", str(repo), *args),
-            text=True,
-            capture_output=True,
-            check=False,
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             env=environment,
-            timeout=GIT_READ_TIMEOUT_SECONDS,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise AuditError("git command failed") from exc
-    if (
-        len(result.stdout.encode()) + len(result.stderr.encode()) > GIT_READ_OUTPUT_LIMIT
-        or result.returncode != 0
-    ):
-        detail = result.stderr.strip() or result.stdout.strip() or "git command failed"
+    except OSError as exc:
+        raise AuditError("git command failed to start") from exc
+
+    output = [bytearray(), bytearray()]
+    total = 0
+    lock = threading.Lock()
+    overflow = threading.Event()
+
+    def drain(pipe: Any, destination: bytearray) -> None:
+        nonlocal total
+        try:
+            while True:
+                chunk = pipe.read(64 * 1024)
+                if not chunk:
+                    break
+                with lock:
+                    remaining = GIT_READ_OUTPUT_LIMIT - total
+                    if len(chunk) > remaining:
+                        destination.extend(chunk[:max(remaining, 0)])
+                        total = GIT_READ_OUTPUT_LIMIT
+                        overflow.set()
+                    else:
+                        destination.extend(chunk)
+                        total += len(chunk)
+        finally:
+            pipe.close()
+
+    threads = [
+        threading.Thread(target=drain, args=(process.stdout, output[0]), daemon=True),
+        threading.Thread(target=drain, args=(process.stderr, output[1]), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+
+    deadline = time.monotonic() + GIT_READ_TIMEOUT_SECONDS
+    reason: str | None = None
+    while process.poll() is None:
+        if overflow.wait(0.01):
+            reason = "git command output exceeds limit"
+            break
+        if time.monotonic() >= deadline:
+            reason = "git command timed out"
+            break
+    if reason is not None and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=0.25)
+        except subprocess.TimeoutExpired:
+            process.kill()
+    process.wait()
+    for thread in threads:
+        thread.join()
+    if reason is not None or overflow.is_set():
+        raise AuditError(reason or "git command output exceeds limit")
+    return subprocess.CompletedProcess(command, process.returncode, bytes(output[0]), bytes(output[1]))
+
+
+def decode_git(raw: bytes) -> str:
+    try:
+        return raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise AuditError("git command output is not UTF-8") from exc
+
+
+def git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
+    result = run_git(repo, *args)
+    stdout = decode_git(result.stdout)
+    stderr = decode_git(result.stderr)
+    if result.returncode != 0:
+        detail = stderr.strip() or stdout.strip() or "git command failed"
         raise AuditError(detail)
-    return result
+    return subprocess.CompletedProcess(result.args, result.returncode, stdout, stderr)
 
 
 def artifact_at(repo: Path, commit: str, relative_path: str) -> str:
-    environment = os.environ.copy()
-    environment.update(
-        {
-            "GIT_NO_LAZY_FETCH": "1",
-            "GIT_NO_REPLACE_OBJECTS": "1",
-            "GIT_OPTIONAL_LOCKS": "0",
-            "GIT_TERMINAL_PROMPT": "0",
-        }
-    )
     try:
-        entry = subprocess.run(
-            ("git", "-C", str(repo), "ls-tree", "-z", "--full-tree", commit, "--", relative_path),
-            capture_output=True,
-            check=False,
-            env=environment,
-            timeout=GIT_READ_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        entry = run_git(repo, "ls-tree", "-z", "--full-tree", commit, "--", relative_path)
+    except AuditError as exc:
         raise AuditError(f"canonical artifact read failed: {relative_path}") from exc
-    if len(entry.stdout) + len(entry.stderr) > GIT_READ_OUTPUT_LIMIT or entry.returncode != 0:
+    if entry.returncode != 0:
         raise AuditError(f"canonical artifact read failed: {relative_path}")
     records = entry.stdout.split(b"\0")
     if len(records) != 2 or records[1] or not records[0]:
@@ -94,19 +144,14 @@ def artifact_at(repo: Path, commit: str, relative_path: str) -> str:
             raise AuditError(f"canonical artifact must be a regular blob: {relative_path}")
         raise AuditError(f"canonical artifact tree entry is missing or malformed: {relative_path}")
     try:
-        blob = subprocess.run(
-            ("git", "-C", str(repo), "cat-file", "blob", metadata[2].decode("ascii")),
-            capture_output=True,
-            check=False,
-            env=environment,
-            timeout=GIT_READ_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        oid = metadata[2].decode("ascii", errors="strict")
+        blob = run_git(repo, "cat-file", "blob", oid)
+    except (UnicodeDecodeError, AuditError) as exc:
         raise AuditError(f"canonical artifact read failed: {relative_path}") from exc
-    if len(blob.stdout) + len(blob.stderr) > GIT_READ_OUTPUT_LIMIT or blob.returncode != 0:
+    if blob.returncode != 0:
         raise AuditError(f"canonical artifact read failed: {relative_path}")
     try:
-        return blob.stdout.decode("utf-8")
+        return blob.stdout.decode("utf-8", errors="strict")
     except UnicodeDecodeError as exc:
         raise AuditError(f"canonical artifact is not UTF-8: {relative_path}") from exc
 

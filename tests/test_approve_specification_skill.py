@@ -1,7 +1,9 @@
 from pathlib import Path
 import hashlib
+import os
 import subprocess
 import sys
+import time
 
 import pytest
 import yaml
@@ -107,7 +109,7 @@ def snapshot(repo: Path) -> tuple[str, str, str, dict[str, str]]:
 
 
 def run_audit(
-    repo: Path, commit: str, *, script: Path = SCRIPT
+    repo: Path, commit: str, *, script: Path = SCRIPT, env: dict[str, str] | None = None
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         (
@@ -124,7 +126,31 @@ def run_audit(
         text=True,
         capture_output=True,
         check=False,
+        env=env,
+        timeout=6,
     )
+
+
+def install_flooding_git(tmp_path: Path) -> dict[str, str]:
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir()
+    fake_git = bin_dir / "git"
+    fake_git.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, threading\n"
+        "def flood(fd):\n"
+        "    chunk = b'x' * 65536\n"
+        "    while True:\n"
+        "        os.write(fd, chunk)\n"
+        "threads = [threading.Thread(target=flood, args=(fd,)) for fd in (1, 2)]\n"
+        "[thread.start() for thread in threads]\n"
+        "[thread.join() for thread in threads]\n",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+    return env
 
 
 def make_typed_transition_repo(
@@ -275,3 +301,33 @@ def test_audit_accepts_executable_regular_blob_transition_artifact(tmp_path: Pat
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "transition: recorded"
     assert snapshot(repo) == before
+
+
+def test_audit_ignores_replace_object_that_makes_invalid_raw_approval_valid(
+    tmp_path: Path,
+) -> None:
+    repo, invalid = make_repo(tmp_path, mode="unapproved")
+    write_spec(repo, req_status="approved", ac_status="active")
+    git(repo, "add", ".")
+    valid_tree = git(repo, "write-tree").stdout.strip()
+    replacement = git(repo, "commit-tree", valid_tree, "-m", "replacement").stdout.strip()
+    git(repo, "replace", invalid, replacement)
+    git(repo, "reset", "--hard", "-q", invalid)
+    before = snapshot(repo)
+
+    result = run_audit(repo, invalid)
+
+    assert result.returncode == 2
+    assert "REQ.status must be approved" in result.stderr
+    assert snapshot(repo) == before
+
+
+def test_audit_fails_promptly_when_git_combined_output_exceeds_limit(tmp_path: Path) -> None:
+    repo, approval = make_repo(tmp_path, mode="recorded")
+    started = time.monotonic()
+
+    result = run_audit(repo, approval, env=install_flooding_git(tmp_path))
+
+    assert time.monotonic() - started < 4
+    assert result.returncode == 2
+    assert result.stderr.strip() == "error: git command output exceeds limit"

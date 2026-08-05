@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -255,6 +258,66 @@ def run_helper(
         capture_output=True,
         check=False,
     )
+
+
+def load_helper():
+    spec = importlib.util.spec_from_file_location("preflight_integration_candidate", HELPER)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_pre_admission_ignores_replace_quality_head_without_mutation(tmp_path: Path) -> None:
+    repo, m, q, v = make_candidate(tmp_path, defect="failed-iqc")
+    git(repo, "switch", "-q", "--detach", q)
+    iqc = repo / ".proofline/lines/line-0007/micro-specs/iqc-0007-001.md"
+    iqc.write_text(
+        iqc.read_text(encoding="utf-8").replace("result: failed", "result: passed"),
+        encoding="utf-8",
+    )
+    valid_replacement = commit(repo, "replacement quality head")
+    git(repo, "switch", "-q", "candidate/line-0007")
+    git(repo, "replace", q, valid_replacement)
+    before = snapshot(repo)
+
+    result = run_helper(repo, m, q, v)
+
+    assert result.returncode == 2
+    assert "IQC iqc-0007-001 is not passed" in result.stderr
+    assert snapshot(repo) == before
+
+
+def test_dqc_git_runner_stops_at_combined_output_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_helper()
+    executable_dir = tmp_path / "bin"
+    executable_dir.mkdir()
+    fake_git = executable_dir / "git"
+    fake_git.write_text(
+        "#!/usr/bin/python3\n"
+        "import os, threading, time\n"
+        "payload = b'x' * (5 * 1024 * 1024)\n"
+        "def write_all(fd):\n"
+        "    data = memoryview(payload)\n"
+        "    while data:\n"
+        "        data = data[os.write(fd, data):]\n"
+        "thread = threading.Thread(target=lambda: write_all(2))\n"
+        "thread.start()\n"
+        "write_all(1)\n"
+        "thread.join()\n"
+        "time.sleep(1)\n",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+    monkeypatch.setenv("PATH", str(executable_dir))
+    started = time.monotonic()
+
+    with pytest.raises(module.PreflightError, match="excessive output"):
+        module.git(tmp_path, "status")
+
+    assert time.monotonic() - started < 0.75
 
 
 def test_pre_admission_helper_passes_exact_m_q_v_without_mutation(tmp_path: Path) -> None:

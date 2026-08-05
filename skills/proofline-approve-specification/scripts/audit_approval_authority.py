@@ -6,10 +6,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
+import threading
+import time
 from typing import Any, NoReturn
 
 import yaml
@@ -52,17 +55,99 @@ def fail(scenario: str, detail: str) -> NoReturn:
     raise GateError(scenario, detail)
 
 
+def run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
+    command = ("git", "-C", str(repo), *args)
+    environment = os.environ.copy()
+    environment.update({
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_NO_LAZY_FETCH": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_TERMINAL_PROMPT": "0",
+        "LC_ALL": "C",
+    })
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=environment,
+        )
+    except OSError as exc:
+        raise RuntimeError("git command failed to start") from exc
+
+    output = [bytearray(), bytearray()]
+    total = 0
+    lock = threading.Lock()
+    overflow = threading.Event()
+
+    def drain(pipe: Any, destination: bytearray) -> None:
+        nonlocal total
+        try:
+            while True:
+                chunk = pipe.read(64 * 1024)
+                if not chunk:
+                    break
+                with lock:
+                    remaining = GIT_READ_OUTPUT_LIMIT - total
+                    if len(chunk) > remaining:
+                        destination.extend(chunk[:max(remaining, 0)])
+                        total = GIT_READ_OUTPUT_LIMIT
+                        overflow.set()
+                    else:
+                        destination.extend(chunk)
+                        total += len(chunk)
+        finally:
+            pipe.close()
+
+    threads = [
+        threading.Thread(target=drain, args=(process.stdout, output[0]), daemon=True),
+        threading.Thread(target=drain, args=(process.stderr, output[1]), daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+
+    deadline = time.monotonic() + GIT_READ_TIMEOUT_SECONDS
+    reason: str | None = None
+    while process.poll() is None:
+        if overflow.wait(0.01):
+            reason = "git command output exceeds limit"
+            break
+        if time.monotonic() >= deadline:
+            reason = "git command timed out"
+            break
+    if reason is not None and process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=0.25)
+        except subprocess.TimeoutExpired:
+            process.kill()
+    process.wait()
+    for thread in threads:
+        thread.join()
+    if reason is not None or overflow.is_set():
+        raise RuntimeError(reason or "git command output exceeds limit")
+    return subprocess.CompletedProcess(command, process.returncode, bytes(output[0]), bytes(output[1]))
+
+
+def decode_git(raw: bytes) -> str:
+    try:
+        return raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError:
+        raise RuntimeError("git command output is not UTF-8") from None
+
+
 def git(repo: Path, *args: str, scenario: str = "GIT_OBJECT") -> str:
-    result = subprocess.run(
-        ("git", "-C", str(repo), *args),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    try:
+        result = run_git(repo, *args)
+        stdout = decode_git(result.stdout)
+        stderr = decode_git(result.stderr)
+    except RuntimeError as exc:
+        fail(scenario, str(exc))
     if result.returncode != 0:
-        detail = result.stderr.strip() or result.stdout.strip() or "git command failed"
+        detail = stderr.strip() or stdout.strip() or "git command failed"
         fail(scenario, detail)
-    return result.stdout
+    return stdout
 
 
 def exact_actor(value: str, label: str) -> str:
@@ -129,13 +214,10 @@ def verify_commit_and_tree(repo: Path, commit: str, tree: str, label: str) -> No
 
 def artifact_at(repo: Path, commit: str, path: str) -> str:
     try:
-        entry = subprocess.run(
-            ("git", "-C", str(repo), "ls-tree", "-z", "--full-tree", commit, "--", path),
-            capture_output=True, check=False, timeout=GIT_READ_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+        entry = run_git(repo, "ls-tree", "-z", "--full-tree", commit, "--", path)
+    except RuntimeError:
         fail("TRANSITION_PATH", f"required artifact read failed: {path}")
-    if len(entry.stdout) + len(entry.stderr) > GIT_READ_OUTPUT_LIMIT or entry.returncode != 0:
+    if entry.returncode != 0:
         fail("TRANSITION_PATH", f"required artifact read failed: {path}")
     records = entry.stdout.split(b"\0")
     if len(records) != 2 or records[1] or not records[0]:
@@ -155,16 +237,14 @@ def artifact_at(repo: Path, commit: str, path: str) -> str:
             fail("TRANSITION_PATH", f"canonical artifact must be a regular blob: {path}")
         fail("TRANSITION_PATH", f"required artifact is missing or malformed: {path}")
     try:
-        blob = subprocess.run(
-            ("git", "-C", str(repo), "cat-file", "blob", metadata[2].decode("ascii")),
-            capture_output=True, check=False, timeout=GIT_READ_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired):
+        oid = metadata[2].decode("ascii", errors="strict")
+        blob = run_git(repo, "cat-file", "blob", oid)
+    except (UnicodeDecodeError, RuntimeError):
         fail("TRANSITION_PATH", f"required artifact read failed: {path}")
-    if len(blob.stdout) + len(blob.stderr) > GIT_READ_OUTPUT_LIMIT or blob.returncode != 0:
+    if blob.returncode != 0:
         fail("TRANSITION_PATH", f"required artifact read failed: {path}")
     try:
-        return blob.stdout.decode("utf-8")
+        return blob.stdout.decode("utf-8", errors="strict")
     except UnicodeDecodeError:
         fail("TRANSITION_PATH", f"required artifact is not UTF-8: {path}")
 

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
+import time
 import zipfile
 
 import pytest
@@ -207,6 +209,7 @@ def run_gate(
     *,
     author: str = "author-1",
     recorder: str = "recorder-1",
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         (
@@ -229,7 +232,31 @@ def run_gate(
         text=True,
         capture_output=True,
         check=False,
+        env=env,
+        timeout=6,
     )
+
+
+def install_flooding_git(tmp_path: Path) -> dict[str, str]:
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir()
+    fake_git = bin_dir / "git"
+    fake_git.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, threading\n"
+        "def flood(fd):\n"
+        "    chunk = b'x' * 65536\n"
+        "    while True:\n"
+        "        os.write(fd, chunk)\n"
+        "threads = [threading.Thread(target=flood, args=(fd,)) for fd in (1, 2)]\n"
+        "[thread.start() for thread in threads]\n"
+        "[thread.join() for thread in threads]\n",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+    env = os.environ.copy()
+    env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
+    return env
 
 
 @pytest.mark.parametrize("mode", ["normal", "bootstrap"])
@@ -566,3 +593,49 @@ def test_source_and_built_wheel_extracted_script_have_behavior_and_diagnostic_pa
     assert source_result.returncode == packaged_result.returncode == 2
     assert source_result.stderr == packaged_result.stderr
     assert "approval-authority[EVIDENCE_FORMAT]" in source_result.stderr
+
+
+def test_authority_gate_ignores_replace_object_that_makes_invalid_raw_approval_valid(
+    tmp_path: Path,
+) -> None:
+    repo, target, approval = make_repo(tmp_path, mode="normal", approval_change="body")
+    artifact = repo / ".proofline/lines/line-0007/micro-specs/ms-0007-001.md"
+    artifact.write_text(micro_spec("approved"), encoding="utf-8")
+    git(repo, "add", "-A")
+    valid_tree = git(repo, "write-tree")
+    replacement = git(repo, "commit-tree", valid_tree, "-p", target, "-m", "replacement")
+    git(repo, "replace", approval, replacement)
+    git(repo, "reset", "--hard", "-q", approval)
+    review, user_approval = write_evidence(tmp_path, repo, target)
+    before = snapshot(repo)
+
+    result = run_gate(SCRIPT, repo, "normal", target, approval, review, user_approval)
+
+    assert result.returncode == 2
+    assert "approval-authority[" in result.stderr
+    assert snapshot(repo) == before
+
+
+def test_authority_gate_fails_promptly_when_git_combined_output_exceeds_limit(
+    tmp_path: Path,
+) -> None:
+    repo, target, approval = make_repo(tmp_path, mode="normal")
+    review, user_approval = write_evidence(tmp_path, repo, target)
+    started = time.monotonic()
+
+    result = run_gate(
+        SCRIPT,
+        repo,
+        "normal",
+        target,
+        approval,
+        review,
+        user_approval,
+        env=install_flooding_git(tmp_path),
+    )
+
+    assert time.monotonic() - started < 4
+    assert result.returncode == 2
+    assert result.stderr.strip() == (
+        "approval-authority[REPOSITORY]: git command output exceeds limit"
+    )

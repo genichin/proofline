@@ -181,6 +181,75 @@ def make_symlink_target_repo(tmp_path: Path) -> tuple[Path, str]:
     return repo, approval
 
 
+def test_handoff_ignores_replace_objects_before_worktree_mutation(tmp_path: Path) -> None:
+    repo, valid_approval = make_approved_repo(tmp_path, handoff=False)
+    req = repo / ".proofline/lines/line-0007/req-0007.md"
+    req.write_text(
+        req.read_text(encoding="utf-8").replace("status: approved", "status: draft"),
+        encoding="utf-8",
+    )
+    git(repo, "add", str(req.relative_to(repo)))
+    git(repo, "commit", "-qm", "raw invalid approval")
+    invalid_approval = git(repo, "rev-parse", "HEAD").stdout.strip()
+    req.write_text(
+        req.read_text(encoding="utf-8").replace("status: draft", "status: approved"),
+        encoding="utf-8",
+    )
+    line = repo / ".proofline/lines/line-0007/line-0007.md"
+    line.write_text(
+        line.read_text(encoding="utf-8").replace(
+            "execution_status: not_started", "execution_status: in_progress"
+        ),
+        encoding="utf-8",
+    )
+    git(repo, "add", str(req.relative_to(repo)), str(line.relative_to(repo)))
+    git(repo, "commit", "-qm", "raw invalid mixed handoff")
+    git(repo, "replace", invalid_approval, valid_approval)
+
+    result = run_script(repo, invalid_approval)
+
+    assert result.returncode == 2
+    assert "REQ.status must be approved" in result.stderr
+    assert not (repo / ".worktrees/line-0007").exists()
+    branch = subprocess.run(
+        ("git", "show-ref", "--verify", "refs/heads/line/line-0007-implementation"),
+        cwd=repo, capture_output=True, check=False,
+    )
+    assert branch.returncode != 0
+
+
+def test_worktree_git_runner_stops_at_combined_output_limit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_worktree_script()
+    executable_dir = tmp_path / "bin"
+    executable_dir.mkdir()
+    fake_git = executable_dir / "git"
+    fake_git.write_text(
+        "#!/usr/bin/python3\n"
+        "import os, threading, time\n"
+        "payload = b'x' * (5 * 1024 * 1024)\n"
+        "def write_all(fd):\n"
+        "    data = memoryview(payload)\n"
+        "    while data:\n"
+        "        data = data[os.write(fd, data):]\n"
+        "thread = threading.Thread(target=lambda: write_all(2))\n"
+        "thread.start()\n"
+        "write_all(1)\n"
+        "thread.join()\n"
+        "time.sleep(1)\n",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+    monkeypatch.setenv("PATH", str(executable_dir))
+    started = time.monotonic()
+
+    with pytest.raises(module.WorkflowError, match="excessive output"):
+        module.git(tmp_path, "status")
+
+    assert time.monotonic() - started < 0.75
+
+
 def test_handoff_rejects_symlink_mode_target_before_worktree_mutation(tmp_path: Path) -> None:
     repo, approval = make_symlink_target_repo(tmp_path)
 

@@ -20,6 +20,7 @@ COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 OID_RE = re.compile(rb"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 GIT_READ_TIMEOUT_SECONDS = 5
 GIT_READ_OUTPUT_LIMIT = 8 * 1024 * 1024
+GIT_WORKTREE_TIMEOUT_SECONDS = 30
 VALIDATE_TIMEOUT_SECONDS = 30
 VALIDATE_OUTPUT_LIMIT = 256 * 1024
 _REAPER_LOCK = threading.Lock()
@@ -141,13 +142,126 @@ def _capture_validate_process(
             reader.join(timeout=0.1)
 
 
-def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        ("git", "-C", str(repo), *args),
-        text=True,
-        capture_output=True,
-        check=False,
+def _run_git(
+    repo: Path, *args: str, timeout: float = GIT_READ_TIMEOUT_SECONDS
+) -> subprocess.CompletedProcess[bytes]:
+    environment = os.environ.copy()
+    environment.update(
+        {
+            "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_NO_LAZY_FETCH": "1",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+            "LC_ALL": "C",
+        }
     )
+    command = ("git", "-C", str(repo), *args)
+    try:
+        process = subprocess.Popen(
+            command,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
+        )
+    except OSError as exc:
+        raise WorkflowError("git command failed to start") from exc
+    assert process.stdout is not None and process.stderr is not None
+    buffers = [bytearray(), bytearray()]
+    done = [threading.Event(), threading.Event()]
+    overflow = threading.Event()
+    read_error = threading.Event()
+    lock = threading.Lock()
+    captured = 0
+
+    def drain(index: int, stream: object) -> None:
+        nonlocal captured
+        try:
+            while True:
+                chunk = stream.read(65536)  # type: ignore[attr-defined]
+                if not chunk:
+                    break
+                with lock:
+                    remaining = GIT_READ_OUTPUT_LIMIT - captured
+                    accepted = min(len(chunk), max(0, remaining))
+                    buffers[index].extend(chunk[:accepted])
+                    captured += accepted
+                    if accepted != len(chunk):
+                        overflow.set()
+                        break
+        except (OSError, ValueError):
+            read_error.set()
+        finally:
+            done[index].set()
+
+    readers = [
+        threading.Thread(target=drain, args=(0, process.stdout), daemon=True),
+        threading.Thread(target=drain, args=(1, process.stderr), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+    deadline = time.monotonic() + timeout
+    failure: WorkflowError | None = None
+    try:
+        while not all(event.is_set() for event in done):
+            if overflow.is_set():
+                failure = WorkflowError("git command produced excessive output")
+                break
+            if read_error.is_set():
+                failure = WorkflowError("git command pipe read failed")
+                break
+            if time.monotonic() >= deadline:
+                failure = WorkflowError("git command timed out")
+                break
+            time.sleep(0.005)
+        if failure is None and overflow.is_set():
+            failure = WorkflowError("git command produced excessive output")
+        if failure is None and read_error.is_set():
+            failure = WorkflowError("git command pipe read failed")
+        if failure is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                failure = WorkflowError("git command timed out")
+            else:
+                try:
+                    process.wait(timeout=remaining)
+                except subprocess.TimeoutExpired:
+                    failure = WorkflowError("git command timed out")
+    finally:
+        if process.poll() is None:
+            try:
+                process.terminate()
+                process.wait(timeout=0.2)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+                process.wait()
+        else:
+            process.wait()
+        for reader in readers:
+            reader.join()
+        process.stdout.close()
+        process.stderr.close()
+    if failure is not None:
+        raise failure
+    return subprocess.CompletedProcess(
+        command, process.returncode, bytes(buffers[0]), bytes(buffers[1])
+    )
+
+
+def git(
+    repo: Path, *args: str, check: bool = True, timeout: float = GIT_READ_TIMEOUT_SECONDS
+) -> subprocess.CompletedProcess[str]:
+    raw = _run_git(repo, *args, timeout=timeout)
+    try:
+        stdout = raw.stdout.decode("utf-8")
+        stderr = raw.stderr.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise WorkflowError("git command returned non-UTF-8 output") from exc
+    result = subprocess.CompletedProcess(raw.args, raw.returncode, stdout, stderr)
     if check and result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "git command failed"
         raise WorkflowError(detail)
@@ -262,15 +376,12 @@ def frontmatter_value(text: str, key: str) -> str:
 
 def artifact_at(repo: Path, commit: str, relative_path: str) -> str:
     try:
-        result = subprocess.run(
-            ("git", "-C", str(repo), "ls-tree", "-z", "--full-tree", commit, "--", relative_path),
-            capture_output=True,
-            check=False,
-            timeout=GIT_READ_TIMEOUT_SECONDS,
+        result = _run_git(
+            repo, "ls-tree", "-z", "--full-tree", commit, "--", relative_path
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except WorkflowError as exc:
         raise WorkflowError(f"canonical artifact read failed: {relative_path}") from exc
-    if len(result.stdout) + len(result.stderr) > GIT_READ_OUTPUT_LIMIT or result.returncode != 0:
+    if result.returncode != 0:
         raise WorkflowError(f"canonical artifact read failed: {relative_path}")
     records = result.stdout.split(b"\0")
     if len(records) != 2 or records[1] or not records[0]:
@@ -292,15 +403,10 @@ def artifact_at(repo: Path, commit: str, relative_path: str) -> str:
             raise WorkflowError(f"canonical artifact must be a regular blob: {relative_path}")
         raise WorkflowError(f"canonical artifact tree entry is missing or malformed: {relative_path}")
     try:
-        blob = subprocess.run(
-            ("git", "-C", str(repo), "cat-file", "blob", metadata[2].decode("ascii")),
-            capture_output=True,
-            check=False,
-            timeout=GIT_READ_TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        blob = _run_git(repo, "cat-file", "blob", metadata[2].decode("ascii"))
+    except WorkflowError as exc:
         raise WorkflowError(f"canonical artifact read failed: {relative_path}") from exc
-    if len(blob.stdout) + len(blob.stderr) > GIT_READ_OUTPUT_LIMIT or blob.returncode != 0:
+    if blob.returncode != 0:
         raise WorkflowError(f"canonical artifact read failed: {relative_path}")
     try:
         return blob.stdout.decode("utf-8")
@@ -590,7 +696,10 @@ def create_worktree(
     if branch in branches:
         raise WorkflowError("worktree branch registration collision")
 
-    git(repo, "worktree", "add", str(relative_path), "-b", branch, handoff_commit)
+    git(
+        repo, "worktree", "add", str(relative_path), "-b", branch, handoff_commit,
+        timeout=GIT_WORKTREE_TIMEOUT_SECONDS,
+    )
 
     if git(worktree, "rev-parse", "HEAD").stdout.strip() != handoff_commit:
         raise WorkflowError("created worktree HEAD does not match handoff commit")

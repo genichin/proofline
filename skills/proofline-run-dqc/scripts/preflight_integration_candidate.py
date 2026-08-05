@@ -8,6 +8,8 @@ import os
 import re
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import yaml
@@ -50,30 +52,121 @@ _UniqueLoader.add_constructor(
 )
 
 
-def git(repo: Path, *args: str) -> str:
+def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
     environment = os.environ.copy()
     environment.update(
         {
-            "GIT_NO_LAZY_FETCH": "1",
             "GIT_NO_REPLACE_OBJECTS": "1",
+            "GIT_NO_LAZY_FETCH": "1",
             "GIT_OPTIONAL_LOCKS": "0",
             "GIT_TERMINAL_PROMPT": "0",
+            "LC_ALL": "C",
         }
     )
+    command = ("git", *args)
     try:
-        result = subprocess.run(
-            ("git", *args),
+        process = subprocess.Popen(
+            command,
             cwd=repo,
             env=environment,
-            text=False,
-            capture_output=True,
-            timeout=TIMEOUT_SECONDS,
-            check=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise PreflightError(f"git read failed: {exc}") from exc
-    if len(result.stdout) + len(result.stderr) > OUTPUT_LIMIT:
-        raise PreflightError("git read produced excessive output")
+    except OSError as exc:
+        raise PreflightError("git read failed to start") from exc
+    assert process.stdout is not None and process.stderr is not None
+    buffers = [bytearray(), bytearray()]
+    done = [threading.Event(), threading.Event()]
+    overflow = threading.Event()
+    read_error = threading.Event()
+    lock = threading.Lock()
+    captured = 0
+
+    def drain(index: int, stream: object) -> None:
+        nonlocal captured
+        try:
+            while True:
+                chunk = stream.read(65536)  # type: ignore[attr-defined]
+                if not chunk:
+                    break
+                with lock:
+                    remaining = OUTPUT_LIMIT - captured
+                    accepted = min(len(chunk), max(0, remaining))
+                    buffers[index].extend(chunk[:accepted])
+                    captured += accepted
+                    if accepted != len(chunk):
+                        overflow.set()
+                        break
+        except (OSError, ValueError):
+            read_error.set()
+        finally:
+            done[index].set()
+
+    readers = [
+        threading.Thread(target=drain, args=(0, process.stdout), daemon=True),
+        threading.Thread(target=drain, args=(1, process.stderr), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+    deadline = time.monotonic() + TIMEOUT_SECONDS
+    failure: PreflightError | None = None
+    try:
+        while not all(event.is_set() for event in done):
+            if overflow.is_set():
+                failure = PreflightError("git read produced excessive output")
+                break
+            if read_error.is_set():
+                failure = PreflightError("git read pipe failed")
+                break
+            if time.monotonic() >= deadline:
+                failure = PreflightError("git read timed out")
+                break
+            time.sleep(0.005)
+        if failure is None and overflow.is_set():
+            failure = PreflightError("git read produced excessive output")
+        if failure is None and read_error.is_set():
+            failure = PreflightError("git read pipe failed")
+        if failure is None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                failure = PreflightError("git read timed out")
+            else:
+                try:
+                    process.wait(timeout=remaining)
+                except subprocess.TimeoutExpired:
+                    failure = PreflightError("git read timed out")
+        if failure is None and overflow.is_set():
+            failure = PreflightError("git read produced excessive output")
+        if failure is None and read_error.is_set():
+            failure = PreflightError("git read pipe failed")
+    finally:
+        if process.poll() is None:
+            try:
+                process.terminate()
+                process.wait(timeout=0.2)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    process.kill()
+                except OSError:
+                    pass
+                process.wait()
+        else:
+            process.wait()
+        for reader in readers:
+            reader.join()
+        process.stdout.close()
+        process.stderr.close()
+    if failure is not None:
+        raise failure
+    return subprocess.CompletedProcess(
+        command, process.returncode, bytes(buffers[0]), bytes(buffers[1])
+    )
+
+
+def git(repo: Path, *args: str) -> str:
+    result = _run_git(repo, *args)
     if result.returncode != 0:
         detail = result.stderr.decode("utf-8", errors="replace").strip()
         raise PreflightError(f"git read failed: {detail or args[0]}")
@@ -140,17 +233,11 @@ def tree_paths(repo: Path, commit: str, prefix: str) -> list[str]:
 def object_text(repo: Path, commit: str, path: str, paths: set[str]) -> str | None:
     if path not in paths:
         return None
-    environment = os.environ.copy()
-    environment.update({"GIT_NO_LAZY_FETCH": "1", "GIT_NO_REPLACE_OBJECTS": "1",
-                        "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"})
     try:
-        entry = subprocess.run(
-            ("git", "ls-tree", "-z", "--full-tree", commit, "--", path), cwd=repo,
-            env=environment, capture_output=True, check=False, timeout=TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        entry = _run_git(repo, "ls-tree", "-z", "--full-tree", commit, "--", path)
+    except PreflightError as exc:
         raise PreflightError(f"canonical artifact read failed: {path}") from exc
-    if len(entry.stdout) + len(entry.stderr) > OUTPUT_LIMIT or entry.returncode != 0:
+    if entry.returncode != 0:
         raise PreflightError(f"canonical artifact read failed: {path}")
     records = entry.stdout.split(b"\0")
     if len(records) != 2 or records[1] or not records[0]:
@@ -169,13 +256,10 @@ def object_text(repo: Path, commit: str, path: str, paths: set[str]) -> str | No
             raise PreflightError(f"canonical artifact must be a regular blob: {path}")
         raise PreflightError(f"canonical artifact tree entry is missing or malformed: {path}")
     try:
-        blob = subprocess.run(
-            ("git", "cat-file", "blob", metadata[2].decode("ascii")), cwd=repo,
-            env=environment, capture_output=True, check=False, timeout=TIMEOUT_SECONDS,
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+        blob = _run_git(repo, "cat-file", "blob", metadata[2].decode("ascii"))
+    except PreflightError as exc:
         raise PreflightError(f"canonical artifact read failed: {path}") from exc
-    if len(blob.stdout) + len(blob.stderr) > OUTPUT_LIMIT or blob.returncode != 0:
+    if blob.returncode != 0:
         raise PreflightError(f"canonical artifact read failed: {path}")
     try:
         return blob.stdout.decode("utf-8")
