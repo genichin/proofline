@@ -29,6 +29,10 @@
     {"scenario_id": "approval.stale-digest.fail", "expected": {"passed": false, "diagnostic_code": "REVIEW_DIGEST"}},
 
     {"scenario_id": "chronology.line-0020-bootstrap.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
+    {"scenario_id": "chronology.bootstrap-create-body-change.fail", "expected": {"passed": false, "diagnostic_code": "history.spec.chronology"}},
+    {"scenario_id": "chronology.bootstrap-update-body-change.fail", "expected": {"passed": false, "diagnostic_code": "history.spec.chronology"}},
+    {"scenario_id": "chronology.bootstrap-retire-body-change.fail", "expected": {"passed": false, "diagnostic_code": "history.spec.chronology"}},
+    {"scenario_id": "chronology.bootstrap-satisfy-body-change.fail", "expected": {"passed": false, "diagnostic_code": "history.spec.chronology"}},
     {"scenario_id": "chronology.future-a-h-s0-s-p.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
     {"scenario_id": "chronology.missing-s.fail", "expected": {"passed": false, "diagnostic_code": "history.spec.chronology"}},
     {"scenario_id": "chronology.non-direct-s.fail", "expected": {"passed": false, "diagnostic_code": "history.spec.chronology"}},

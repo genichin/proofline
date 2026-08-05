@@ -432,6 +432,10 @@ def _approval_scenario(module: Any, scenario_id: str, workspace: Path, script: P
 def _chronology_scenario(module: Any, scenario_id: str, workspace: Path) -> tuple[str, bool]:
     mapping = {
         "chronology.line-0020-bootstrap.pass": (True, None, True),
+        "chronology.bootstrap-create-body-change.fail": (True, "a-create-body", False),
+        "chronology.bootstrap-update-body-change.fail": (True, "a-update-body", False),
+        "chronology.bootstrap-retire-body-change.fail": (True, "a-retire-body", False),
+        "chronology.bootstrap-satisfy-body-change.fail": (True, "a-satisfy-body", False),
         "chronology.future-a-h-s0-s-p.pass": (False, None, True),
         "chronology.missing-s.fail": (False, "missing-s0-s", False),
         "chronology.non-direct-s.fail": (False, "s-not-direct", False),

@@ -1115,6 +1115,34 @@ def _specification_chronology_activation(
     return None
 
 
+def _approval_criterion_admissions(
+    requirement: dict[str, object],
+) -> dict[str, tuple[str, ...]] | None:
+    """Parse exact, disjoint canonical AC admission sets from an approved REQ."""
+    raw = requirement.get("criteria")
+    actions = ("create", "update", "retire", "satisfy")
+    if not isinstance(raw, dict) or set(raw) != set(actions):
+        return None
+    admissions: dict[str, tuple[str, ...]] = {}
+    seen: set[str] = set()
+    for action in actions:
+        values = raw.get(action)
+        if not isinstance(values, list):
+            return None
+        parsed: list[str] = []
+        for value in values:
+            if (
+                not isinstance(value, str)
+                or re.fullmatch(r"ac-\d{4}", value) is None
+                or value in seen
+            ):
+                return None
+            seen.add(value)
+            parsed.append(value)
+        admissions[action] = tuple(parsed)
+    return admissions if seen else None
+
+
 def _validate_approval_baseline(
     session: _GitSession,
     line_path: str,
@@ -1143,14 +1171,11 @@ def _validate_approval_baseline(
     ):
         return False
     requirement = _frontmatter(approved_req or b"")
-    criteria = requirement.get("criteria")
-    if not isinstance(criteria, dict):
+    admissions = _approval_criterion_admissions(requirement)
+    if admissions is None:
         return False
     criterion_ids = {
-        value
-        for action in ("create", "update", "retire", "satisfy")
-        for value in (criteria.get(action) or [])  # type: ignore[union-attr]
-        if isinstance(value, str) and re.fullmatch(r"ac-\d{4}", value)
+        criterion_id for values in admissions.values() for criterion_id in values
     }
     criterion_paths = {f".proofline/criteria/{value}.md" for value in criterion_ids}
     bootstrap_paths = {
@@ -1169,17 +1194,40 @@ def _validate_approval_baseline(
     changed = set(_changed_paths(session, approval_commit))
     if not changed or not changed <= allowed_paths or req_path not in changed:
         return False
-    for path in changed & criterion_paths:
-        before = _artifact_at(session, before_commit, path)
-        after = _artifact_at(session, approval_commit, path)
-        before_state = _frontmatter(before) if before is not None else None
-        old_status = before_state.get("status") if before_state is not None else None
-        if old_status not in {"draft", "active"}:
-            return False
-        if old_status == "draft" and not _status_only_change(
-            before, after, "status", "draft", "active", {"draft", "active", "retired"}
-        ):
-            return False
+    transitions = {
+        "create": ("draft", "active"),
+        "update": ("draft", "active"),
+        "retire": ("active", "retired"),
+    }
+    for action, criterion_ids_for_action in admissions.items():
+        for criterion_id in criterion_ids_for_action:
+            path = f".proofline/criteria/{criterion_id}.md"
+            before = _artifact_at(session, before_commit, path)
+            after = _artifact_at(session, approval_commit, path)
+            if before is None or after is None:
+                return False
+            try:
+                if (
+                    _frontmatter(before).get("id") != criterion_id
+                    or _frontmatter(after).get("id") != criterion_id
+                ):
+                    return False
+            except HistoryUnavailable:
+                return False
+            if action == "satisfy":
+                if before != after:
+                    return False
+                continue
+            old_status, new_status = transitions[action]
+            if not _status_only_change(
+                before,
+                after,
+                "status",
+                old_status,
+                new_status,
+                {"draft", "active", "retired"},
+            ):
+                return False
     for path in bootstrap_paths:
         if not _status_only_change(
             _artifact_at(session, before_commit, path),

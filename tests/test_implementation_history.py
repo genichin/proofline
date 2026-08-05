@@ -106,6 +106,17 @@ class HistoryRepo:
             encoding="utf-8",
         )
 
+    def write_requirement_admissions(self) -> None:
+        path = self.path / ".proofline/lines/line-0001/req-0001.md"
+        path.write_text(
+            '---\nid: "req-0001"\nstatus: draft\ndiscovery: "dcy-0001"\n'
+            'criteria:\n  create:\n    - "ac-0001"\n  update:\n    - "ac-0002"\n'
+            '  retire:\n    - "ac-0003"\n  satisfy:\n    - "ac-0004"\n'
+            "---\n\n# Requirement\n\n## Objective\n\n목표이다.\n\n## Scope\n\n범위이다."
+            "\n\n## Non-Goals\n\n비목표이다.\n",
+            encoding="utf-8",
+        )
+
     def write_ac(self, number: int) -> None:
         path = self.path / f".proofline/criteria/ac-{number:04d}.md"
         path.write_text(
@@ -121,14 +132,19 @@ class HistoryRepo:
         *,
         malformed: bool = False,
         spec_status: str = "approved",
+        criteria_numbers: tuple[int, ...] | None = None,
     ) -> None:
         path = self.path / f".proofline/lines/line-0001/micro-specs/ms-0001-{number:03d}.md"
         if malformed:
             path.write_text("---\nid: [\n---\n", encoding="utf-8")
             return
+        criteria = "".join(
+            f'  - "ac-{criterion:04d}"\n'
+            for criterion in (criteria_numbers or (number,))
+        )
         path.write_text(
             f'---\nid: "ms-0001-{number:03d}"\nparent_req: "req-0001"\ncriteria:\n'
-            f'  - "ac-{number:04d}"\nspec_status: {spec_status}\nimplementation_status: {status}\n---\n\n'
+            f'{criteria}spec_status: {spec_status}\nimplementation_status: {status}\n---\n\n'
             f"# Micro-SPEC {number}\n\n## Scope\n\n범위이다.\n\n## Implementation\n\n구현한다."
             "\n\n## Verification\n\n검증한다.\n",
             encoding="utf-8",
@@ -191,9 +207,10 @@ class HistoryRepo:
         *,
         numbers: tuple[int, ...] = (1,),
         micro_spec_commit: str | None = None,
+        criteria_numbers: tuple[int, ...] | None = None,
     ) -> str:
         for number in numbers:
-            self.write_ms(number, "implemented")
+            self.write_ms(number, "implemented", criteria_numbers=criteria_numbers)
             self.write_iqc(number, implementation, micro_spec_commit=micro_spec_commit)
         return self.commit(name, name)
 
@@ -251,11 +268,20 @@ def chronology_repo(
 ) -> HistoryRepo:
     """Build a prospective Real-Git A/H/S0/S/P/I/Q history."""
     repo = HistoryRepo.create(tmp_path)
+    for number in (2, 3, 4, 5):
+        repo.write_ac(number)
+    repo.write_requirement_admissions()
     repo.write_ac(22)
     replace_frontmatter_status(repo, ".proofline/criteria/ac-0022.md", "status", "draft")
-    replace_frontmatter_status(repo, ".proofline/lines/line-0001/req-0001.md", "status", "draft")
     replace_frontmatter_status(repo, ".proofline/criteria/ac-0001.md", "status", "draft")
-    repo.write_ms(1, "not_started", spec_status="draft")
+    replace_frontmatter_status(repo, ".proofline/criteria/ac-0002.md", "status", "draft")
+    if defect == "a-create-wrong-old-status":
+        replace_frontmatter_status(repo, ".proofline/criteria/ac-0001.md", "status", "active")
+    if defect == "a-update-wrong-old-status":
+        replace_frontmatter_status(repo, ".proofline/criteria/ac-0002.md", "status", "active")
+    if defect == "a-retire-wrong-old-status":
+        replace_frontmatter_status(repo, ".proofline/criteria/ac-0003.md", "status", "draft")
+    repo.write_ms(1, "not_started", spec_status="draft", criteria_numbers=(1, 2, 3, 4))
     repo.write_line("not_started", policy="first_parent")
     repo.commit("prospective", "record draft chronology policy")
 
@@ -264,11 +290,51 @@ def chronology_repo(
 
     replace_frontmatter_status(repo, ".proofline/lines/line-0001/req-0001.md", "status", "approved")
     replace_frontmatter_status(repo, ".proofline/criteria/ac-0001.md", "status", "active")
+    replace_frontmatter_status(repo, ".proofline/criteria/ac-0002.md", "status", "active")
+    replace_frontmatter_status(repo, ".proofline/criteria/ac-0003.md", "status", "retired")
+    if defect in {"a-create-body", "a-update-body", "a-retire-body", "a-satisfy-body"}:
+        number = {"a-create-body": 1, "a-update-body": 2, "a-retire-body": 3, "a-satisfy-body": 4}[defect]
+        ac = repo.path / f".proofline/criteria/ac-{number:04d}.md"
+        ac.write_text(
+            ac.read_text(encoding="utf-8").replace("조건이다.", "승인에서 바꾼 조건이다."),
+            encoding="utf-8",
+        )
+    if defect == "a-create-wrong-new-status":
+        replace_frontmatter_status(repo, ".proofline/criteria/ac-0001.md", "status", "retired")
+    if defect == "a-update-wrong-new-status":
+        replace_frontmatter_status(repo, ".proofline/criteria/ac-0002.md", "status", "retired")
+    if defect == "a-retire-wrong-new-status":
+        replace_frontmatter_status(repo, ".proofline/criteria/ac-0003.md", "status", "active")
+    if defect == "a-satisfy-status":
+        replace_frontmatter_status(repo, ".proofline/criteria/ac-0004.md", "status", "retired")
+    if defect == "a-missing-target":
+        (repo.path / ".proofline/criteria/ac-0004.md").unlink()
+    if defect == "a-path-id-mismatch":
+        ac = repo.path / ".proofline/criteria/ac-0004.md"
+        ac.write_text(
+            ac.read_text(encoding="utf-8").replace('id: "ac-0004"', 'id: "ac-9999"'),
+            encoding="utf-8",
+        )
+    if defect == "a-unrelated-ac":
+        ac = repo.path / ".proofline/criteria/ac-0005.md"
+        ac.write_text(ac.read_text(encoding="utf-8") + "unrelated\n", encoding="utf-8")
+    if defect == "a-req-body":
+        req = repo.path / ".proofline/lines/line-0001/req-0001.md"
+        req.write_text(
+            req.read_text(encoding="utf-8").replace("목표이다.", "승인에서 바꾼 목표이다."),
+            encoding="utf-8",
+        )
     if bootstrap and defect != "a-not-combined":
-        repo.write_ms(1, "not_started", spec_status="approved")
+        repo.write_ms(1, "not_started", spec_status="approved", criteria_numbers=(1, 2, 3, 4))
+        if defect == "a-ms-body":
+            ms = repo.path / MS
+            ms.write_text(
+                ms.read_text(encoding="utf-8").replace("범위이다.", "승인에서 바꾼 범위이다."),
+                encoding="utf-8",
+            )
     repo.commit("A", "approve REQ and AC baseline")
     if bootstrap and defect == "a-not-combined":
-        repo.write_ms(1, "not_started", spec_status="approved")
+        repo.write_ms(1, "not_started", spec_status="approved", criteria_numbers=(1, 2, 3, 4))
         repo.commit("late-bootstrap-spec", "approve bootstrap spec separately")
 
     if defect == "p-before-h":
@@ -293,9 +359,13 @@ def chronology_repo(
 
     if bootstrap:
         if defect == "duplicate-s":
-            repo.write_ms(1, "not_started", spec_status="draft")
+            repo.write_ms(
+                1, "not_started", spec_status="draft", criteria_numbers=(1, 2, 3, 4)
+            )
             repo.commit("duplicate-S0", "duplicate draft after handoff")
-            repo.write_ms(1, "not_started", spec_status="approved")
+            repo.write_ms(
+                1, "not_started", spec_status="approved", criteria_numbers=(1, 2, 3, 4)
+            )
             repo.commit("duplicate-S", "duplicate approval after handoff")
     else:
         if defect not in {"missing-s0-s", "p-before-s"}:
@@ -316,14 +386,22 @@ def chronology_repo(
                 )
             repo.commit("S", "record user-approved specification")
             if defect == "duplicate-s":
-                repo.write_ms(1, "not_started", spec_status="draft")
+                repo.write_ms(
+                    1, "not_started", spec_status="draft", criteria_numbers=(1, 2, 3, 4)
+                )
                 repo.commit("second-S0", "second draft")
-                repo.write_ms(1, "not_started", spec_status="approved")
+                repo.write_ms(
+                    1, "not_started", spec_status="approved", criteria_numbers=(1, 2, 3, 4)
+                )
                 repo.commit("second-S", "duplicate approval")
         elif defect == "p-before-s":
-            repo.write_ms(1, "in_progress", spec_status="draft")
+            repo.write_ms(
+                1, "in_progress", spec_status="draft", criteria_numbers=(1, 2, 3, 4)
+            )
             repo.commit("early-P", "start before approval")
-            repo.write_ms(1, "in_progress", spec_status="approved")
+            repo.write_ms(
+                1, "in_progress", spec_status="approved", criteria_numbers=(1, 2, 3, 4)
+            )
             repo.commit("late-S", "approve after start")
 
     if defect not in {"p-before-h", "p-before-s"}:
@@ -337,6 +415,7 @@ def chronology_repo(
                 implementation,
                 "Q",
                 micro_spec_commit=micro_spec_commit,
+                criteria_numbers=(1, 2, 3, 4),
             )
         else:
             replace_frontmatter_status(repo, MS, "implementation_status", "implemented")
@@ -349,6 +428,24 @@ def test_bootstrap_a_h_p_i_q_chronology_passes(tmp_path: Path) -> None:
     repo = chronology_repo(tmp_path, bootstrap=True)
 
     assert validate_project(repo.path) == []
+
+    parent = repo.commits["A"] + "^"
+    transitions = {
+        1: ("draft", "active"),
+        2: ("draft", "active"),
+        3: ("active", "retired"),
+    }
+    for number, (old, new) in transitions.items():
+        path = f".proofline/criteria/ac-{number:04d}.md"
+        before = git(repo.path, "show", f"{parent}:{path}").stdout.encode()
+        after = git(repo.path, "show", f"{repo.commits['A']}:{path}").stdout.encode()
+        assert implementation_history._status_only_change(
+            before, after, "status", old, new, {"draft", "active", "retired"}
+        )
+    satisfy = ".proofline/criteria/ac-0004.md"
+    assert git(repo.path, "show", f"{parent}:{satisfy}").stdout == git(
+        repo.path, "show", f"{repo.commits['A']}:{satisfy}"
+    ).stdout
 
 
 @pytest.mark.parametrize(
@@ -364,6 +461,33 @@ def test_bootstrap_a_h_p_i_q_chronology_passes(tmp_path: Path) -> None:
     ],
 )
 def test_bootstrap_chronology_fails_closed(tmp_path: Path, defect: str) -> None:
+    repo = chronology_repo(tmp_path, bootstrap=True, defect=defect, complete=False)
+
+    assert (MS, "history.spec.chronology") in history_codes(repo)
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "a-create-body",
+        "a-update-body",
+        "a-retire-body",
+        "a-satisfy-body",
+        "a-create-wrong-old-status",
+        "a-create-wrong-new-status",
+        "a-update-wrong-old-status",
+        "a-update-wrong-new-status",
+        "a-retire-wrong-old-status",
+        "a-retire-wrong-new-status",
+        "a-satisfy-status",
+        "a-missing-target",
+        "a-path-id-mismatch",
+        "a-unrelated-ac",
+        "a-req-body",
+        "a-ms-body",
+    ],
+)
+def test_bootstrap_admission_transition_fails_closed(tmp_path: Path, defect: str) -> None:
     repo = chronology_repo(tmp_path, bootstrap=True, defect=defect, complete=False)
 
     assert (MS, "history.spec.chronology") in history_codes(repo)
