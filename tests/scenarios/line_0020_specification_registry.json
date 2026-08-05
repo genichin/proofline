@@ -15,6 +15,7 @@
     {"scenario_id": "handoff.clean-exact-h-retry.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
     {"scenario_id": "handoff.tracked-dirty-retry.fail", "expected": {"passed": false, "diagnostic_code": "HANDOFF_RETRY_DIRTY"}},
     {"scenario_id": "handoff.untracked-dirty-retry.fail", "expected": {"passed": false, "diagnostic_code": "HANDOFF_RETRY_DIRTY"}},
+    {"scenario_id": "handoff.symlink-target.fail", "expected": {"passed": false, "diagnostic_code": "HANDOFF_SYMLINK_TARGET"}},
 
     {"scenario_id": "approval.normal.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
     {"scenario_id": "approval.bootstrap.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
@@ -29,6 +30,7 @@
     {"scenario_id": "approval.stale-digest.fail", "expected": {"passed": false, "diagnostic_code": "REVIEW_DIGEST"}},
     {"scenario_id": "approval.cross-admission-duplicate.fail", "expected": {"passed": false, "diagnostic_code": "TRANSITION_CONTENT"}},
     {"scenario_id": "approval.empty-targets.fail", "expected": {"passed": false, "diagnostic_code": "TRANSITION_CONTENT"}},
+    {"scenario_id": "approval.symlink-artifact.fail", "expected": {"passed": false, "diagnostic_code": "TRANSITION_PATH"}},
 
     {"scenario_id": "chronology.line-0020-bootstrap.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
     {"scenario_id": "chronology.bootstrap-create-body-change.fail", "expected": {"passed": false, "diagnostic_code": "history.spec.chronology"}},
@@ -59,6 +61,7 @@
     {"scenario_id": "preflight.withdrawn-retained-iqc.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
     {"scenario_id": "preflight.arbitrary-q.fail", "expected": {"passed": false, "diagnostic_code": "DQC_QUALITY_HEAD_TARGET_MISSING"}},
     {"scenario_id": "preflight.not-verifying.fail", "expected": {"passed": false, "diagnostic_code": "DQC_QUALITY_HEAD_STATUS"}},
-    {"scenario_id": "preflight.missing-iqc.fail", "expected": {"passed": false, "diagnostic_code": "DQC_IQC_COVERAGE"}}
+    {"scenario_id": "preflight.missing-iqc.fail", "expected": {"passed": false, "diagnostic_code": "DQC_IQC_COVERAGE"}},
+    {"scenario_id": "preflight.symlink-artifact.fail", "expected": {"passed": false, "diagnostic_code": "DQC_SYMLINK_ARTIFACT"}}
   ]
 }

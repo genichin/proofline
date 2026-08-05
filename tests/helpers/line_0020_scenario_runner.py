@@ -357,12 +357,21 @@ def _handoff_code(scenario_id: str, result: subprocess.CompletedProcess[str]) ->
         return "HANDOFF_TARGET_ID"
     if scenario_id == "handoff.draft-target.fail" and "AC.status must be active" in stderr:
         return "HANDOFF_TARGET_DRAFT"
+    if scenario_id == "handoff.symlink-target.fail" and stderr.strip() == (
+        "error: canonical artifact must be a regular blob: .proofline/criteria/ac-0001.md"
+    ):
+        return "HANDOFF_SYMLINK_TARGET"
     if scenario_id.endswith("dirty-retry.fail") and "existing worktree is not clean" in stderr:
         return "HANDOFF_RETRY_DIRTY"
     return "HANDOFF_UNEXPECTED"
 
 
 def _handoff_scenario(module: Any, scenario_id: str, workspace: Path, script: Path) -> tuple[str, bool | None]:
+    if scenario_id == "handoff.symlink-target.fail":
+        repo, approval = module.make_symlink_target_repo(workspace)
+        before = _repo_git_snapshot(repo)
+        result = module.run_script(repo, approval, script=script)
+        return _handoff_code(scenario_id, result), _repo_git_snapshot(repo) == before
     if scenario_id in {"handoff.exact-a-full-target.pass", "handoff.clean-exact-h-retry.pass",
                        "handoff.tracked-dirty-retry.fail", "handoff.untracked-dirty-retry.fail"}:
         repo, approval = module.make_approved_repo(workspace)
@@ -425,12 +434,15 @@ def _approval_scenario(module: Any, scenario_id: str, workspace: Path, script: P
         change = "unrelated"
     else:
         change = "status"
-    repo, target, approval = module.make_repo(
-        workspace,
-        mode=mode,
-        approval_change=change,
-        bootstrap_criteria=bootstrap_criteria.get(scenario_id),
-    )
+    if scenario_id == "approval.symlink-artifact.fail":
+        repo, target, approval = module.make_symlink_artifact_repo(workspace)
+    else:
+        repo, target, approval = module.make_repo(
+            workspace,
+            mode=mode,
+            approval_change=change,
+            bootstrap_criteria=bootstrap_criteria.get(scenario_id),
+        )
     kwargs: dict[str, Any] = {}
     if scenario_id == "approval.self-approval.fail":
         kwargs["user"] = "author-1"
@@ -534,6 +546,7 @@ def _preflight_scenario(
         "preflight.not-verifying.fail": "not-verifying",
         "preflight.missing-iqc.fail": "missing-iqc",
         "preflight.withdrawn-retained-iqc.pass": "withdrawn-retained-iqc",
+        "preflight.symlink-artifact.fail": "symlink-line",
     }
     repo, main, line_head, candidate = module.make_candidate(
         workspace, defect=defects[scenario_id]
@@ -547,6 +560,7 @@ def _preflight_scenario(
         "pre-admission: failed: quality head target Line is missing": "DQC_QUALITY_HEAD_TARGET_MISSING",
         "pre-admission: failed: quality head Line status must be verifying": "DQC_QUALITY_HEAD_STATUS",
         "pre-admission: failed: quality head IQC coverage/binding invalid: missing IQC for ms-0007-001": "DQC_IQC_COVERAGE",
+        "pre-admission: failed: canonical artifact must be a regular blob: .proofline/lines/line-0007/line-0007.md": "DQC_SYMLINK_ARTIFACT",
     }
     return exact.get(result.stderr.strip(), "DQC_PREFLIGHT_UNEXPECTED"), unchanged
 

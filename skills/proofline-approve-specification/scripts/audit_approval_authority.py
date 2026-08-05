@@ -17,6 +17,9 @@ import yaml
 
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
+OID_RE = re.compile(rb"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
+GIT_READ_TIMEOUT_SECONDS = 5
+GIT_READ_OUTPUT_LIMIT = 8 * 1024 * 1024
 LINE_RE = re.compile(r"line-[0-9]{4}\Z")
 REVIEW_SCHEMA = "proofline.independent-review/v1"
 USER_SCHEMA = "proofline.user-approval/v1"
@@ -126,9 +129,44 @@ def verify_commit_and_tree(repo: Path, commit: str, tree: str, label: str) -> No
 
 def artifact_at(repo: Path, commit: str, path: str) -> str:
     try:
-        return git(repo, "show", f"{commit}:{path}").encode("utf-8").decode("utf-8")
-    except GateError as exc:
-        fail("TRANSITION_PATH", f"required artifact is missing: {path} ({exc})")
+        entry = subprocess.run(
+            ("git", "-C", str(repo), "ls-tree", "-z", "--full-tree", commit, "--", path),
+            capture_output=True, check=False, timeout=GIT_READ_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        fail("TRANSITION_PATH", f"required artifact read failed: {path}")
+    if len(entry.stdout) + len(entry.stderr) > GIT_READ_OUTPUT_LIMIT or entry.returncode != 0:
+        fail("TRANSITION_PATH", f"required artifact read failed: {path}")
+    records = entry.stdout.split(b"\0")
+    if len(records) != 2 or records[1] or not records[0]:
+        fail("TRANSITION_PATH", f"required artifact is missing or malformed: {path}")
+    fields = records[0].split(b"\t")
+    metadata = fields[0].split(b" ") if len(fields) == 2 else []
+    try:
+        actual_path = fields[1].decode("utf-8")
+    except (IndexError, UnicodeDecodeError):
+        fail("TRANSITION_PATH", f"required artifact is missing or malformed: {path}")
+    if (
+        len(metadata) != 3 or metadata[0] not in {b"100644", b"100755"}
+        or metadata[1] != b"blob" or OID_RE.fullmatch(metadata[2]) is None
+        or actual_path != path
+    ):
+        if actual_path == path and len(metadata) == 3:
+            fail("TRANSITION_PATH", f"canonical artifact must be a regular blob: {path}")
+        fail("TRANSITION_PATH", f"required artifact is missing or malformed: {path}")
+    try:
+        blob = subprocess.run(
+            ("git", "-C", str(repo), "cat-file", "blob", metadata[2].decode("ascii")),
+            capture_output=True, check=False, timeout=GIT_READ_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        fail("TRANSITION_PATH", f"required artifact read failed: {path}")
+    if len(blob.stdout) + len(blob.stderr) > GIT_READ_OUTPUT_LIMIT or blob.returncode != 0:
+        fail("TRANSITION_PATH", f"required artifact read failed: {path}")
+    try:
+        return blob.stdout.decode("utf-8")
+    except UnicodeDecodeError:
+        fail("TRANSITION_PATH", f"required artifact is not UTF-8: {path}")
 
 
 def status_only(before: str, after: str, field: str, old: str, new: str) -> bool:

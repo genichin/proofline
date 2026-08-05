@@ -27,6 +27,7 @@ EXPECTED_IDS = {
     "handoff.clean-exact-h-retry.pass",
     "handoff.tracked-dirty-retry.fail",
     "handoff.untracked-dirty-retry.fail",
+    "handoff.symlink-target.fail",
     "approval.normal.pass",
     "approval.bootstrap.pass",
     "approval.self-approval.fail",
@@ -40,6 +41,7 @@ EXPECTED_IDS = {
     "approval.stale-digest.fail",
     "approval.cross-admission-duplicate.fail",
     "approval.empty-targets.fail",
+    "approval.symlink-artifact.fail",
     "chronology.line-0020-bootstrap.pass",
     "chronology.bootstrap-create-body-change.fail",
     "chronology.bootstrap-update-body-change.fail",
@@ -66,6 +68,7 @@ EXPECTED_IDS = {
     "preflight.arbitrary-q.fail",
     "preflight.not-verifying.fail",
     "preflight.missing-iqc.fail",
+    "preflight.symlink-artifact.fail",
 }
 
 
@@ -74,7 +77,7 @@ def test_registry_has_fixed_approved_scenario_id_set() -> None:
 
     assert registry.schema_version == 1
     assert {scenario.scenario_id for scenario in registry.scenarios} == EXPECTED_IDS
-    assert len(registry.scenarios) == len(EXPECTED_IDS) == 51
+    assert len(registry.scenarios) == len(EXPECTED_IDS) == 54
 
 
 def test_registry_rejects_duplicate_scenario_ids(tmp_path: Path) -> None:

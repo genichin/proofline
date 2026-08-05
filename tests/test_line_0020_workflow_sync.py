@@ -32,6 +32,19 @@ def commit(repo: Path, message: str) -> str:
     return git(repo, "rev-parse", "HEAD")
 
 
+def stage_canonical_mode(repo: Path, path: str, mode: str) -> None:
+    payload = (repo / path).read_bytes()
+    hashed = subprocess.run(
+        ("git", "hash-object", "-w", "--stdin"),
+        cwd=repo,
+        input=payload,
+        capture_output=True,
+        check=True,
+    )
+    oid = hashed.stdout.decode("ascii").strip()
+    git(repo, "update-index", "--add", "--cacheinfo", f"{mode},{oid},{path}")
+
+
 def _line_text(line_id: str, status: str) -> str:
     return (
         f'---\nid: "{line_id}"\nexecution_status: {status}\n'
@@ -152,7 +165,18 @@ def make_candidate(
             other.write_text(_line_text("line-0008", "verifying"), encoding="utf-8")
         if defect == "unrelated-quality-change":
             (repo / "late.txt").write_text("late\n", encoding="utf-8")
-        q = commit(repo, "Line Q")
+        if defect in {"symlink-line", "executable-line"}:
+            git(repo, "config", "core.symlinks", "false")
+            stage_canonical_mode(
+                repo,
+                ".proofline/lines/line-0007/line-0007.md",
+                "120000" if defect == "symlink-line" else "100755",
+            )
+            git(repo, "add", "-A")
+            git(repo, "commit", "-qm", "Line Q")
+            q = git(repo, "rev-parse", "HEAD")
+        else:
+            q = commit(repo, "Line Q")
         if defect == "not-quality-transition":
             git(repo, "commit", "--allow-empty", "-qm", "advance after Q")
             q = git(repo, "rev-parse", "HEAD")
@@ -241,6 +265,30 @@ def test_pre_admission_helper_passes_exact_m_q_v_without_mutation(tmp_path: Path
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == f"pre-admission: passed M={m} Q={q} V={v}"
+    assert snapshot(repo) == before
+
+
+def test_pre_admission_helper_rejects_symlink_mode_line_without_mutation(tmp_path: Path) -> None:
+    repo, m, q, v = make_candidate(tmp_path, defect="symlink-line")
+    before = snapshot(repo)
+
+    result = run_helper(repo, m, q, v)
+
+    assert result.returncode == 2
+    assert result.stderr.strip() == (
+        "pre-admission: failed: canonical artifact must be a regular blob: "
+        ".proofline/lines/line-0007/line-0007.md"
+    )
+    assert snapshot(repo) == before
+
+
+def test_pre_admission_helper_accepts_executable_regular_line_without_mutation(tmp_path: Path) -> None:
+    repo, m, q, v = make_candidate(tmp_path, defect="executable-line")
+    before = snapshot(repo)
+
+    result = run_helper(repo, m, q, v)
+
+    assert result.returncode == 0, result.stderr
     assert snapshot(repo) == before
 
 

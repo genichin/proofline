@@ -14,6 +14,7 @@ import yaml
 
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
+OID = re.compile(rb"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 LINE = re.compile(r"^line-(\d{4})$")
 REF = re.compile(r"^refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]*$")
 MS_ID = re.compile(r"^ms-(\d{4})-(\d{3})$")
@@ -139,7 +140,47 @@ def tree_paths(repo: Path, commit: str, prefix: str) -> list[str]:
 def object_text(repo: Path, commit: str, path: str, paths: set[str]) -> str | None:
     if path not in paths:
         return None
-    return git(repo, "show", f"{commit}:{path}")
+    environment = os.environ.copy()
+    environment.update({"GIT_NO_LAZY_FETCH": "1", "GIT_NO_REPLACE_OBJECTS": "1",
+                        "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"})
+    try:
+        entry = subprocess.run(
+            ("git", "ls-tree", "-z", "--full-tree", commit, "--", path), cwd=repo,
+            env=environment, capture_output=True, check=False, timeout=TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PreflightError(f"canonical artifact read failed: {path}") from exc
+    if len(entry.stdout) + len(entry.stderr) > OUTPUT_LIMIT or entry.returncode != 0:
+        raise PreflightError(f"canonical artifact read failed: {path}")
+    records = entry.stdout.split(b"\0")
+    if len(records) != 2 or records[1] or not records[0]:
+        raise PreflightError(f"canonical artifact tree entry is missing or malformed: {path}")
+    fields = records[0].split(b"\t")
+    metadata = fields[0].split(b" ") if len(fields) == 2 else []
+    try:
+        actual_path = fields[1].decode("utf-8")
+    except (IndexError, UnicodeDecodeError) as exc:
+        raise PreflightError(f"canonical artifact tree entry is missing or malformed: {path}") from exc
+    if (
+        len(metadata) != 3 or metadata[0] not in {b"100644", b"100755"}
+        or metadata[1] != b"blob" or OID.fullmatch(metadata[2]) is None or actual_path != path
+    ):
+        if actual_path == path and len(metadata) == 3:
+            raise PreflightError(f"canonical artifact must be a regular blob: {path}")
+        raise PreflightError(f"canonical artifact tree entry is missing or malformed: {path}")
+    try:
+        blob = subprocess.run(
+            ("git", "cat-file", "blob", metadata[2].decode("ascii")), cwd=repo,
+            env=environment, capture_output=True, check=False, timeout=TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise PreflightError(f"canonical artifact read failed: {path}") from exc
+    if len(blob.stdout) + len(blob.stderr) > OUTPUT_LIMIT or blob.returncode != 0:
+        raise PreflightError(f"canonical artifact read failed: {path}")
+    try:
+        return blob.stdout.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise PreflightError(f"canonical artifact is not UTF-8: {path}") from exc
 
 
 def revision_without_status(
@@ -407,7 +448,11 @@ def preflight(
     number = match.group(1)
     manifest_path = f".proofline/lines/{line_id}/integration-{number}.md"
     try:
-        manifest = parse_manifest(git(repo, "show", f"{v}:{manifest_path}"))
+        manifest_paths = set(tree_paths(repo, v, manifest_path))
+        manifest_text = object_text(repo, v, manifest_path, manifest_paths)
+        if manifest_text is None:
+            raise PreflightError("canonical integration manifest is missing")
+        manifest = parse_manifest(manifest_text)
     except PreflightError as exc:
         raise PreflightError(f"manifest unavailable or invalid: {exc}") from exc
     expected = {

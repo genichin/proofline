@@ -35,6 +35,19 @@ def git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def stage_canonical_mode(repo: Path, path: str, mode: str) -> None:
+    payload = (repo / path).read_bytes()
+    hashed = subprocess.run(
+        ("git", "hash-object", "-w", "--stdin"),
+        cwd=repo,
+        input=payload,
+        capture_output=True,
+        check=True,
+    )
+    oid = hashed.stdout.decode("ascii").strip()
+    git(repo, "update-index", "--add", "--cacheinfo", f"{mode},{oid},{path}")
+
+
 def make_approved_repo(
     tmp_path: Path, *, req_status: str = "approved", config: bool = False,
     handoff: bool = True,
@@ -154,6 +167,42 @@ def commit_approval_and_handoff(repo: Path, message: str) -> str:
     approval = git(repo, "rev-parse", "HEAD").stdout.strip()
     commit_handoff(repo)
     return approval
+
+
+def make_symlink_target_repo(tmp_path: Path) -> tuple[Path, str]:
+    repo, _ = make_approved_repo(tmp_path, handoff=False)
+    git(repo, "config", "core.symlinks", "false")
+    target = ".proofline/criteria/ac-0001.md"
+    stage_canonical_mode(repo, target, "120000")
+    git(repo, "commit", "-qm", "symlink-mode approval target")
+    approval = git(repo, "rev-parse", "HEAD").stdout.strip()
+    commit_handoff(repo)
+    assert git(repo, "status", "--porcelain=v1", "--untracked-files=all").stdout == ""
+    return repo, approval
+
+
+def test_handoff_rejects_symlink_mode_target_before_worktree_mutation(tmp_path: Path) -> None:
+    repo, approval = make_symlink_target_repo(tmp_path)
+
+    result = run_script(repo, approval)
+
+    assert result.returncode == 2
+    assert result.stderr.strip() == (
+        "error: canonical artifact must be a regular blob: "
+        ".proofline/criteria/ac-0001.md"
+    )
+    assert not (repo / ".worktrees/line-0007").exists()
+
+
+def test_handoff_canonical_reader_accepts_executable_regular_blob(tmp_path: Path) -> None:
+    repo, _ = make_approved_repo(tmp_path, handoff=False)
+    path = ".proofline/criteria/ac-0001.md"
+    expected = (repo / path).read_text(encoding="utf-8")
+    stage_canonical_mode(repo, path, "100755")
+    git(repo, "commit", "-qm", "executable regular artifact")
+    commit = git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    assert load_worktree_script().artifact_at(repo, commit, path) == expected
 
 
 def run_script_isolated(

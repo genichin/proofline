@@ -30,6 +30,19 @@ def commit(repo: Path, message: str) -> str:
     return git(repo, "rev-parse", "HEAD")
 
 
+def stage_canonical_mode(repo: Path, path: str, mode: str) -> None:
+    payload = (repo / path).read_bytes()
+    hashed = subprocess.run(
+        ("git", "hash-object", "-w", "--stdin"),
+        cwd=repo,
+        input=payload,
+        capture_output=True,
+        check=True,
+    )
+    oid = hashed.stdout.decode("ascii").strip()
+    git(repo, "update-index", "--add", "--cacheinfo", f"{mode},{oid},{path}")
+
+
 def micro_spec(status: str, *, body: str = "Implement exact gate.") -> str:
     return (
         "---\nid: ms-0007-001\nparent_req: req-0007\ncriteria:\n"
@@ -98,6 +111,32 @@ def make_repo(
     if approval_change == "unrelated":
         (repo / "concurrent.txt").write_text("mutation\n", encoding="utf-8")
     approval = commit(repo, "status-only approval")
+    return repo, target, approval
+
+
+def make_symlink_artifact_repo(
+    tmp_path: Path, *, mode: str = "120000"
+) -> tuple[Path, str, str]:
+    repo = tmp_path / "project"
+    repo.mkdir(parents=True)
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "config", "user.email", "proofline@example.invalid")
+    git(repo, "config", "user.name", "ProofLine Test")
+    git(repo, "config", "core.symlinks", "false")
+    path = ".proofline/lines/line-0007/micro-specs/ms-0007-001.md"
+    artifact = repo / path
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text(micro_spec("draft"), encoding="utf-8")
+    if mode == "100755":
+        artifact.chmod(0o755)
+    stage_canonical_mode(repo, path, mode)
+    git(repo, "commit", "-qm", "symlink-mode draft target")
+    target = git(repo, "rev-parse", "HEAD")
+    artifact.write_text(micro_spec("approved"), encoding="utf-8")
+    stage_canonical_mode(repo, path, mode)
+    git(repo, "commit", "-qm", "symlink-mode status approval")
+    approval = git(repo, "rev-parse", "HEAD")
+    assert git(repo, "status", "--porcelain=v1", "--untracked-files=all") == ""
     return repo, target, approval
 
 
@@ -204,6 +243,32 @@ def test_exact_authority_gate_accepts_real_git_paths_without_mutation(tmp_path: 
     assert result.returncode == 0, result.stderr
     assert f"approval-authority: passed mode={mode} target={target} approval={approval}" in result.stdout
     assert "validates supplied evidence; does not cryptographically authenticate a human" in result.stdout
+    assert snapshot(repo) == before
+
+
+def test_authority_gate_rejects_symlink_mode_artifact_without_mutation(tmp_path: Path) -> None:
+    repo, target, approval = make_symlink_artifact_repo(tmp_path)
+    review, user_approval = write_evidence(tmp_path, repo, target)
+    before = snapshot(repo)
+
+    result = run_gate(SCRIPT, repo, "normal", target, approval, review, user_approval)
+
+    assert result.returncode == 2
+    assert result.stderr.strip() == (
+        "approval-authority[TRANSITION_PATH]: canonical artifact must be a regular blob: "
+        ".proofline/lines/line-0007/micro-specs/ms-0007-001.md"
+    )
+    assert snapshot(repo) == before
+
+
+def test_authority_gate_accepts_executable_regular_artifact_without_mutation(tmp_path: Path) -> None:
+    repo, target, approval = make_symlink_artifact_repo(tmp_path, mode="100755")
+    review, user_approval = write_evidence(tmp_path, repo, target)
+    before = snapshot(repo)
+
+    result = run_gate(SCRIPT, repo, "normal", target, approval, review, user_approval)
+
+    assert result.returncode == 0, result.stderr
     assert snapshot(repo) == before
 
 
