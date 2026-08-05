@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import time
+from typing import Any
 import zipfile
 
 import pytest
@@ -257,6 +259,49 @@ def install_flooding_git(tmp_path: Path) -> dict[str, str]:
     env = os.environ.copy()
     env["PATH"] = f"{bin_dir}{os.pathsep}{env['PATH']}"
     return env
+
+
+def load_authority_module() -> Any:
+    spec = importlib.util.spec_from_file_location("proofline_test_approval_authority", SCRIPT)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def install_descendant_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    bin_dir = tmp_path / "descendant-bin"
+    bin_dir.mkdir()
+    pid_file = tmp_path / "descendant.pid"
+    terminated = tmp_path / "descendant.terminated"
+    child_code = (
+        "import os, signal, sys, time\n"
+        "pid_file, terminated = sys.argv[1:]\n"
+        "open(pid_file, 'w', encoding='utf-8').write(str(os.getpid()))\n"
+        "def stop(signum, frame):\n"
+        "    open(terminated, 'w', encoding='utf-8').write('terminated')\n"
+        "    raise SystemExit(0)\n"
+        "signal.signal(signal.SIGTERM, stop)\n"
+        "time.sleep(60)\n"
+    )
+    fake_git = bin_dir / "git"
+    fake_git.write_text(
+        "#!/usr/bin/env python3\n"
+        "import os, pathlib, subprocess, sys, time\n"
+        f"child_code = {child_code!r}\n"
+        "pid_file = pathlib.Path(os.environ['PROOFLINE_DESCENDANT_PID'])\n"
+        "subprocess.Popen([sys.executable, '-c', child_code, str(pid_file), "
+        "os.environ['PROOFLINE_DESCENDANT_TERMINATED']])\n"
+        "deadline = time.monotonic() + 2\n"
+        "while not pid_file.exists() and time.monotonic() < deadline:\n"
+        "    time.sleep(0.01)\n",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setenv("PROOFLINE_DESCENDANT_PID", str(pid_file))
+    monkeypatch.setenv("PROOFLINE_DESCENDANT_TERMINATED", str(terminated))
+    return pid_file, terminated
 
 
 @pytest.mark.parametrize("mode", ["normal", "bootstrap"])
@@ -639,3 +684,52 @@ def test_authority_gate_fails_promptly_when_git_combined_output_exceeds_limit(
     assert result.stderr.strip() == (
         "approval-authority[REPOSITORY]: git command output exceeds limit"
     )
+
+
+def test_authority_gate_ignores_inherited_git_routing_and_external_config(
+    tmp_path: Path,
+) -> None:
+    repo, target, approval = make_repo(tmp_path, mode="normal")
+    review, user_approval = write_evidence(tmp_path, repo, target)
+    attacker = tmp_path / "attacker"
+    attacker.mkdir()
+    git(attacker, "init", "-q", "-b", "main")
+    marker = tmp_path / "external-command-ran"
+    hook = tmp_path / "attacker-hook"
+    hook.write_text(f"#!/bin/sh\nprintf owned > {marker}\n", encoding="utf-8")
+    hook.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "GIT_DIR": str(attacker / ".git"),
+            "GIT_WORK_TREE": str(attacker),
+            "GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "core.fsmonitor",
+            "GIT_CONFIG_VALUE_0": str(hook),
+        }
+    )
+
+    result = run_gate(
+        SCRIPT, repo, "normal", target, approval, review, user_approval, env=env
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert f"target={target} approval={approval}" in result.stdout
+    assert not marker.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group regression")
+def test_run_git_times_out_and_kills_descendant_holding_pipes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_authority_module()
+    pid_file, terminated = install_descendant_git(tmp_path, monkeypatch)
+    monkeypatch.setattr(module, "GIT_READ_TIMEOUT_SECONDS", 0.2)
+    started = time.monotonic()
+
+    with pytest.raises(RuntimeError, match="git command timed out"):
+        module.run_git(tmp_path, "rev-parse", "HEAD")
+
+    assert time.monotonic() - started < 2
+    assert pid_file.exists()
+    assert terminated.read_text(encoding="utf-8") == "terminated"

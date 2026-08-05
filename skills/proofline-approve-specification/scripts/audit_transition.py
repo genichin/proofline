@@ -7,6 +7,7 @@ import argparse
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -19,6 +20,7 @@ COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 OID_RE = re.compile(rb"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 GIT_READ_TIMEOUT_SECONDS = 5
 GIT_READ_OUTPUT_LIMIT = 8 * 1024 * 1024
+PROCESS_CLEANUP_GRACE_SECONDS = 0.25
 
 
 class AuditError(RuntimeError):
@@ -26,15 +28,29 @@ class AuditError(RuntimeError):
 
 
 def run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
-    command = ("git", "-C", str(repo), *args)
-    environment = os.environ.copy()
+    command = (
+        "git",
+        "-c", "core.fsmonitor=false",
+        "-c", f"core.hooksPath={os.devnull}",
+        "-c", "diff.external=",
+        "-C", str(repo),
+        *args,
+    )
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
     environment.update({
         "GIT_NO_REPLACE_OBJECTS": "1",
         "GIT_NO_LAZY_FETCH": "1",
         "GIT_OPTIONAL_LOCKS": "0",
         "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": os.devnull,
         "LC_ALL": "C",
     })
+    popen_options: dict[str, Any] = {}
+    if os.name == "nt":
+        popen_options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_options["start_new_session"] = True
     try:
         process = subprocess.Popen(
             command,
@@ -42,16 +58,20 @@ def run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=environment,
+            **popen_options,
         )
     except OSError as exc:
         raise AuditError("git command failed to start") from exc
+    assert process.stdout is not None and process.stderr is not None
 
     output = [bytearray(), bytearray()]
     total = 0
     lock = threading.Lock()
     overflow = threading.Event()
+    read_error = threading.Event()
+    finished = [threading.Event(), threading.Event()]
 
-    def drain(pipe: Any, destination: bytearray) -> None:
+    def drain(index: int, pipe: Any, destination: bytearray) -> None:
         nonlocal total
         try:
             while True:
@@ -64,39 +84,105 @@ def run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
                         destination.extend(chunk[:max(remaining, 0)])
                         total = GIT_READ_OUTPUT_LIMIT
                         overflow.set()
+                        break
                     else:
                         destination.extend(chunk)
                         total += len(chunk)
+        except (OSError, ValueError):
+            read_error.set()
         finally:
-            pipe.close()
+            finished[index].set()
 
     threads = [
-        threading.Thread(target=drain, args=(process.stdout, output[0]), daemon=True),
-        threading.Thread(target=drain, args=(process.stderr, output[1]), daemon=True),
+        threading.Thread(target=drain, args=(0, process.stdout, output[0]), daemon=True),
+        threading.Thread(target=drain, args=(1, process.stderr, output[1]), daemon=True),
     ]
     for thread in threads:
         thread.start()
 
     deadline = time.monotonic() + GIT_READ_TIMEOUT_SECONDS
     reason: str | None = None
-    while process.poll() is None:
-        if overflow.wait(0.01):
+    while True:
+        if overflow.is_set():
             reason = "git command output exceeds limit"
+            break
+        if read_error.is_set():
+            reason = "git command output read failed"
+            break
+        if process.poll() is not None and all(event.is_set() for event in finished):
             break
         if time.monotonic() >= deadline:
             reason = "git command timed out"
             break
-    if reason is not None and process.poll() is None:
-        process.terminate()
+        overflow.wait(0.01)
+
+    cleanup_failed = False
+    if reason is not None:
+        if os.name == "nt":
+            killer: subprocess.Popen[bytes] | None = None
+            try:
+                killer = subprocess.Popen(
+                    ("taskkill", "/PID", str(process.pid), "/T", "/F"),
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                killer.wait(timeout=PROCESS_CLEANUP_GRACE_SECONDS)
+            except (OSError, subprocess.TimeoutExpired, ValueError):
+                if killer is not None:
+                    try:
+                        killer.kill()
+                        killer.wait(timeout=PROCESS_CLEANUP_GRACE_SECONDS)
+                    except (OSError, subprocess.TimeoutExpired, ValueError):
+                        cleanup_failed = True
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            except OSError:
+                cleanup_failed = True
+            grace_deadline = time.monotonic() + PROCESS_CLEANUP_GRACE_SECONDS
+            while time.monotonic() < grace_deadline:
+                try:
+                    os.killpg(process.pid, 0)
+                except ProcessLookupError:
+                    break
+                except OSError:
+                    break
+                time.sleep(0.01)
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except OSError:
+                cleanup_failed = True
         try:
-            process.wait(timeout=0.25)
-        except subprocess.TimeoutExpired:
-            process.kill()
-    process.wait()
+            process.wait(timeout=PROCESS_CLEANUP_GRACE_SECONDS)
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            try:
+                process.kill()
+                process.wait(timeout=PROCESS_CLEANUP_GRACE_SECONDS)
+            except (OSError, subprocess.TimeoutExpired, ValueError):
+                cleanup_failed = True
+
+    for stream in (process.stdout, process.stderr):
+        try:
+            stream.close()
+        except (OSError, ValueError):
+            read_error.set()
+    join_deadline = time.monotonic() + PROCESS_CLEANUP_GRACE_SECONDS
     for thread in threads:
-        thread.join()
-    if reason is not None or overflow.is_set():
-        raise AuditError(reason or "git command output exceeds limit")
+        thread.join(timeout=max(0.0, join_deadline - time.monotonic()))
+    if any(thread.is_alive() for thread in threads):
+        cleanup_failed = True
+    if reason is not None or overflow.is_set() or read_error.is_set() or cleanup_failed:
+        raise AuditError(
+            reason
+            or ("git command output exceeds limit" if overflow.is_set() else None)
+            or ("git command output read failed" if read_error.is_set() else None)
+            or "git command cleanup failed"
+        )
     return subprocess.CompletedProcess(command, process.returncode, bytes(output[0]), bytes(output[1]))
 
 

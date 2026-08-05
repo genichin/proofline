@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -23,10 +24,89 @@ MS_ID = re.compile(r"^ms-(\d{4})-(\d{3})$")
 IQC_ID = re.compile(r"^iqc-(\d{4})-(\d{3})$")
 TIMEOUT_SECONDS = 5
 OUTPUT_LIMIT = 8 * 1024 * 1024
+PROCESS_TERM_GRACE_SECONDS = 0.1
+PROCESS_KILL_GRACE_SECONDS = 0.2
+READER_JOIN_TIMEOUT_SECONDS = 0.2
 
 
 class PreflightError(RuntimeError):
     pass
+
+
+def _process_group_exists(process: subprocess.Popen[bytes]) -> bool:
+    if os.name == "nt":
+        return process.poll() is None
+    try:
+        os.killpg(process.pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
+    """Best-effort bounded termination followed by bounded direct-child reaping."""
+    if not isinstance(getattr(process, "pid", None), int):
+        try:
+            process.terminate()
+            process.wait(timeout=PROCESS_KILL_GRACE_SECONDS)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ("taskkill", "/PID", str(process.pid), "/T", "/F"),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=PROCESS_KILL_GRACE_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                process.kill()
+            except OSError:
+                pass
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        term_deadline = time.monotonic() + PROCESS_TERM_GRACE_SECONDS
+        while _process_group_exists(process) and time.monotonic() < term_deadline:
+            time.sleep(0.005)
+        if _process_group_exists(process):
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    try:
+        process.wait(timeout=PROCESS_KILL_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        try:
+            process.kill()
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=PROCESS_KILL_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _close_and_join_readers(
+    process: subprocess.Popen[bytes], readers: list[threading.Thread]
+) -> bool:
+    for stream in (process.stdout, process.stderr):
+        if stream is not None:
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                pass
+    for reader in readers:
+        reader.join(timeout=READER_JOIN_TIMEOUT_SECONDS)
+    return all(not reader.is_alive() for reader in readers)
 
 
 class _UniqueLoader(yaml.SafeLoader):
@@ -53,26 +133,42 @@ _UniqueLoader.add_constructor(
 
 
 def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
-    environment = os.environ.copy()
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith("GIT_")
+    }
     environment.update(
         {
             "GIT_NO_REPLACE_OBJECTS": "1",
             "GIT_NO_LAZY_FETCH": "1",
             "GIT_OPTIONAL_LOCKS": "0",
             "GIT_TERMINAL_PROMPT": "0",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
             "LC_ALL": "C",
         }
     )
-    command = ("git", *args)
+    command = (
+        "git",
+        "-c", "core.fsmonitor=false",
+        "-c", f"core.hooksPath={os.devnull}",
+        "-c", "diff.external=",
+        "-C", str(repo),
+        *args,
+    )
     try:
         process = subprocess.Popen(
             command,
-            cwd=repo,
             env=environment,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             bufsize=0,
+            start_new_session=os.name != "nt",
+            creationflags=(
+                subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+            ),
         )
     except OSError as exc:
         raise PreflightError("git read failed to start") from exc
@@ -142,22 +238,16 @@ def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[bytes]:
         if failure is None and read_error.is_set():
             failure = PreflightError("git read pipe failed")
     finally:
-        if process.poll() is None:
-            try:
-                process.terminate()
-                process.wait(timeout=0.2)
-            except (OSError, subprocess.TimeoutExpired):
-                try:
-                    process.kill()
-                except OSError:
-                    pass
-                process.wait()
+        if failure is not None or process.poll() is None or process.returncode != 0:
+            _terminate_process_tree(process)
         else:
-            process.wait()
-        for reader in readers:
-            reader.join()
-        process.stdout.close()
-        process.stderr.close()
+            try:
+                process.wait(timeout=PROCESS_KILL_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                _terminate_process_tree(process)
+                failure = failure or PreflightError("git read failed to reap")
+        if not _close_and_join_readers(process, readers):
+            failure = failure or PreflightError("git read pipe reader failed to stop")
     if failure is not None:
         raise failure
     return subprocess.CompletedProcess(
@@ -279,7 +369,8 @@ def changed_paths(repo: Path, commit: str) -> list[str]:
     return [
         path
         for path in git(
-            repo, "diff", "--name-only", "--no-renames", f"{commit}^1", commit
+            repo, "diff", "--no-ext-diff", "--name-only", "--no-renames",
+            f"{commit}^1", commit
         ).splitlines()
         if path
     ]

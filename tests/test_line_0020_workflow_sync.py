@@ -320,6 +320,72 @@ def test_dqc_git_runner_stops_at_combined_output_limit(
     assert time.monotonic() - started < 0.75
 
 
+def test_dqc_git_runner_ignores_inherited_git_routing_and_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_helper()
+    (tmp_path / "requested").mkdir()
+    (tmp_path / "attacker").mkdir()
+    requested, _, _, _ = make_candidate(tmp_path / "requested")
+    attacker, _, _, _ = make_candidate(tmp_path / "attacker")
+    marker = tmp_path / "external-diff-ran"
+    external = tmp_path / "external-diff"
+    external.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
+    external.chmod(0o755)
+    (requested / "base.txt").write_text("dirty\n", encoding="utf-8")
+    monkeypatch.setenv("GIT_DIR", str(attacker / ".git"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(attacker))
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.fsmonitor")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", str(external))
+
+    top = module.git(requested, "rev-parse", "--show-toplevel")
+    module.git(requested, "status", "--short")
+
+    assert Path(top).resolve() == requested.resolve()
+    assert not marker.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group regression")
+def test_dqc_git_runner_kills_descendant_holding_pipes_after_parent_exit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_helper()
+    executable_dir = tmp_path / "bin"
+    executable_dir.mkdir()
+    pid_file = tmp_path / "descendant.pid"
+    fake_git = executable_dir / "git"
+    fake_git.write_text(
+        "#!/usr/bin/python3\n"
+        "import os, signal, time\n"
+        "pid = os.fork()\n"
+        "if pid == 0:\n"
+        "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        f"    open({str(pid_file)!r}, 'w').write(str(os.getpid()))\n"
+        "    while True: time.sleep(1)\n"
+        "os._exit(0)\n",
+        encoding="utf-8",
+    )
+    fake_git.chmod(0o755)
+    monkeypatch.setenv("PATH", str(executable_dir))
+    monkeypatch.setattr(module, "TIMEOUT_SECONDS", 0.1)
+    started = time.monotonic()
+
+    with pytest.raises(module.PreflightError, match="timed out"):
+        module.git(tmp_path, "status")
+
+    assert time.monotonic() - started < 1.0
+    pid = int(pid_file.read_text(encoding="utf-8"))
+    for _ in range(50):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            break
+        time.sleep(0.01)
+    else:
+        pytest.fail("git descendant survived process-tree cleanup")
+
+
 def test_pre_admission_helper_passes_exact_m_q_v_without_mutation(tmp_path: Path) -> None:
     repo, m, q, v = make_candidate(tmp_path)
     before = snapshot(repo)

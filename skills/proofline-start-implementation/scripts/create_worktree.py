@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -23,49 +24,89 @@ GIT_READ_OUTPUT_LIMIT = 8 * 1024 * 1024
 GIT_WORKTREE_TIMEOUT_SECONDS = 30
 VALIDATE_TIMEOUT_SECONDS = 30
 VALIDATE_OUTPUT_LIMIT = 256 * 1024
-_REAPER_LOCK = threading.Lock()
-_REAPER_REGISTRY: dict[int, subprocess.Popen[bytes]] = {}
+PROCESS_TERM_GRACE_SECONDS = 0.1
+PROCESS_KILL_GRACE_SECONDS = 0.2
+READER_JOIN_TIMEOUT_SECONDS = 0.2
 
 
 class WorkflowError(RuntimeError):
     """Expected fail-closed workflow error."""
 
 
-def _reap_validate_process(key: int, process: subprocess.Popen[bytes]) -> None:
+def _process_group_exists(process: subprocess.Popen[bytes]) -> bool:
+    if os.name == "nt":
+        return process.poll() is None
     try:
-        process.wait()
-    finally:
-        with _REAPER_LOCK:
-            if _REAPER_REGISTRY.get(key) is process:
-                del _REAPER_REGISTRY[key]
+        os.killpg(process.pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
-def _transfer_validate_reap(process: subprocess.Popen[bytes]) -> None:
-    key = id(process)
-    with _REAPER_LOCK:
-        if key in _REAPER_REGISTRY:
-            return
-        _REAPER_REGISTRY[key] = process
-        threading.Thread(
-            target=_reap_validate_process,
-            args=(key, process),
-            name="proofline-validate-reaper",
-            daemon=True,
-        ).start()
-
-
-def _cleanup_validate_process(process: subprocess.Popen[bytes]) -> None:
-    if process.poll() is not None:
+def _terminate_process_tree(process: subprocess.Popen[bytes]) -> None:
+    """Best-effort bounded termination followed by bounded direct-child reaping."""
+    if not isinstance(getattr(process, "pid", None), int):
+        try:
+            process.terminate()
+            process.wait(timeout=PROCESS_KILL_GRACE_SECONDS)
+        except (OSError, subprocess.TimeoutExpired):
+            pass
         return
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ("taskkill", "/PID", str(process.pid), "/T", "/F"),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=PROCESS_KILL_GRACE_SECONDS,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                process.kill()
+            except OSError:
+                pass
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        term_deadline = time.monotonic() + PROCESS_TERM_GRACE_SECONDS
+        while _process_group_exists(process) and time.monotonic() < term_deadline:
+            time.sleep(0.005)
+        if _process_group_exists(process):
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
     try:
-        process.terminate()
-        process.wait(timeout=0.1)
-    except (OSError, subprocess.TimeoutExpired):
+        process.wait(timeout=PROCESS_KILL_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
         try:
             process.kill()
-            process.wait(timeout=0.1)
-        except (OSError, subprocess.TimeoutExpired):
-            _transfer_validate_reap(process)
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=PROCESS_KILL_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            pass
+
+
+def _close_and_join_readers(
+    process: subprocess.Popen[bytes], readers: list[threading.Thread]
+) -> bool:
+    for stream in (process.stdout, process.stderr):
+        if stream is not None:
+            try:
+                stream.close()
+            except (OSError, ValueError):
+                pass
+    for reader in readers:
+        reader.join(timeout=READER_JOIN_TIMEOUT_SECONDS)
+    return all(not reader.is_alive() for reader in readers)
 
 
 def _capture_validate_process(
@@ -73,7 +114,7 @@ def _capture_validate_process(
 ) -> tuple[int, bytes, bytes]:
     """Drain Windows and POSIX anonymous pipes concurrently with hard bounds."""
     if process.stdout is None or process.stderr is None:
-        _cleanup_validate_process(process)
+        _terminate_process_tree(process)
         raise WorkflowError("ProofLine validate executable failed to start")
     buffers = [bytearray(), bytearray()]
     finished = [threading.Event(), threading.Event()]
@@ -129,33 +170,42 @@ def _capture_validate_process(
             raise WorkflowError("ProofLine validate pipe read failed")
         return returncode, bytes(buffers[0]), bytes(buffers[1])
     except (OSError, subprocess.TimeoutExpired, ValueError):
+        _terminate_process_tree(process)
         raise
     finally:
-        _cleanup_validate_process(process)
-        for stream in (process.stdout, process.stderr):
-            if stream is not None:
-                try:
-                    stream.close()
-                except OSError:
-                    pass
-        for reader in readers:
-            reader.join(timeout=0.1)
+        if process.poll() is None:
+            _terminate_process_tree(process)
+        if not _close_and_join_readers(process, readers):
+            raise WorkflowError("ProofLine validate pipe reader failed to stop")
 
 
 def _run_git(
     repo: Path, *args: str, timeout: float = GIT_READ_TIMEOUT_SECONDS
 ) -> subprocess.CompletedProcess[bytes]:
-    environment = os.environ.copy()
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith("GIT_")
+    }
     environment.update(
         {
             "GIT_NO_REPLACE_OBJECTS": "1",
             "GIT_NO_LAZY_FETCH": "1",
             "GIT_OPTIONAL_LOCKS": "0",
             "GIT_TERMINAL_PROMPT": "0",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
             "LC_ALL": "C",
         }
     )
-    command = ("git", "-C", str(repo), *args)
+    command = (
+        "git",
+        "-c", "core.fsmonitor=false",
+        "-c", f"core.hooksPath={os.devnull}",
+        "-c", "diff.external=",
+        "-C", str(repo),
+        *args,
+    )
     try:
         process = subprocess.Popen(
             command,
@@ -164,6 +214,10 @@ def _run_git(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             bufsize=0,
+            start_new_session=os.name != "nt",
+            creationflags=(
+                subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+            ),
         )
     except OSError as exc:
         raise WorkflowError("git command failed to start") from exc
@@ -229,22 +283,16 @@ def _run_git(
                 except subprocess.TimeoutExpired:
                     failure = WorkflowError("git command timed out")
     finally:
-        if process.poll() is None:
-            try:
-                process.terminate()
-                process.wait(timeout=0.2)
-            except (OSError, subprocess.TimeoutExpired):
-                try:
-                    process.kill()
-                except OSError:
-                    pass
-                process.wait()
+        if failure is not None or process.poll() is None or process.returncode != 0:
+            _terminate_process_tree(process)
         else:
-            process.wait()
-        for reader in readers:
-            reader.join()
-        process.stdout.close()
-        process.stderr.close()
+            try:
+                process.wait(timeout=PROCESS_KILL_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                _terminate_process_tree(process)
+                failure = failure or WorkflowError("git command failed to reap")
+        if not _close_and_join_readers(process, readers):
+            failure = failure or WorkflowError("git command pipe reader failed to stop")
     if failure is not None:
         raise failure
     return subprocess.CompletedProcess(
@@ -492,7 +540,8 @@ def assert_status_only_handoff(
     changed = [
         path
         for path in git(
-            repo, "diff", "--name-only", "--no-renames", approval_commit, handoff_commit
+            repo, "diff", "--no-ext-diff", "--name-only", "--no-renames",
+            approval_commit, handoff_commit
         ).stdout.splitlines()
         if path
     ]
@@ -514,7 +563,11 @@ def validate_transitional_history(repo: Path, line_path: str) -> None:
     """Allow only the documented fieldless P→B validation gap."""
     if not (repo / "proofline.yaml").is_file():
         return
-    environment = os.environ.copy()
+    environment = {
+        key: value
+        for key, value in os.environ.items()
+        if not key.upper().startswith("GIT_")
+    }
     environment.pop("PYTHONPATH", None)
     environment.update(
         {
@@ -524,6 +577,8 @@ def validate_transitional_history(repo: Path, line_path: str) -> None:
             "GIT_NO_REPLACE_OBJECTS": "1",
             "GIT_OPTIONAL_LOCKS": "0",
             "GIT_TERMINAL_PROMPT": "0",
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_GLOBAL": os.devnull,
         }
     )
     path_entries = os.environ.get("PATH", "").split(os.pathsep)
@@ -551,6 +606,10 @@ def validate_transitional_history(repo: Path, line_path: str) -> None:
         process = subprocess.Popen(
             (str(executable), "validate"), cwd=repo, env=environment,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
+            start_new_session=os.name != "nt",
+            creationflags=(
+                subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
+            ),
         )
         returncode, stdout, stderr = _capture_validate_process(process, deadline=deadline)
     except subprocess.TimeoutExpired as exc:
