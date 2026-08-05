@@ -33,6 +33,15 @@ def unlink_git_object(path: Path) -> None:
     path.unlink()
 
 
+def remove_readonly(
+    function: Callable[[str], object], path: str, exc_info: object
+) -> None:
+    del exc_info
+    target = Path(path)
+    target.chmod(target.stat().st_mode | stat.S_IWRITE)
+    function(path)
+
+
 @dataclass
 class HistoryRepo:
     path: Path
@@ -576,7 +585,7 @@ def test_second_parent_only_policy_marker_fails_closed(
 def test_non_git_canonical_project_fails_closed(tmp_path: Path) -> None:
     repo = HistoryRepo.create(tmp_path)
     git_dir = repo.path / ".git"
-    shutil.rmtree(git_dir)
+    shutil.rmtree(git_dir, onerror=remove_readonly)
 
     assert_history_error(repo, LINE, "history.unavailable")
 

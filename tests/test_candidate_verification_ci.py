@@ -39,6 +39,11 @@ def test_candidate_workflow_has_exact_required_jobs_and_hardened_checkout_first(
     assert set(jobs) == JOBS
     assert jobs["ubuntu-python311"]["runs-on"] == "ubuntu-latest"
     assert jobs["windows-python311"]["runs-on"] == "windows-latest"
+    assert jobs["windows-python311"]["env"] == {
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "core.autocrlf",
+        "GIT_CONFIG_VALUE_0": "false",
+    }
     assert jobs["ubuntu-python311"]["needs"] == "build-candidate"
     assert jobs["windows-python311"]["needs"] == "build-candidate"
     for key in JOBS:
@@ -174,6 +179,7 @@ def test_windows_consumer_history_harness_is_platform_neutral() -> None:
     assert 'git(path, "config", "core.autocrlf", "false")' in implementation
     assert 'if extra_env is None and os.name != "nt":' in implementation
     assert "path.chmod(path.stat().st_mode | stat.S_IWRITE)" in implementation
+    assert "shutil.rmtree(git_dir, onerror=remove_readonly)" in implementation
     assert "sys.stdout.buffer.write" in windows_runtime
     assert "print('ok')" not in windows_runtime
     assert 'fcntl = pytest.importorskip("fcntl")' in line_init
