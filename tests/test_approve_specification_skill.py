@@ -118,7 +118,7 @@ def test_approval_skill_has_valid_metadata_and_minimal_gate_policy() -> None:
     metadata = yaml.safe_load(frontmatter)
     assert metadata["name"] == "proofline-approve-specification"
     assert metadata["description"].startswith("Use when ")
-    assert metadata["version"] == "1.2.0"
+    assert metadata["version"] == "1.3.0"
     assert "~/.proofline/skills/proofline-approve-specification/" in body
     for required in [
         "## When to Use",
@@ -129,6 +129,9 @@ def test_approval_skill_has_valid_metadata_and_minimal_gate_policy() -> None:
         "차단하지 않는다",
         "사용자",
         "no-mutation",
+        "사용자만",
+        "S0",
+        "S=A",
     ]:
         assert required in body
 

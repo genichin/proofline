@@ -458,7 +458,7 @@ def test_start_implementation_skill_has_valid_frontmatter() -> None:
     metadata = yaml.safe_load(frontmatter)
     assert metadata["name"] == "proofline-start-implementation"
     assert metadata["description"].startswith("Use when ")
-    assert metadata["version"] == "1.3.0"
+    assert metadata["version"] == "1.4.0"
     assert "~/.proofline/skills/proofline-start-implementation/" in body
     for boundary in [
         "micro_spec_commit < P < I < Q",
@@ -495,6 +495,9 @@ def test_start_implementation_skill_requires_fail_closed_preflight() -> None:
         "branch 충돌",
         "worktree registration",
         "no-mutation",
+        "status-only handoff",
+        "exact `H`",
+        "idempotent",
     ]:
         assert required in text
 
@@ -519,7 +522,8 @@ def test_line_delivery_contract_defines_linked_worktree_boundary() -> None:
     text = CONTRACT.read_text()
     for required in [
         ".worktrees/line-NNNN/",
-        "exact REQ approval commit",
+        "exact REQ approval baseline `A`",
+        "status-only handoff commit `H`",
         "linked worktree",
         "공용 `proofline`",
         "ProofLine 전용 `.venv`",

@@ -105,6 +105,12 @@ AC는 사양의 atomic unit이고 Micro-SPEC은 기술적 구현 unit이므로 �
 - 독립적인 구현·검증 경계를 가진 AC를 하나의 Micro-SPEC에 불필요하게 묶지 않는다.
 - 새로운 사양이 구현 중 발견되면 Micro-SPEC에 바로 추가하지 않고 AC와 REQ 범위를 먼저 갱신한다.
 
+### Lifecycle-aware criteria coverage drafting gate
+
+Direct reference와 각 Micro-SPEC criteria의 non-empty subset 규칙은 항상 적용한다. 다만 Line이 `not_started` 또는 `in_progress`이고 모든 non-withdrawn Micro-SPEC의 `implementation_status`가 `not_started`인 drafting phase에는 zero 또는 partial criteria coverage를 허용한다. 어떤 Micro-SPEC이라도 `in_progress` 또는 `implemented`로 전환하려면 전체 non-withdrawn Micro-SPEC criteria 합집합이 REQ target 전체와 정확히 같아야 한다. Line이 `verifying` 또는 `delivered`인 경우에도 exact coverage가 필수다.
+
+이 `ac-0003` coverage drafting gate는 reference/coverage만 소유한다. Integration manifest의 path·schema·parent binding과 Git ancestry는 [Line 검증·통합·Delivery 계약](line-delivery.md)이 별도로 소유하며 criteria coverage 판정과 혼합하지 않는다.
+
 집합 불변식은 다음과 같다.
 
 ```text

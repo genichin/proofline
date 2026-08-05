@@ -48,7 +48,7 @@ def test_run_dqc_skill_has_valid_frontmatter() -> None:
     metadata = yaml.safe_load(frontmatter)
     assert metadata["name"] == "proofline-run-dqc"
     assert metadata["description"].startswith("Use when ")
-    assert metadata["version"] == "1.2.0"
+    assert metadata["version"] == "1.3.0"
     assert "## When to Use" in body
     assert body.strip()
 
@@ -164,5 +164,10 @@ def test_workflow_keeps_authority_and_runtime_boundaries() -> None:
         "same-`V` retry",
         "DQC Checks",
         "main integration이나 release authority를 부여하지 않는다",
+        "preflight_integration_candidate.py",
+        "pre-integration",
+        "post-integration",
+        "V.parent[0]=M",
+        "V.parent[1]=Q",
     ]:
         assert required in text

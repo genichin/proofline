@@ -39,6 +39,14 @@ draft ───────→ approved
 - 변경된 Micro-SPEC을 재검토하여 다시 `approved`로 전환한 뒤 구현을 재개한다.
 - `withdrawn`은 terminal status이다.
 
+### Draft review와 approval ownership
+
+후속 Line의 canonical choreography는 `A < H < S0 < S < P < I < Q`다. 구현 에이전트인 draft author는 Line worktree에서 clean exact draft commit `S0`를 만든 뒤 mutation을 멈춘다. 독립 specification reviewer는 exact `S0`의 substantive bytes, parent REQ·AC 범위와 criteria coverage를 read-only로 검토하고 PASS 또는 correction recommendation만 제공한다. Correction에는 fresh `S0`와 fresh review가 필요하다.
+
+Review PASS 뒤 **사용자만** exact reviewed bytes의 approval authority를 가진다. Governance lead는 사용자 승인을 대신하지 않는 status-only recorder다. 구현 에이전트가 중지되고 clean branch HEAD가 exact `S0`임을 확인한 뒤 같은 worktree에서 `spec_status: draft → approved`만 기록한 `S`를 만들고, `S.parent=S0`와 substantive bytes 불변을 read-back한 다음 exact `S`를 구현 에이전트에게 handback한다. Self-approval, reviewer mutation, stale draft, concurrent mutation, lead 단독 approval과 substantive 변경이 섞인 approval은 허용하지 않는다.
+
+Current-validator migration인 Line 0020만 bootstrap exception으로 REQ·AC·Micro-SPEC combined exact draft를 같은 독립 review와 user-only approval 뒤 main의 status-only commit `S=A`에서 승인한다. Chronology는 `S=A < H < P < I < Q`이며 exact `H` 뒤 `S0/S`를 다시 만들지 않는다.
+
 ### Implementation status
 
 `implementation_status`는 다음 세 값만 허용한다.

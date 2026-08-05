@@ -1,7 +1,7 @@
 ---
 name: proofline-run-dqc
 description: Use when verifying a ProofLine integration candidate at DQC without repeating exact-bound component IQC checks unless a documented trigger requires them.
-version: 1.2.0
+version: 1.3.0
 author: ProofLine
 license: MIT
 metadata:
@@ -14,7 +14,7 @@ metadata:
 
 ## Overview
 
-DQC를 exact integration candidate의 Line-level verification으로 수행한다. Passed IQC의 exact-bound component evidence는 재사용하고, candidate가 evidence를 stale하게 만들거나 별도 integration risk가 있을 때만 관련 검사를 다시 실행한다.
+DQC를 main-first exact integration candidate `V`의 Line-level verification으로 수행한다. `V.parent[0]=M` latest main, `V.parent[1]=Q` exact Line head와 canonical manifest를 DQC 전에 read-only로 pre-admit한다. Passed IQC의 exact-bound component evidence는 재사용하고, candidate가 evidence를 stale하게 만들거나 별도 integration risk가 있을 때만 관련 검사를 다시 실행한다.
 
 ## When to Use
 
@@ -87,9 +87,20 @@ hosted_candidate_gate:
 
 ## Workflow
 
-### 1. Exact candidate 고정
+### 1. Main-first exact candidate와 pre-admission
 
-모든 Micro-SPEC 구현, corresponding IQC와 `execution_status: verifying`를 포함한 clean commit을 candidate로 고정한다. Full SHA를 기록하고 현재 HEAD가 정확히 일치하는지 확인한다.
+모든 Micro-SPEC 구현, corresponding IQC와 `execution_status: verifying`를 포함한 clean Line head를 `Q`로 고정한다. Latest main을 `M`으로 고정하고 별도 collision-safe candidate branch/worktree에서 `Q`를 `--no-ff` merge해 exactly two-parent `V`를 만든다. Parent order는 `V.parent[0]=M`, `V.parent[1]=Q`다. `V`는 `.proofline/lines/line-NNNN/integration-NNNN.md` 하나를 새로 포함하며 manifest의 `line_id`, `main_parent`, `line_head`가 target Line, `M`, `Q`와 exact하게 일치해야 한다. Manifest 외 merge-only 제품 변경이나 conflict resolution은 candidate admission 실패다.
+
+Pre-integration에는 mutable ref equality가 gate다. Candidate 생성·hosted evidence·DQC PASS·main fast-forward 직전까지 current main ref가 exact `M`, canonical clean Line ref/head가 exact `Q`여야 한다. 다음 read-only helper를 clean candidate `V` worktree에서 실행한다.
+
+```bash
+python3 ~/.proofline/skills/proofline-run-dqc/scripts/preflight_integration_candidate.py \
+  --repo "$PWD" --line-id "$LINE_ID" \
+  --main-ref refs/heads/main --line-ref "$LINE_REF" \
+  --main-parent "$M" --line-head "$Q" --candidate "$V"
+```
+
+Helper는 exact refs, clean/collision-safe state, `HEAD=V`, ordered exactly two parents와 frontmatter-only manifest binding을 읽기만 한다. `V`를 생성하거나 file/index/ref/object/worktree를 변경하지 않으며 approve, merge, push, publish도 하지 않는다. Stale `M`이면 same exact `Q`를 유지한 fresh `V`와 fresh hosted/DQC evidence를 만들고 old `V`를 merge/rebase/retry하지 않는다. Stale `Q`도 fresh verification head와 fresh `V`가 필요하다.
 
 ### 2. Coverage와 IQC binding 확인
 
@@ -108,7 +119,7 @@ hosted_candidate_gate:
 2. `full_regression`: Candidate에서 project 전체 regression
 3. `canonical_validation`: Candidate에서 `proofline validate`
 4. `cross_spec_integration_scope`: Micro-SPEC 간 충돌, 결합 위험, 전체 REQ 범위
-5. `main_fast_forward`: 통합 대상 main이 candidate ancestor이고 fast-forward 가능한지
+5. `main_fast_forward`: `V.parent[0]=M`, `V.parent[1]=Q`, pre-integration mutable ref equality와 main fast-forward 가능성
 6. `post_candidate_source_immutability`: DQC 기록 이후 candidate 대비 제품 source가 바뀌지 않았는지
 
 ### 4. Conditional Component Checks 결정
@@ -144,12 +155,15 @@ Canonical template를 사용해 다음을 남긴다.
 
 DQC passed 후에도 자동 merge하지 않는다. Main checkout의 branch·cleanliness, candidate ancestry와 fast-forward를 다시 확인한다. DQC artifact commit 이후 candidate 대비 변경은 canonical DQC 기록만 허용하며 candidate 이후 제품 source 불변을 확인한다.
 
+Main이 DQC PASS descendant로 fast-forward된 post-integration 단계에서는 current main/Line ref equality를 historical invariant로 사용하지 않는다. Immutable `V`, actual parents, contained manifest, DQC `candidate_commit: V`, main first-parent의 `M → V → DQC PASS → delivery`와 designated Line chronology를 검사한다. Line branch/worktree cleanup이나 후속 unrelated main commit은 이 binding을 무효화하지 않는다.
+
 ## Failure Handling
 
 - Mandatory check 실패: DQC `failed` 또는 실제 blocker에 따라 `blocked`
 - Required conditional result 부재: `passed` 금지
 - Candidate 이후 제품 source 변경: 새 candidate 고정 후 영향받은 IQC·DQC 재검증
-- Main diverged: merge하지 않고 governance workspace에서 재계획
+- Pre-integration main drift: same exact `Q`를 designated second parent로 하는 fresh main-first `V`, hosted evidence와 DQC 수행
+- Pre-integration Line drift: fresh `Q` verification head와 fresh `V` 수행
 
 ## Verification Checklist
 
