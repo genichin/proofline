@@ -40,23 +40,34 @@ def micro_spec(status: str, *, body: str = "Implement exact gate.") -> str:
     )
 
 
-def bootstrap_req(status: str) -> str:
+def bootstrap_req(status: str, *, criteria: str | None = None) -> str:
+    admission = criteria or (
+        '  create:\n    - "ac-0011"\n'
+        '  update:\n    - "ac-0012"\n'
+        '  retire:\n    - "ac-0013"\n'
+        '  satisfy:\n    - "ac-0014"\n'
+    )
     return (
-        "---\nid: req-0007\nstatus: " + status + "\ndiscovery: dcy-0007\n"
-        "criteria:\n  create:\n    - ac-0011\n  update: []\n  retire: []\n"
-        "  satisfy: []\n---\n\n# Requirement\n\n## Objective\n\nObjective.\n\n"
+        '---\nid: "req-0007"\nstatus: ' + status + '\ndiscovery: "dcy-0007"\n'
+        "criteria:\n" + admission + "---\n\n# Requirement\n\n## Objective\n\nObjective.\n\n"
         "## Scope\n\nScope.\n\n## Non-Goals\n\nNone.\n"
     )
 
 
-def bootstrap_ac(status: str) -> str:
+def bootstrap_ac(ac_id: str, status: str) -> str:
     return (
-        "---\nid: ac-0011\nstatus: " + status + "\n---\n\n# Criterion\n\n"
+        f'---\nid: "{ac_id}"\nstatus: ' + status + "\n---\n\n# Criterion\n\n"
         "## Criterion\n\nCriterion.\n\n## Verification\n\nVerification.\n"
     )
 
 
-def make_repo(tmp_path: Path, *, mode: str, approval_change: str = "status") -> tuple[Path, str, str]:
+def make_repo(
+    tmp_path: Path,
+    *,
+    mode: str,
+    approval_change: str = "status",
+    bootstrap_criteria: str | None = None,
+) -> tuple[Path, str, str]:
     repo = tmp_path / "project"
     repo.mkdir(parents=True)
     git(repo, "init", "-q", "-b", "main")
@@ -66,16 +77,22 @@ def make_repo(tmp_path: Path, *, mode: str, approval_change: str = "status") -> 
     ms.parent.mkdir(parents=True)
     if mode == "bootstrap":
         req = repo / ".proofline/lines/line-0007/req-0007.md"
-        ac = repo / ".proofline/criteria/ac-0011.md"
-        ac.parent.mkdir(parents=True)
-        req.write_text(bootstrap_req("draft"), encoding="utf-8")
-        ac.write_text(bootstrap_ac("draft"), encoding="utf-8")
+        criteria_dir = repo / ".proofline/criteria"
+        criteria_dir.mkdir(parents=True)
+        req.write_text(bootstrap_req("draft", criteria=bootstrap_criteria), encoding="utf-8")
+        for ac_id, status in (("ac-0011", "draft"), ("ac-0012", "draft"),
+                              ("ac-0013", "active"), ("ac-0014", "active")):
+            (criteria_dir / f"{ac_id}.md").write_text(bootstrap_ac(ac_id, status), encoding="utf-8")
     ms.write_text(micro_spec("draft"), encoding="utf-8")
     target = commit(repo, "exact draft target")
 
     if mode == "bootstrap":
-        req.write_text(bootstrap_req("approved"), encoding="utf-8")
-        ac.write_text(bootstrap_ac("active"), encoding="utf-8")
+        req.write_text(bootstrap_req("approved", criteria=bootstrap_criteria), encoding="utf-8")
+        for ac_id, status in (("ac-0011", "active"), ("ac-0012", "active"),
+                              ("ac-0013", "retired"), ("ac-0014", "active")):
+            (repo / f".proofline/criteria/{ac_id}.md").write_text(
+                bootstrap_ac(ac_id, status), encoding="utf-8"
+            )
     body = "Changed during approval." if approval_change == "body" else "Implement exact gate."
     ms.write_text(micro_spec("approved", body=body), encoding="utf-8")
     if approval_change == "unrelated":
@@ -155,6 +172,7 @@ def run_gate(
     return subprocess.run(
         (
             sys.executable,
+            "-I",
             str(script),
             "--repo", str(repo),
             "--mode", mode,
@@ -186,6 +204,79 @@ def test_exact_authority_gate_accepts_real_git_paths_without_mutation(tmp_path: 
     assert result.returncode == 0, result.stderr
     assert f"approval-authority: passed mode={mode} target={target} approval={approval}" in result.stdout
     assert "validates supplied evidence; does not cryptographically authenticate a human" in result.stdout
+    assert snapshot(repo) == before
+
+
+def test_bootstrap_accepts_copied_real_req_0020_quoted_admissions_without_mutation(
+    tmp_path: Path,
+) -> None:
+    repo = tmp_path / "project"
+    repo.mkdir()
+    git(repo, "init", "-q", "-b", "main")
+    git(repo, "config", "user.email", "proofline@example.invalid")
+    git(repo, "config", "user.name", "ProofLine Test")
+    req = repo / ".proofline/lines/line-0007/req-0007.md"
+    req.parent.mkdir(parents=True)
+    canonical_req = (ROOT / ".proofline/lines/line-0020/req-0020.md").read_text(encoding="utf-8")
+    assert canonical_req.count("status: approved") == 1
+    req.write_text(canonical_req.replace("status: approved", "status: draft", 1), encoding="utf-8")
+    criteria_dir = repo / ".proofline/criteria"
+    criteria_dir.mkdir(parents=True)
+    for ac_id in ("ac-0022", "ac-0003", "ac-0007", "ac-0021", "ac-0010"):
+        canonical = (ROOT / f".proofline/criteria/{ac_id}.md").read_text(encoding="utf-8")
+        before_text = (
+            canonical.replace("status: active", "status: draft", 1)
+            if ac_id in {"ac-0022", "ac-0003", "ac-0007", "ac-0021"}
+            else canonical
+        )
+        (criteria_dir / f"{ac_id}.md").write_text(before_text, encoding="utf-8")
+    ms = repo / ".proofline/lines/line-0007/micro-specs/ms-0007-001.md"
+    ms.parent.mkdir(parents=True)
+    ms.write_text(micro_spec("draft"), encoding="utf-8")
+    target = commit(repo, "copied real req-0020 draft bytes")
+
+    req.write_text(canonical_req, encoding="utf-8")
+    for ac_id in ("ac-0022", "ac-0003", "ac-0007", "ac-0021"):
+        (criteria_dir / f"{ac_id}.md").write_bytes(
+            (ROOT / f".proofline/criteria/{ac_id}.md").read_bytes()
+        )
+    ms.write_text(micro_spec("approved"), encoding="utf-8")
+    approval = commit(repo, "copied real req-0020 combined approval")
+    review, user_approval = write_evidence(tmp_path, repo, target)
+    before = snapshot(repo)
+
+    result = run_gate(SCRIPT, repo, "bootstrap", target, approval, review, user_approval)
+
+    assert result.returncode == 0, result.stderr
+    assert snapshot(repo) == before
+
+
+@pytest.mark.parametrize(
+    "criteria",
+    [
+        '  create: []\n  create: []\n  update: []\n  retire: []\n  satisfy: []\n',
+        '  create: [\n  update: []\n  retire: []\n  satisfy: []\n',
+        '  - "ac-0011"\n',
+        '  create: []\n  update: []\n  retire: []\n  satisfy: []\n  unknown: []\n',
+        '  create: "ac-0011"\n  update: []\n  retire: []\n  satisfy: []\n',
+        '  create:\n    - "AC-0011"\n  update: []\n  retire: []\n  satisfy: []\n',
+    ],
+    ids=("duplicate-key", "malformed-yaml", "criteria-not-mapping", "unknown-admission",
+         "admission-not-list", "noncanonical-ac-id"),
+)
+def test_bootstrap_req_frontmatter_fails_closed_for_noncanonical_criteria_structure(
+    tmp_path: Path, criteria: str
+) -> None:
+    repo, target, approval = make_repo(
+        tmp_path, mode="bootstrap", bootstrap_criteria=criteria
+    )
+    review, user_approval = write_evidence(tmp_path, repo, target)
+    before = snapshot(repo)
+
+    result = run_gate(SCRIPT, repo, "bootstrap", target, approval, review, user_approval)
+
+    assert result.returncode == 2
+    assert "approval-authority[TRANSITION_CONTENT]" in result.stderr
     assert snapshot(repo) == before
 
 
@@ -348,7 +439,7 @@ def test_source_and_built_wheel_extracted_script_have_behavior_and_diagnostic_pa
     tmp_path: Path,
 ) -> None:
     fixture = tmp_path / "fixture"
-    repo, target, approval = make_repo(fixture, mode="normal")
+    repo, target, approval = make_repo(fixture, mode="bootstrap")
     review, user_approval = write_evidence(fixture, repo, target)
     dist = tmp_path / "dist"
     built = subprocess.run(
@@ -364,8 +455,8 @@ def test_source_and_built_wheel_extracted_script_have_behavior_and_diagnostic_pa
     assert packaged == SCRIPT.read_bytes()
     extracted.write_bytes(packaged)
 
-    source_pass = run_gate(SCRIPT, repo, "normal", target, approval, review, user_approval)
-    packaged_pass = run_gate(extracted, repo, "normal", target, approval, review, user_approval)
+    source_pass = run_gate(SCRIPT, repo, "bootstrap", target, approval, review, user_approval)
+    packaged_pass = run_gate(extracted, repo, "bootstrap", target, approval, review, user_approval)
     assert source_pass.returncode == packaged_pass.returncode == 0
     assert source_pass.stdout == packaged_pass.stdout
 
@@ -379,8 +470,8 @@ def test_source_and_built_wheel_extracted_script_have_behavior_and_diagnostic_pa
     approval_payload["review_evidence_sha256"] = duplicate_digest
     user_approval.write_text(json.dumps(approval_payload, sort_keys=True) + "\n", encoding="utf-8")
 
-    source_result = run_gate(SCRIPT, repo, "normal", target, approval, review, user_approval)
-    packaged_result = run_gate(extracted, repo, "normal", target, approval, review, user_approval)
+    source_result = run_gate(SCRIPT, repo, "bootstrap", target, approval, review, user_approval)
+    packaged_result = run_gate(extracted, repo, "bootstrap", target, approval, review, user_approval)
 
     assert source_result.returncode == packaged_result.returncode == 2
     assert source_result.stderr == packaged_result.stderr

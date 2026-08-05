@@ -12,6 +12,8 @@ import subprocess
 import sys
 from typing import Any, NoReturn
 
+import yaml
+
 
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
@@ -137,25 +139,72 @@ def status_only(before: str, after: str, field: str, old: str, new: str) -> bool
     return count == 1 and changed == after
 
 
-def criteria_sets(req: str) -> dict[str, list[str]]:
-    result: dict[str, list[str]] = {}
-    lines = req.splitlines()
-    for key in ("create", "update", "retire", "satisfy"):
-        marker = f"  {key}:"
-        inline = f"  {key}: []"
-        if inline in lines:
-            result[key] = []
-            continue
+class UniqueKeySafeLoader(yaml.SafeLoader):
+    """Safe YAML loader that rejects duplicate mapping keys at every depth."""
+
+
+def construct_unique_mapping(
+    loader: UniqueKeySafeLoader, node: yaml.nodes.MappingNode, deep: bool = False
+) -> dict[Any, Any]:
+    mapping: dict[Any, Any] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
         try:
-            index = lines.index(marker)
-        except ValueError:
-            fail("TRANSITION_CONTENT", f"REQ.criteria.{key} is missing")
-        values: list[str] = []
-        for line in lines[index + 1 :]:
-            match = re.fullmatch(r"    - (ac-[0-9]{4})", line)
-            if match is None:
-                break
-            values.append(match.group(1))
+            duplicate = key in mapping
+        except TypeError as exc:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping", node.start_mark,
+                "found an unhashable mapping key", key_node.start_mark,
+            ) from exc
+        if duplicate:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping", node.start_mark,
+                f"found duplicate key {key!r}", key_node.start_mark,
+            )
+        mapping[key] = loader.construct_object(value_node, deep=deep)
+    return mapping
+
+
+UniqueKeySafeLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, construct_unique_mapping
+)
+
+
+def criteria_sets(req: str) -> dict[str, list[str]]:
+    lines = req.splitlines()
+    if not lines or lines[0] != "---":
+        fail("TRANSITION_CONTENT", "REQ must start with an exact YAML frontmatter boundary")
+    try:
+        boundary = lines.index("---", 1)
+    except ValueError:
+        fail("TRANSITION_CONTENT", "REQ YAML frontmatter closing boundary is missing")
+    frontmatter_text = "\n".join(lines[1:boundary]) + "\n"
+    try:
+        frontmatter = yaml.load(frontmatter_text, Loader=UniqueKeySafeLoader)
+    except yaml.YAMLError:
+        fail("TRANSITION_CONTENT", "REQ frontmatter must be strict duplicate-key-free YAML")
+    if not isinstance(frontmatter, dict):
+        fail("TRANSITION_CONTENT", "REQ frontmatter must be a YAML mapping")
+    criteria = frontmatter.get("criteria")
+    keys = {"create", "update", "retire", "satisfy"}
+    if not isinstance(criteria, dict) or set(criteria) != keys:
+        fail(
+            "TRANSITION_CONTENT",
+            "REQ.criteria must contain exactly create, update, retire, and satisfy",
+        )
+    result: dict[str, list[str]] = {}
+    for key in ("create", "update", "retire", "satisfy"):
+        values = criteria[key]
+        if not isinstance(values, list):
+            fail("TRANSITION_CONTENT", f"REQ.criteria.{key} must be a YAML list")
+        if any(not isinstance(value, str) or re.fullmatch(r"ac-[0-9]{4}", value) is None
+               for value in values):
+            fail(
+                "TRANSITION_CONTENT",
+                f"REQ.criteria.{key} entries must be canonical ac-NNNN IDs",
+            )
+        if len(set(values)) != len(values):
+            fail("TRANSITION_CONTENT", f"REQ.criteria.{key} must not contain duplicate IDs")
         result[key] = values
     return result
 

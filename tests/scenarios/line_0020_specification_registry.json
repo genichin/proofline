@@ -23,7 +23,9 @@
     {"scenario_id": "approval.denied-user.fail", "expected": {"passed": false, "diagnostic_code": "USER_DECISION"}},
     {"scenario_id": "approval.reviewer-mutation.fail", "expected": {"passed": false, "diagnostic_code": "REVIEW_MUTATION"}},
     {"scenario_id": "approval.stale-target-and-digest.fail", "expected": {"passed": false, "diagnostic_code": "TARGET_BINDING"}},
-    {"scenario_id": "approval.body-and-concurrent-mutation.fail", "expected": {"passed": false, "diagnostic_code": "TRANSITION_PATH"}},
+    {"scenario_id": "approval.body-changing.fail", "expected": {"passed": false, "diagnostic_code": "TRANSITION_CONTENT"}},
+    {"scenario_id": "approval.concurrent-path.fail", "expected": {"passed": false, "diagnostic_code": "TRANSITION_PATH"}},
+    {"scenario_id": "approval.recorder-only.fail", "expected": {"passed": false, "diagnostic_code": "ACTOR_SEPARATION"}},
     {"scenario_id": "approval.stale-digest.fail", "expected": {"passed": false, "diagnostic_code": "REVIEW_DIGEST"}},
 
     {"scenario_id": "chronology.line-0020-bootstrap.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},

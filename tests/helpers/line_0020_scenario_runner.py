@@ -246,11 +246,12 @@ def execute_cross_artifact_registry(root: Path, registry_path: Path, temp_root: 
     wheel_workspace.mkdir()
     common = ("--registry", str(registry_path), "--root", str(root))
     source_payload = _run_json(
-        (sys.executable, str(runner), "run", *common, "--workspace", str(source_workspace),
+        (sys.executable, "-I", str(runner), "run", *common, "--workspace", str(source_workspace),
          "--artifact", "source", "--handoff-script", str(source_scripts["handoff"]),
-         "--approval-script", str(source_scripts["approval"])),
+         "--approval-script", str(source_scripts["approval"]),
+         "--source-root", str(root / "src")),
         source_workspace,
-        _sanitized_env(source_root=root / "src"),
+        _sanitized_env(),
     )
     wheel_payload = _run_json(
         (str(python), "-I", str(runner), "run", *common, "--workspace", str(wheel_workspace),
@@ -394,7 +395,12 @@ def _handoff_scenario(module: Any, scenario_id: str, workspace: Path, script: Pa
 
 def _approval_scenario(module: Any, scenario_id: str, workspace: Path, script: Path) -> tuple[str, bool]:
     mode = "bootstrap" if scenario_id == "approval.bootstrap.pass" else "normal"
-    change = "unrelated" if scenario_id == "approval.body-and-concurrent-mutation.fail" else "status"
+    if scenario_id == "approval.body-changing.fail":
+        change = "body"
+    elif scenario_id == "approval.concurrent-path.fail":
+        change = "unrelated"
+    else:
+        change = "status"
     repo, target, approval = module.make_repo(workspace, mode=mode, approval_change=change)
     kwargs: dict[str, Any] = {}
     if scenario_id == "approval.self-approval.fail":
@@ -405,6 +411,8 @@ def _approval_scenario(module: Any, scenario_id: str, workspace: Path, script: P
         kwargs["mutation_performed"] = True
     elif scenario_id == "approval.stale-target-and-digest.fail":
         kwargs.update(stale_target=True, stale_digest=True)
+    elif scenario_id == "approval.recorder-only.fail":
+        kwargs["user"] = "recorder-1"
     elif scenario_id == "approval.stale-digest.fail":
         kwargs["stale_digest"] = True
     review, user = module.write_evidence(workspace, repo, target, **kwargs)
@@ -474,8 +482,11 @@ def _dqc_scenario(module: Any, scenario_id: str, workspace: Path) -> tuple[str, 
 
 
 def run_registry(root: Path, registry_path: Path, workspace: Path, artifact: str,
-                 handoff_script: Path, approval_script: Path) -> dict[str, Any]:
+                 handoff_script: Path, approval_script: Path,
+                 source_root: Path | None = None) -> dict[str, Any]:
     registry = load_registry(registry_path)
+    if source_root is not None:
+        sys.path.insert(0, str(source_root))
     modules = _load_test_fixtures(root)
     import proofline
     module_path = str(Path(proofline.__file__).resolve())
@@ -534,9 +545,11 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--artifact", choices=("source", "wheel"), required=True)
     run.add_argument("--handoff-script", type=Path, required=True)
     run.add_argument("--approval-script", type=Path, required=True)
+    run.add_argument("--source-root", type=Path)
     args = parser.parse_args(argv)
     payload = run_registry(args.root.resolve(), args.registry.resolve(), args.workspace.resolve(),
-                           args.artifact, args.handoff_script.resolve(), args.approval_script.resolve())
+                           args.artifact, args.handoff_script.resolve(), args.approval_script.resolve(),
+                           args.source_root.resolve() if args.source_root else None)
     print(json.dumps(payload, sort_keys=True))
     return 0
 

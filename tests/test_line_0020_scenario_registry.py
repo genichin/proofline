@@ -34,7 +34,9 @@ EXPECTED_IDS = {
     "approval.denied-user.fail",
     "approval.reviewer-mutation.fail",
     "approval.stale-target-and-digest.fail",
-    "approval.body-and-concurrent-mutation.fail",
+    "approval.body-changing.fail",
+    "approval.concurrent-path.fail",
+    "approval.recorder-only.fail",
     "approval.stale-digest.fail",
     "chronology.line-0020-bootstrap.pass",
     "chronology.future-a-h-s0-s-p.pass",
@@ -59,7 +61,7 @@ def test_registry_has_fixed_approved_scenario_id_set() -> None:
 
     assert registry.schema_version == 1
     assert {scenario.scenario_id for scenario in registry.scenarios} == EXPECTED_IDS
-    assert len(registry.scenarios) == len(EXPECTED_IDS) == 36
+    assert len(registry.scenarios) == len(EXPECTED_IDS) == 38
 
 
 def test_registry_rejects_duplicate_scenario_ids(tmp_path: Path) -> None:
