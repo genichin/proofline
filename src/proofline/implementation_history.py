@@ -423,7 +423,7 @@ def _tree_paths(session: _GitSession, commit: str) -> set[str]:
     if cached is not None:
         return cached
 
-    output = _git(session, "ls-tree", "-r", "-z", "--full-tree", commit)
+    output = _git(session, "ls-tree", "-r", "-t", "-z", "--full-tree", commit)
     if output and not output.endswith(b"\0"):
         raise HistoryUnavailable
     entries: dict[str, tuple[str, str, str]] = {}

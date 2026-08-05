@@ -535,9 +535,12 @@ def _integration_scenario(module: Any, scenario_id: str, workspace: Path) -> tup
 
 
 def _history_scenario(module: Any, scenario_id: str, workspace: Path) -> tuple[str, bool]:
-    if scenario_id != "history.symlink-canonical-artifact.fail":
+    if scenario_id == "history.symlink-canonical-artifact.fail":
+        repo = module.parity_symlink_canonical_artifact(workspace)
+    elif scenario_id == "history.tree-canonical-artifact.fail":
+        repo = module.parity_tree_canonical_artifact(workspace)
+    else:
         raise AssertionError(scenario_id)
-    repo = module.parity_symlink_canonical_artifact(workspace)
     before = _repo_git_snapshot(repo.path)
     errors = module.validate_project(repo.path)
     return _normalize_errors(errors), _repo_git_snapshot(repo.path) == before

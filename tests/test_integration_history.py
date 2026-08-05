@@ -348,9 +348,13 @@ def test_canonical_artifact_must_be_a_blob(
 ) -> None:
     path = ".proofline/lines/line-0001/line-0001.md"
     tree_output = b"160000 commit " + b"a" * 40 + b"\t" + path.encode() + b"\0"
-    monkeypatch.setattr(
-        implementation_history, "_git", lambda *args, **kwargs: tree_output
-    )
+
+    def tree_git(session: object, *arguments: str, **kwargs: object) -> bytes:
+        assert arguments == ("ls-tree", "-r", "-t", "-z", "--full-tree", "b" * 40)
+        assert kwargs == {}
+        return tree_output
+
+    monkeypatch.setattr(implementation_history, "_git", tree_git)
     session = implementation_history._GitSession(tmp_path)
     paths = implementation_history._tree_paths(session, "b" * 40)
 

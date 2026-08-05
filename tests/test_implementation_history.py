@@ -278,6 +278,25 @@ def parity_symlink_canonical_artifact(tmp_path: Path, path: str = IQC) -> Histor
     return repo
 
 
+def parity_tree_canonical_artifact(tmp_path: Path, path: str = LINE) -> HistoryRepo:
+    repo = HistoryRepo.create(tmp_path)
+    artifact = repo.path / path
+    artifact.unlink()
+    artifact.mkdir()
+    (artifact / "child").write_text("historical tree entry\n", encoding="utf-8")
+    tree_commit = repo.commit("tree-artifact", "tree-mode canonical artifact")
+    tree_entry = git(repo.path, "ls-tree", tree_commit, "--", path).stdout
+    assert tree_entry.startswith("040000 tree ")
+    shutil.rmtree(artifact)
+    repo.write_line("not_started", policy=None)
+    repo.commit("restore-artifact", "restore regular canonical artifact")
+    repo.adopt()
+    repo.start()
+    implementation = repo.product_commit()
+    repo.finish(implementation)
+    return repo
+
+
 def replace_frontmatter_status(repo: HistoryRepo, path: str, field: str, value: str) -> None:
     artifact = repo.path / path
     text = artifact.read_text(encoding="utf-8")
@@ -1646,6 +1665,22 @@ def test_historical_symlink_mode_canonical_artifact_fails_closed_without_mutatio
     ]
 
     assert history_errors == [(canonical_path, "history.unavailable")]
+    assert repository_snapshot(repo.path) == before
+
+
+def test_historical_tree_mode_canonical_artifact_fails_closed_without_mutation(
+    tmp_path: Path,
+) -> None:
+    repo = parity_tree_canonical_artifact(tmp_path)
+    before = repository_snapshot(repo.path)
+
+    history_errors = [
+        (error.path, error.code)
+        for error in validate_project(repo.path)
+        if error.code.startswith("history.")
+    ]
+
+    assert history_errors == [(LINE, "history.unavailable")]
     assert repository_snapshot(repo.path) == before
 
 
