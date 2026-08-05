@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
 
 from proofline.validator import validate_project
-from test_implementation_history import HistoryRepo, LINE
+import proofline.implementation_history as implementation_history
+from test_implementation_history import HistoryRepo, LINE, repository_snapshot
 
 
 INTEGRATION = ".proofline/lines/line-0001/integration-0001.md"
@@ -105,6 +109,33 @@ def history_codes(repo: HistoryRepo) -> set[tuple[str, str]]:
     return {(error.path, error.code) for error in validate_project(repo.path)}
 
 
+def quarantined_merge_tree(repo: Path, main_parent: str, line_head: str) -> str:
+    common_dir = Path(git(repo, "rev-parse", "--git-common-dir"))
+    if not common_dir.is_absolute():
+        common_dir = repo / common_dir
+    object_directory = common_dir.resolve() / "objects"
+    with tempfile.TemporaryDirectory(prefix="proofline-red-objects-") as directory:
+        quarantine = Path(directory) / "objects"
+        quarantine.mkdir()
+        environment = os.environ.copy()
+        environment.update(
+            {
+                "GIT_OBJECT_DIRECTORY": str(quarantine),
+                "GIT_ALTERNATE_OBJECT_DIRECTORIES": str(object_directory),
+            }
+        )
+        completed = subprocess.run(
+            ("git", "merge-tree", "--write-tree", main_parent, line_head),
+            cwd=repo,
+            env=environment,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert completed.returncode == 0, completed.stderr
+        return completed.stdout.splitlines()[0]
+
+
 def rewrite_candidate_parents(repo: HistoryRepo, *parents: str) -> str:
     tree = git(repo.path, "rev-parse", "HEAD^{tree}")
     arguments = ["commit-tree", tree, "-m", "rewritten integration candidate"]
@@ -140,6 +171,90 @@ def test_main_first_candidate_accepts_designated_line_spine_and_manifest(
     repo, _, _, _ = build_candidate(tmp_path)
 
     assert validate_project(repo.path) == []
+
+
+def test_positive_integration_validation_preserves_exact_repository_snapshot(
+    tmp_path: Path,
+) -> None:
+    repo, main_parent, line_head, _ = build_candidate(tmp_path)
+    expected_tree = quarantined_merge_tree(repo.path, main_parent, line_head)
+    expected_object = Path(
+        git(
+            repo.path,
+            "rev-parse",
+            "--path-format=absolute",
+            "--git-path",
+            f"objects/{expected_tree[:2]}/{expected_tree[2:]}",
+        )
+    )
+    assert expected_object.is_file(), "fixture must begin with the computed merge tree loose"
+    expected_object.unlink()
+    absent = subprocess.run(
+        ("git", "cat-file", "-e", f"{expected_tree}^{{tree}}"),
+        cwd=repo.path,
+        capture_output=True,
+        check=False,
+    )
+    assert absent.returncode != 0
+    before = repository_snapshot(repo.path)
+
+    assert validate_project(repo.path) == []
+
+    assert repository_snapshot(repo.path) == before
+
+
+def test_conflicting_integration_validation_cleans_quarantine_without_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, _, _, _ = build_candidate(tmp_path, conflict_resolution=True)
+    quarantines: list[Path] = []
+    original = implementation_history.tempfile.TemporaryDirectory
+
+    def tracked_directory(*args: object, **kwargs: object):
+        created = original(*args, **kwargs)
+        quarantines.append(Path(created.name))
+        return created
+
+    monkeypatch.setattr(implementation_history.tempfile, "TemporaryDirectory", tracked_directory)
+    before = repository_snapshot(repo.path)
+
+    assert (INTEGRATION, "history.integration.tree") in history_codes(repo)
+
+    assert quarantines and all(not path.exists() for path in quarantines)
+    assert repository_snapshot(repo.path) == before
+
+
+def test_concurrent_integration_validation_preserves_exact_repository_snapshot(
+    tmp_path: Path,
+) -> None:
+    repo, _, _, _ = build_candidate(tmp_path)
+    before = repository_snapshot(repo.path)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(lambda _: validate_project(repo.path), range(8)))
+
+    assert results == [[]] * 8
+    assert repository_snapshot(repo.path) == before
+
+
+def test_linked_worktree_validation_uses_common_objects_read_only(tmp_path: Path) -> None:
+    repo, _, _, candidate = build_candidate(tmp_path / "source")
+    linked = tmp_path / "linked"
+    git(repo.path, "worktree", "add", "-q", "--detach", str(linked), candidate)
+    before = repository_snapshot(linked)
+
+    assert validate_project(linked) == []
+
+    assert repository_snapshot(linked) == before
+
+
+def test_object_quarantine_quotes_platform_path_separator(tmp_path: Path) -> None:
+    repo, _, _, _ = build_candidate(tmp_path / f"contains{os.pathsep}separator")
+    before = repository_snapshot(repo.path)
+
+    assert validate_project(repo.path) == []
+
+    assert repository_snapshot(repo.path) == before
 
 
 @pytest.mark.parametrize(

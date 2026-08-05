@@ -1502,7 +1502,13 @@ def repository_snapshot(repo: Path) -> dict[str, object]:
     git_dir = Path(git(repo, "rev-parse", "--git-dir").stdout.strip())
     if not git_dir.is_absolute():
         git_dir = repo / git_dir
+    git_dir = git_dir.resolve()
+    common_dir = Path(git(repo, "rev-parse", "--git-common-dir").stdout.strip())
+    if not common_dir.is_absolute():
+        common_dir = repo / common_dir
+    common_dir = common_dir.resolve()
     status = git(repo, "status", "--porcelain=v1", "--untracked-files=all").stdout
+
     def digest(path: Path) -> str:
         hasher = hashlib.sha256()
         with path.open("rb") as stream:
@@ -1510,10 +1516,14 @@ def repository_snapshot(repo: Path) -> dict[str, object]:
                 hasher.update(chunk)
         return hasher.hexdigest()
 
-    database = {
-        path.relative_to(git_dir).as_posix(): digest(path)
-        for path in sorted(git_dir.rglob("*"))
-        if path.is_file() and path.name not in {"COMMIT_EDITMSG"}
+    object_database = {
+        path.relative_to(common_dir / "objects").as_posix(): (
+            "symlink" if path.is_symlink() else "file",
+            path.lstat().st_size,
+            digest(path),
+        )
+        for path in sorted((common_dir / "objects").rglob("*"))
+        if path.is_symlink() or path.is_file()
     }
     canonical = {
         path.relative_to(repo).as_posix(): path.read_bytes()
@@ -1523,10 +1533,15 @@ def repository_snapshot(repo: Path) -> dict[str, object]:
     return {
         "canonical": canonical,
         "index": (git_dir / "index").read_bytes(),
+        "index_sha256": digest(git_dir / "index"),
         "head": (git_dir / "HEAD").read_bytes(),
-        "symbolic_head": git(repo, "symbolic-ref", "-q", "HEAD").stdout,
-        "refs": git(repo, "for-each-ref", "--format=%(refname):%(objectname)").stdout,
-        "object_database": database,
+        "symbolic_head": git(repo, "symbolic-ref", "-q", "HEAD", check=False).stdout,
+        "refs": git(
+            repo,
+            "for-each-ref",
+            "--format=%(refname):%(objectname):%(symref)",
+        ).stdout,
+        "object_database": object_database,
         "status": status,
     }
 
@@ -2762,3 +2777,44 @@ def test_installed_wheel_cli_matches_source_history_diagnostics(
         assert wheel.returncode != 0
         assert f": {scenario.expected_code}:" in source.stderr
         assert f": {scenario.expected_code}:" in wheel.stderr
+
+
+@pytest.mark.parametrize("conflict", [False, True], ids=["positive", "conflict"])
+def test_installed_wheel_and_source_preserve_integration_object_store(
+    tmp_path: Path, installed_wheel_cli: Path, conflict: bool
+) -> None:
+    from test_integration_history import build_candidate, quarantined_merge_tree
+
+    repo, main_parent, line_head, _ = build_candidate(
+        tmp_path / "candidate", conflict_resolution=conflict
+    )
+    if not conflict:
+        expected_tree = quarantined_merge_tree(repo.path, main_parent, line_head)
+        expected_object = Path(
+            git(
+                repo.path,
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-path",
+                f"objects/{expected_tree[:2]}/{expected_tree[2:]}",
+            ).stdout.strip()
+        )
+        assert expected_object.is_file()
+        expected_object.unlink()
+    before = repository_snapshot(repo.path)
+
+    source = run_source(repo.path)
+    assert repository_snapshot(repo.path) == before
+    wheel = run_wheel(installed_wheel_cli, repo.path)
+    assert repository_snapshot(repo.path) == before
+
+    assert (wheel.returncode, wheel.stdout, wheel.stderr) == (
+        source.returncode,
+        source.stdout,
+        source.stderr,
+    )
+    if conflict:
+        assert source.returncode != 0
+        assert ": history.integration.tree:" in source.stderr
+    else:
+        assert source.returncode == 0

@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -175,11 +176,16 @@ def _capture_process(
             reader.join(timeout=PROCESS_CLEANUP_GRACE_SECONDS)
 
 
-def _git(session: _GitSession, *arguments: str) -> bytes:
+def _git(
+    session: _GitSession,
+    *arguments: str,
+    environment_overrides: dict[str, str] | None = None,
+    cache: bool = True,
+) -> bytes:
     command_key = tuple(arguments)
     if time.monotonic() - session.started >= GIT_SESSION_DEADLINE_SECONDS:
         raise HistoryUnavailable
-    if command_key in session.cache:
+    if cache and command_key in session.cache:
         return session.cache[command_key]
     environment = os.environ.copy()
     environment.update(
@@ -190,6 +196,8 @@ def _git(session: _GitSession, *arguments: str) -> bytes:
             "GIT_TERMINAL_PROMPT": "0",
         }
     )
+    if environment_overrides:
+        environment.update(environment_overrides)
     if session.commands >= GIT_SESSION_COMMAND_LIMIT:
         raise HistoryUnavailable
     session.commands += 1
@@ -224,11 +232,70 @@ def _git(session: _GitSession, *arguments: str) -> bytes:
         raise
     if returncode != 0:
         raise HistoryUnavailable
-    if session.cache_bytes + len(stdout) > GIT_SESSION_CACHE_LIMIT:
-        raise HistoryUnavailable
-    session.cache[command_key] = stdout
-    session.cache_bytes += len(stdout)
+    if cache:
+        if session.cache_bytes + len(stdout) > GIT_SESSION_CACHE_LIMIT:
+            raise HistoryUnavailable
+        session.cache[command_key] = stdout
+        session.cache_bytes += len(stdout)
     return stdout
+
+
+def _alternate_object_directory(path: Path) -> str:
+    """Quote one alternate ODB path using Git's C-style environment syntax."""
+    text = str(path).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{text}"'
+
+
+def _quarantined_integration_changes(
+    session: _GitSession, main_parent: str, line_head: str, candidate: str
+) -> list[str]:
+    """Compute the deterministic merge tree without writing reviewed Git objects."""
+    try:
+        common_text = _git(session, "rev-parse", "--git-common-dir").decode("utf-8").strip()
+        common_dir = Path(common_text)
+        if not common_dir.is_absolute():
+            common_dir = session.root / common_dir
+        reviewed_objects = (common_dir.resolve(strict=True) / "objects").resolve(strict=True)
+    except (OSError, UnicodeError) as error:
+        raise HistoryUnavailable from error
+
+    inherited_alternates = os.environ.get("GIT_ALTERNATE_OBJECT_DIRECTORIES")
+    with tempfile.TemporaryDirectory(prefix="proofline-git-objects-") as directory:
+        quarantine = Path(directory) / "objects"
+        try:
+            quarantine.mkdir()
+        except OSError as error:
+            raise HistoryUnavailable from error
+        alternates = _alternate_object_directory(reviewed_objects)
+        if inherited_alternates:
+            alternates = alternates + os.pathsep + inherited_alternates
+        overrides = {
+            "GIT_OBJECT_DIRECTORY": str(quarantine),
+            "GIT_ALTERNATE_OBJECT_DIRECTORIES": alternates,
+        }
+        merge_tree_output = _git(
+            session,
+            "merge-tree",
+            "--write-tree",
+            main_parent,
+            line_head,
+            environment_overrides=overrides,
+            cache=False,
+        )
+        try:
+            expected_tree = merge_tree_output.decode("ascii").splitlines()[0]
+            return _git(
+                session,
+                "diff",
+                "--name-only",
+                "--no-renames",
+                expected_tree,
+                candidate,
+                environment_overrides=overrides,
+                cache=False,
+            ).decode("utf-8").splitlines()
+        except (UnicodeError, IndexError) as error:
+            raise HistoryUnavailable from error
 
 
 def _frontmatter(content: bytes) -> dict[str, object]:
@@ -534,7 +601,9 @@ def _integration_spine(
         ]
 
     try:
-        merge_tree_output = _git(session, "merge-tree", "--write-tree", main_parent, line_head)
+        changed = _quarantined_integration_changes(
+            session, main_parent, line_head, candidate
+        )
     except HistoryUnavailable:
         return main_commits, main_trees, [
             _line_error(
@@ -543,18 +612,6 @@ def _integration_spine(
                 "conflict 없는 deterministic merge result를 입증할 수 없습니다.",
             )
         ]
-    try:
-        expected_tree = merge_tree_output.decode("ascii").splitlines()[0]
-        changed = _git(
-            session,
-            "diff",
-            "--name-only",
-            "--no-renames",
-            expected_tree,
-            candidate,
-        ).decode("utf-8").splitlines()
-    except (UnicodeError, IndexError) as error:
-        raise HistoryUnavailable from error
     if changed != [manifest_path]:
         return main_commits, main_trees, [
             _line_error(
