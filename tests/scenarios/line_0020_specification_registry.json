@@ -49,6 +49,8 @@
     {"scenario_id": "integration.merge-only-product-change.fail", "expected": {"passed": false, "diagnostic_code": "history.integration.tree"}},
     {"scenario_id": "integration.missing-line-second-parent.fail", "expected": {"passed": false, "diagnostic_code": "history.integration.parent"}},
 
+    {"scenario_id": "history.symlink-canonical-artifact.fail", "expected": {"passed": false, "diagnostic_code": "history.unavailable"}},
+
     {"scenario_id": "dqc.exact-v-pass-delivery-and-later-commit.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
     {"scenario_id": "dqc.pass-then-failed-delivery.fail", "expected": {"passed": false, "diagnostic_code": "history.integration.dqc"}},
     {"scenario_id": "dqc.pass-then-blocked-delivery.fail", "expected": {"passed": false, "diagnostic_code": "history.integration.dqc"}},

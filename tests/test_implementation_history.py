@@ -252,6 +252,32 @@ def assert_history_error(repo: HistoryRepo, path: str, code: str) -> None:
     assert (path, code) in history_codes(repo)
 
 
+def commit_index_mode(repo: HistoryRepo, path: str, mode: str, message: str) -> str:
+    """Commit existing artifact bytes with an exact index mode, without OS symlinks."""
+    payload = (repo.path / path).read_bytes()
+    hashed = subprocess.run(
+        ("git", "hash-object", "-w", "--stdin"),
+        cwd=repo.path,
+        input=payload,
+        text=False,
+        capture_output=True,
+        check=True,
+    )
+    oid = hashed.stdout.decode("ascii").strip()
+    git(repo.path, "update-index", "--add", "--cacheinfo", f"{mode},{oid},{path}")
+    git(repo.path, "commit", "-qm", message)
+    return oid
+
+
+def parity_symlink_canonical_artifact(tmp_path: Path, path: str = IQC) -> HistoryRepo:
+    repo = build_valid_cycle(tmp_path)
+    git(repo.path, "config", "core.symlinks", "false")
+    oid = commit_index_mode(repo, path, "120000", "symlink-mode canonical artifact")
+    git(repo.path, "update-index", "--cacheinfo", f"100644,{oid},{path}")
+    git(repo.path, "commit", "-qm", "restore regular canonical artifact")
+    return repo
+
+
 def replace_frontmatter_status(repo: HistoryRepo, path: str, field: str, value: str) -> None:
     artifact = repo.path / path
     text = artifact.read_text(encoding="utf-8")
@@ -1598,6 +1624,70 @@ def test_shallow_history_fails_closed(tmp_path: Path) -> None:
     repo = HistoryRepo(clone)
 
     assert_history_error(repo, LINE, "history.unavailable")
+
+
+@pytest.mark.parametrize("canonical_path", [LINE, IQC], ids=["line", "iqc"])
+def test_historical_symlink_mode_canonical_artifact_fails_closed_without_mutation(
+    tmp_path: Path, canonical_path: str
+) -> None:
+    repo = parity_symlink_canonical_artifact(tmp_path, canonical_path)
+    assert git(repo.path, "config", "--get", "core.symlinks").stdout.strip() == "false"
+    symlink_commit = git(repo.path, "rev-parse", "HEAD^").stdout.strip()
+    assert git(repo.path, "ls-tree", symlink_commit, "--", canonical_path).stdout.startswith(
+        "120000 blob "
+    )
+    assert (repo.path / canonical_path).is_file()
+    before = repository_snapshot(repo.path)
+
+    history_errors = [
+        (error.path, error.code)
+        for error in validate_project(repo.path)
+        if error.code.startswith("history.")
+    ]
+
+    assert history_errors == [(canonical_path, "history.unavailable")]
+    assert repository_snapshot(repo.path) == before
+
+
+@pytest.mark.parametrize("regular_mode", ["100644", "100755"])
+def test_tree_cache_retains_exact_mode_type_oid_and_reuses_blob_read(
+    tmp_path: Path, regular_mode: str
+) -> None:
+    repo = HistoryRepo.create(tmp_path)
+    if regular_mode == "100755":
+        git(repo.path, "update-index", "--chmod=+x", LINE)
+        git(repo.path, "commit", "-qm", "executable canonical artifact")
+    commit = git(repo.path, "rev-parse", "HEAD").stdout.strip()
+    oid = git(repo.path, "rev-parse", f"{commit}:{LINE}").stdout.strip()
+    session = implementation_history._GitSession(repo.path)
+
+    paths = implementation_history._tree_paths(session, commit)
+
+    assert session.tree_entries[commit][LINE] == (regular_mode, "blob", oid)
+    assert implementation_history._file(session, commit, LINE, paths) == (repo.path / LINE).read_bytes()
+    commands_after_first_read = session.commands
+    assert implementation_history._file(session, commit, LINE, paths) == (repo.path / LINE).read_bytes()
+    assert session.commands == commands_after_first_read
+
+
+@pytest.mark.parametrize(
+    "tree_output",
+    [
+        b"0100644 blob " + b"a" * 40 + b"\t" + LINE.encode() + b"\0",
+        b"100644 blob " + b"a" * 40 + b"\t" + LINE.encode() + b"\0"
+        + b"100755 blob " + b"b" * 40 + b"\t" + LINE.encode() + b"\0",
+    ],
+    ids=["non-six-character-mode", "duplicate-path"],
+)
+def test_tree_cache_rejects_non_exact_mode_and_duplicate_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tree_output: bytes
+) -> None:
+    repo = HistoryRepo.create(tmp_path)
+    session = implementation_history._GitSession(repo.path)
+    monkeypatch.setattr(implementation_history, "_git", lambda *args, **kwargs: tree_output)
+
+    with pytest.raises(implementation_history.HistoryUnavailable):
+        implementation_history._tree_paths(session, "a" * 40)
 
 
 def test_one_invalid_micro_spec_is_reported_among_multiple(tmp_path: Path) -> None:

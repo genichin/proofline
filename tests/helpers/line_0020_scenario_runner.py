@@ -500,6 +500,15 @@ def _integration_scenario(module: Any, scenario_id: str, workspace: Path) -> tup
     return _normalize_errors(errors), _repo_git_snapshot(repo.path) == before
 
 
+def _history_scenario(module: Any, scenario_id: str, workspace: Path) -> tuple[str, bool]:
+    if scenario_id != "history.symlink-canonical-artifact.fail":
+        raise AssertionError(scenario_id)
+    repo = module.parity_symlink_canonical_artifact(workspace)
+    before = _repo_git_snapshot(repo.path)
+    errors = module.validate_project(repo.path)
+    return _normalize_errors(errors), _repo_git_snapshot(repo.path) == before
+
+
 def _dqc_scenario(module: Any, scenario_id: str, workspace: Path) -> tuple[str, bool]:
     repo, _, _, candidate = module.build_candidate(workspace)
     module.write_dqc(repo, candidate)
@@ -576,6 +585,8 @@ def run_registry(root: Path, registry_path: Path, workspace: Path, artifact: str
             code, unchanged = _chronology_scenario(modules["chronology"], scenario.scenario_id, scenario_workspace)
         elif scenario.scenario_id.startswith("integration."):
             code, unchanged = _integration_scenario(modules["integration"], scenario.scenario_id, scenario_workspace)
+        elif scenario.scenario_id.startswith("history."):
+            code, unchanged = _history_scenario(modules["chronology"], scenario.scenario_id, scenario_workspace)
         elif scenario.scenario_id.startswith("dqc."):
             code, unchanged = _dqc_scenario(modules["integration"], scenario.scenario_id, scenario_workspace)
         elif scenario.scenario_id.startswith("preflight."):

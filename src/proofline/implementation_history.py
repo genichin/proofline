@@ -54,7 +54,7 @@ class HistoryUnavailable(Exception):
 class _GitSession:
     root: Path
     cache: dict[tuple[str, ...], bytes] = field(default_factory=dict)
-    tree_entries: dict[str, dict[str, tuple[str, str]]] = field(default_factory=dict)
+    tree_entries: dict[str, dict[str, tuple[str, str, str]]] = field(default_factory=dict)
     tree_paths: dict[str, set[str]] = field(default_factory=dict)
     commands: int = 0
     output_bytes: int = 0
@@ -426,7 +426,7 @@ def _tree_paths(session: _GitSession, commit: str) -> set[str]:
     output = _git(session, "ls-tree", "-r", "-z", "--full-tree", commit)
     if output and not output.endswith(b"\0"):
         raise HistoryUnavailable
-    entries: dict[str, tuple[str, str]] = {}
+    entries: dict[str, tuple[str, str, str]] = {}
     cache_charge = 128
     for raw_record in output.split(b"\0")[:-1] if output else ():
         match = _LS_TREE_RECORD.fullmatch(raw_record)
@@ -441,14 +441,17 @@ def _tree_paths(session: _GitSession, commit: str) -> set[str]:
             raise HistoryUnavailable
         try:
             path = path_bytes.decode("utf-8", errors="strict")
+            mode = mode_bytes.decode("ascii")
             object_type = type_bytes.decode("ascii")
             oid = oid_bytes.decode("ascii")
         except UnicodeError as error:
             raise HistoryUnavailable from error
         if path in entries:
             raise HistoryUnavailable
-        entries[path] = (object_type, oid)
-        cache_charge += 256 + len(path_bytes) + len(type_bytes) + len(oid_bytes)
+        entries[path] = (mode, object_type, oid)
+        cache_charge += (
+            256 + len(path_bytes) + len(mode_bytes) + len(type_bytes) + len(oid_bytes)
+        )
 
     if session.cache_bytes + session.tree_cache_bytes + cache_charge > GIT_SESSION_CACHE_LIMIT:
         raise HistoryUnavailable
@@ -466,9 +469,13 @@ def _file(session: _GitSession, commit: str, path: str, paths: set[str]) -> byte
     if entries is None:
         raise HistoryUnavailable
     entry = entries.get(path)
-    if entry is None or entry[0] != "blob":
+    if (
+        entry is None
+        or entry[0] not in {"100644", "100755"}
+        or entry[1] != "blob"
+    ):
         raise HistoryUnavailable
-    return _git(session, "cat-file", "blob", entry[1])
+    return _git(session, "cat-file", "blob", entry[2])
 
 
 def _current_artifacts(root: Path) -> tuple[dict[str, dict[str, object]], list[str]]:
@@ -1752,8 +1759,8 @@ def validate_implementation_history(
             or IQC_PATH.fullmatch(path)
         }
     )
-    try:
-        for artifact_path in historical_artifact_paths:
+    for artifact_path in historical_artifact_paths:
+        try:
             for commit, paths in zip(commits, trees, strict=True):
                 content = _file(session, commit, artifact_path, paths)
                 if content is None:
@@ -1766,8 +1773,8 @@ def validate_implementation_history(
                     # normalized or deleted in a later first-parent commit.
                     malformed_history_paths.add(artifact_path)
                     break
-    except HistoryUnavailable:
-        return [_unavailable(path) for path in line_paths]
+        except HistoryUnavailable:
+            malformed_history_paths.add(artifact_path)
     errors: list[HistoryError] = [
         _unavailable(path) for path in sorted(malformed_history_paths)
     ]
