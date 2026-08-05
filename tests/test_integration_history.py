@@ -375,6 +375,60 @@ def test_dqc_candidate_binding_and_delivery_chronology_passes_after_later_commit
     assert validate_project(repo.path) == []
 
 
+def test_unrelated_governance_between_dqc_pass_and_delivery_preserves_pass(
+    tmp_path: Path,
+) -> None:
+    repo, _, _, candidate = build_candidate(tmp_path)
+    write_dqc(repo, candidate)
+    (repo.path / "later-governance.txt").write_text("later\n", encoding="utf-8")
+    repo.commit("later", "unrelated governance before delivery")
+    deliver(repo)
+
+    assert validate_project(repo.path) == []
+
+
+@pytest.mark.parametrize("effective_result", ["failed", "blocked", "draft"])
+def test_delivery_requires_effective_dqc_pass_immediately_before_transition(
+    tmp_path: Path, effective_result: str
+) -> None:
+    repo, _, _, candidate = build_candidate(tmp_path)
+    write_dqc(repo, candidate)
+    write_dqc(repo, candidate, result=effective_result)
+    deliver(repo)
+
+    assert (DQC, "history.integration.dqc") in history_codes(repo)
+
+
+def test_latest_corrected_dqc_pass_allows_delivery(tmp_path: Path) -> None:
+    repo, _, _, candidate = build_candidate(tmp_path)
+    write_dqc(repo, candidate)
+    write_dqc(repo, candidate, result="failed")
+    write_dqc(repo, candidate)
+    deliver(repo)
+
+    assert validate_project(repo.path) == []
+
+
+def test_delivery_rejects_dqc_removed_after_pass(tmp_path: Path) -> None:
+    repo, _, _, candidate = build_candidate(tmp_path)
+    write_dqc(repo, candidate)
+    (repo.path / DQC).unlink()
+    repo.commit("dqc-removed", "remove effective DQC")
+    deliver(repo)
+
+    assert (DQC, "history.integration.dqc") in history_codes(repo)
+
+
+def test_delivery_rejects_stale_candidate_binding_after_pass(tmp_path: Path) -> None:
+    repo, main, _, candidate = build_candidate(tmp_path)
+    assert main != candidate
+    write_dqc(repo, candidate)
+    write_dqc(repo, main)
+    deliver(repo)
+
+    assert (DQC, "history.integration.dqc") in history_codes(repo)
+
+
 def test_delivery_without_dqc_fails_closed(tmp_path: Path) -> None:
     repo, _, _, _ = build_candidate(tmp_path)
     deliver(repo)

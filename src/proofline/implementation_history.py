@@ -664,16 +664,23 @@ def _validate_integration_dqc(
         None,
     )
     present = [index for index, state in enumerate(dqc_states) if state is not None]
-    if not present:
-        if delivery is None:
-            return []
-        return [
-            _line_error(
-                dqc_path,
-                "history.integration.dqc",
-                "delivery 전 exact integration candidate를 bind한 DQC PASS가 필요합니다.",
-            )
-        ]
+    if delivery is not None:
+        effective = dqc_states[delivery - 1]
+        if (
+            effective is None
+            or effective.get("id") != f"dqc-{line_number}"
+            or effective.get("line") != f"line-{line_number}"
+            or effective.get("candidate_commit") != candidate
+            or effective.get("result") != "passed"
+        ):
+            return [
+                _line_error(
+                    dqc_path,
+                    "history.integration.dqc",
+                    "delivery 직전 effective DQC는 exact integration candidate와 Line을 bind한 PASS여야 합니다.",
+                )
+            ]
+        return []
 
     for state in (dqc_states[index] for index in present):
         assert state is not None
@@ -689,21 +696,6 @@ def _validate_integration_dqc(
                     "DQC는 containing integration candidate와 Line identity를 exact하게 bind해야 합니다.",
                 )
             ]
-    passed: list[int] = []
-    previous_result: object = None
-    for index, state in enumerate(dqc_states):
-        result = state.get("result") if state is not None else None
-        if result == "passed" and previous_result != "passed":
-            passed.append(index)
-        previous_result = result
-    if delivery is not None and (len(passed) != 1 or not (0 < passed[0] < delivery)):
-        return [
-            _line_error(
-                dqc_path,
-                "history.integration.dqc",
-                "main first-parent에는 V → DQC PASS → delivery 순서가 필요합니다.",
-            )
-        ]
     return []
 
 

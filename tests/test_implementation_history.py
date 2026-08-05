@@ -2818,3 +2818,29 @@ def test_installed_wheel_and_source_preserve_integration_object_store(
         assert ": history.integration.tree:" in source.stderr
     else:
         assert source.returncode == 0
+
+
+@pytest.mark.parametrize("effective_result", ["failed", "blocked"])
+def test_installed_wheel_matches_source_effective_dqc_delivery_diagnostic(
+    tmp_path: Path, installed_wheel_cli: Path, effective_result: str
+) -> None:
+    from test_integration_history import build_candidate, deliver, write_dqc
+
+    repo, _, _, candidate = build_candidate(tmp_path / effective_result)
+    write_dqc(repo, candidate)
+    write_dqc(repo, candidate, result=effective_result)
+    deliver(repo)
+    before = repository_snapshot(repo.path)
+
+    source = run_source(repo.path)
+    assert repository_snapshot(repo.path) == before
+    wheel = run_wheel(installed_wheel_cli, repo.path)
+    assert repository_snapshot(repo.path) == before
+
+    assert (wheel.returncode, wheel.stdout, wheel.stderr) == (
+        source.returncode,
+        source.stdout,
+        source.stderr,
+    )
+    assert source.returncode != 0
+    assert ": history.integration.dqc:" in source.stderr
