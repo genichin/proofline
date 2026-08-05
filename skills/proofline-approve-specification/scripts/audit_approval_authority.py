@@ -193,6 +193,7 @@ def criteria_sets(req: str) -> dict[str, list[str]]:
             "REQ.criteria must contain exactly create, update, retire, and satisfy",
         )
     result: dict[str, list[str]] = {}
+    seen: set[str] = set()
     for key in ("create", "update", "retire", "satisfy"):
         values = criteria[key]
         if not isinstance(values, list):
@@ -203,9 +204,13 @@ def criteria_sets(req: str) -> dict[str, list[str]]:
                 "TRANSITION_CONTENT",
                 f"REQ.criteria.{key} entries must be canonical ac-NNNN IDs",
             )
-        if len(set(values)) != len(values):
-            fail("TRANSITION_CONTENT", f"REQ.criteria.{key} must not contain duplicate IDs")
+        for value in values:
+            if value in seen:
+                fail("TRANSITION_CONTENT", "REQ.criteria admission lists must not repeat IDs")
+            seen.add(value)
         result[key] = values
+    if not seen:
+        fail("TRANSITION_CONTENT", "REQ.criteria must admit at least one ID")
     return result
 
 

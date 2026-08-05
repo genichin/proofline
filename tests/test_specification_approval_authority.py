@@ -281,6 +281,31 @@ def test_bootstrap_req_frontmatter_fails_closed_for_noncanonical_criteria_struct
 
 
 @pytest.mark.parametrize(
+    "criteria",
+    [
+        '  create:\n    - "ac-0011"\n    - "ac-0011"\n  update: []\n  retire: []\n  satisfy: []\n',
+        '  create:\n    - "ac-0011"\n  update:\n    - "ac-0011"\n  retire: []\n  satisfy: []\n',
+        '  create: []\n  update: []\n  retire: []\n  satisfy: []\n',
+    ],
+    ids=("intra-list-duplicate", "cross-list-duplicate", "all-empty"),
+)
+def test_bootstrap_rejects_duplicate_or_empty_admission_targets_without_mutation(
+    tmp_path: Path, criteria: str
+) -> None:
+    repo, target, approval = make_repo(
+        tmp_path, mode="bootstrap", bootstrap_criteria=criteria
+    )
+    review, user_approval = write_evidence(tmp_path, repo, target)
+    before = snapshot(repo)
+
+    result = run_gate(SCRIPT, repo, "bootstrap", target, approval, review, user_approval)
+
+    assert result.returncode == 2
+    assert "approval-authority[TRANSITION_CONTENT]" in result.stderr
+    assert snapshot(repo) == before
+
+
+@pytest.mark.parametrize(
     ("case", "expected"),
     [
         ("self_approval", "ACTOR_SEPARATION"),

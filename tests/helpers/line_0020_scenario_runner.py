@@ -394,14 +394,37 @@ def _handoff_scenario(module: Any, scenario_id: str, workspace: Path, script: Pa
 
 
 def _approval_scenario(module: Any, scenario_id: str, workspace: Path, script: Path) -> tuple[str, bool]:
-    mode = "bootstrap" if scenario_id == "approval.bootstrap.pass" else "normal"
+    bootstrap_criteria = {
+        "approval.cross-admission-duplicate.fail": (
+            '  create:\n    - "ac-0011"\n'
+            '  update:\n    - "ac-0011"\n'
+            '  retire: []\n'
+            '  satisfy: []\n'
+        ),
+        "approval.empty-targets.fail": (
+            '  create: []\n'
+            '  update: []\n'
+            '  retire: []\n'
+            '  satisfy: []\n'
+        ),
+    }
+    mode = (
+        "bootstrap"
+        if scenario_id == "approval.bootstrap.pass" or scenario_id in bootstrap_criteria
+        else "normal"
+    )
     if scenario_id == "approval.body-changing.fail":
         change = "body"
     elif scenario_id == "approval.concurrent-path.fail":
         change = "unrelated"
     else:
         change = "status"
-    repo, target, approval = module.make_repo(workspace, mode=mode, approval_change=change)
+    repo, target, approval = module.make_repo(
+        workspace,
+        mode=mode,
+        approval_change=change,
+        bootstrap_criteria=bootstrap_criteria.get(scenario_id),
+    )
     kwargs: dict[str, Any] = {}
     if scenario_id == "approval.self-approval.fail":
         kwargs["user"] = "author-1"

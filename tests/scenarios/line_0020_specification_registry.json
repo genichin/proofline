@@ -27,6 +27,8 @@
     {"scenario_id": "approval.concurrent-path.fail", "expected": {"passed": false, "diagnostic_code": "TRANSITION_PATH"}},
     {"scenario_id": "approval.recorder-only.fail", "expected": {"passed": false, "diagnostic_code": "ACTOR_SEPARATION"}},
     {"scenario_id": "approval.stale-digest.fail", "expected": {"passed": false, "diagnostic_code": "REVIEW_DIGEST"}},
+    {"scenario_id": "approval.cross-admission-duplicate.fail", "expected": {"passed": false, "diagnostic_code": "TRANSITION_CONTENT"}},
+    {"scenario_id": "approval.empty-targets.fail", "expected": {"passed": false, "diagnostic_code": "TRANSITION_CONTENT"}},
 
     {"scenario_id": "chronology.line-0020-bootstrap.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
     {"scenario_id": "chronology.bootstrap-create-body-change.fail", "expected": {"passed": false, "diagnostic_code": "history.spec.chronology"}},
