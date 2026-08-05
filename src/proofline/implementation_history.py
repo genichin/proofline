@@ -20,6 +20,9 @@ MS_PATH = re.compile(
 IQC_PATH = re.compile(
     r"^\.proofline/lines/line-(\d{4})/micro-specs/iqc-\1-\d{3}\.md$"
 )
+INTEGRATION_PATH = re.compile(
+    r"^\.proofline/lines/line-(\d{4})/integration-\1\.md$"
+)
 GIT_TIMEOUT_SECONDS = 5
 GIT_OUTPUT_LIMIT = 8 * 1024 * 1024
 GIT_SESSION_COMMAND_LIMIT = 20_000
@@ -361,6 +364,7 @@ def _current_artifacts(root: Path) -> tuple[dict[str, dict[str, object]], list[s
             LINE_PATH.fullmatch(relative)
             or MS_PATH.fullmatch(relative)
             or IQC_PATH.fullmatch(relative)
+            or INTEGRATION_PATH.fullmatch(relative)
         ):
             continue
         try:
@@ -383,12 +387,12 @@ def _line_error(path: str, code: str, message: str) -> HistoryError:
 
 
 def _history(
-    session: _GitSession,
+    session: _GitSession, head: str = "HEAD"
 ) -> tuple[list[str], list[set[str]]]:
     shallow = _git(session, "rev-parse", "--is-shallow-repository").strip()
     if shallow != b"false":
         raise HistoryUnavailable
-    output = _git(session, "rev-list", "--first-parent", "--reverse", "HEAD")
+    output = _git(session, "rev-list", "--first-parent", "--reverse", head)
     try:
         commits = output.decode("ascii").splitlines()
     except UnicodeError as error:
@@ -396,6 +400,91 @@ def _history(
     if not commits:
         raise HistoryUnavailable
     return commits, [_tree_paths(session, commit) for commit in commits]
+
+
+def _integration_spine(
+    session: _GitSession,
+    line_path: str,
+    main_commits: list[str],
+    main_trees: list[set[str]],
+) -> tuple[list[str], list[set[str]], list[HistoryError]]:
+    """Select and validate a main-first integration candidate for one Line."""
+    line_match = LINE_PATH.fullmatch(line_path)
+    assert line_match is not None
+    line_number = line_match.group(1)
+    manifest_path = (
+        f".proofline/lines/line-{line_number}/integration-{line_number}.md"
+    )
+    candidates: list[tuple[int, str, str, str]] = []
+    for index, commit in enumerate(main_commits):
+        parent_line = _git(session, "rev-list", "--parents", "-n", "1", commit)
+        try:
+            values = parent_line.decode("ascii").split()
+        except UnicodeError as error:
+            raise HistoryUnavailable from error
+        if len(values) < 3:
+            continue
+        main_parent, line_head = values[1], values[2]
+        if line_path in _tree_paths(session, line_head):
+            candidates.append((index, commit, main_parent, line_head))
+    if not candidates:
+        return main_commits, main_trees, []
+
+    candidate_index, candidate, main_parent, line_head = candidates[-1]
+    candidate_paths = main_trees[candidate_index]
+    manifest_bytes = _file(session, candidate, manifest_path, candidate_paths)
+    if manifest_bytes is None:
+        return main_commits, main_trees, [
+            _line_error(
+                manifest_path,
+                "history.integration.manifest",
+                "main-first integration candidate에는 Line integration manifest가 필요합니다.",
+            )
+        ]
+    try:
+        manifest = _frontmatter(manifest_bytes)
+    except HistoryUnavailable:
+        return main_commits, main_trees, [_unavailable(manifest_path)]
+    if (
+        manifest.get("id") != f"integration-{line_number}"
+        or manifest.get("line_id") != f"line-{line_number}"
+        or manifest.get("main_parent") != main_parent
+        or manifest.get("line_head") != line_head
+    ):
+        return main_commits, main_trees, [
+            _line_error(
+                manifest_path,
+                "history.integration.parent",
+                "integration manifest는 path/Line identity와 candidate parent를 exact하게 bind해야 합니다.",
+            )
+        ]
+
+    merge_tree_output = _git(session, "merge-tree", "--write-tree", main_parent, line_head)
+    try:
+        expected_tree = merge_tree_output.decode("ascii").splitlines()[0]
+        changed = _git(
+            session,
+            "diff",
+            "--name-only",
+            "--no-renames",
+            expected_tree,
+            candidate,
+        ).decode("utf-8").splitlines()
+    except (UnicodeError, IndexError) as error:
+        raise HistoryUnavailable from error
+    if changed != [manifest_path]:
+        return main_commits, main_trees, [
+            _line_error(
+                manifest_path,
+                "history.integration.tree",
+                "integration candidate tree에는 merge result와 manifest 외 변경이 없어야 합니다.",
+            )
+        ]
+
+    line_commits, line_trees = _history(session, line_head)
+    later_commits = main_commits[candidate_index:]
+    later_trees = main_trees[candidate_index:]
+    return line_commits + later_commits, line_trees + later_trees, []
 
 
 def _repository_activation(
@@ -992,6 +1081,7 @@ def validate_implementation_history(
         return [_unavailable(path) for path in line_paths]
 
     positions = {commit: index for index, commit in enumerate(commits)}
+    main_commits, main_trees = commits, trees
     malformed_history_paths: set[str] = set()
     historical_artifact_paths = sorted(
         {
@@ -1024,6 +1114,14 @@ def validate_implementation_history(
     ]
     for line_path in line_paths:
         try:
+            commits, trees, integration_errors = _integration_spine(
+                session, line_path, main_commits, main_trees
+            )
+            errors.extend(integration_errors)
+            if integration_errors:
+                continue
+            positions = {commit: index for index, commit in enumerate(commits)}
+            activation = _repository_activation(session, commits, trees)
             if line_path in malformed_history_paths:
                 errors.append(_unavailable(line_path))
                 continue

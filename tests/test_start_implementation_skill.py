@@ -35,7 +35,8 @@ def git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def make_approved_repo(
-    tmp_path: Path, *, req_status: str = "approved", config: bool = False
+    tmp_path: Path, *, req_status: str = "approved", config: bool = False,
+    handoff: bool = True,
 ) -> tuple[Path, str]:
     repo = tmp_path / "project"
     line_dir = repo / ".proofline/lines/line-0007"
@@ -62,7 +63,22 @@ def make_approved_repo(
     git(repo, "add", ".")
     git(repo, "commit", "-qm", "Approve specification")
     approval = git(repo, "rev-parse", "HEAD").stdout.strip()
+    if handoff:
+        commit_handoff(repo)
     return repo, approval
+
+
+def commit_handoff(repo: Path) -> str:
+    line = repo / ".proofline/lines/line-0007/line-0007.md"
+    line.write_text(
+        line.read_text(encoding="utf-8").replace(
+            "execution_status: not_started", "execution_status: in_progress"
+        ),
+        encoding="utf-8",
+    )
+    git(repo, "add", str(line.relative_to(repo)))
+    git(repo, "commit", "-qm", "Hand off Line 0007")
+    return git(repo, "rev-parse", "HEAD").stdout.strip()
 
 
 def run_script(repo: Path, approval: str) -> subprocess.CompletedProcess[str]:
@@ -235,7 +251,7 @@ def test_standalone_preflight_rejects_malformed_indentation_before_worktree(
 def test_standalone_preflight_accepts_nested_req_criteria_without_proofline_yaml(
     tmp_path: Path,
 ) -> None:
-    repo, approval = make_approved_repo(tmp_path)
+    repo, approval = make_approved_repo(tmp_path, handoff=False)
     (repo / "proofline.yaml").unlink(missing_ok=True)
     req = repo / ".proofline/lines/line-0007/req-0007.md"
     req.write_text(
@@ -246,6 +262,7 @@ def test_standalone_preflight_accepts_nested_req_criteria_without_proofline_yaml
     git(repo, "add", ".")
     git(repo, "commit", "-qm", "nested criteria fixture")
     approval = git(repo, "rev-parse", "HEAD").stdout.strip()
+    commit_handoff(repo)
 
     result = run_script(repo, approval)
 
@@ -278,7 +295,7 @@ def test_standalone_preflight_rejects_nested_duplicate_key_before_worktree(
 def test_standalone_preflight_accepts_inline_comments_and_quoted_scalars(
     tmp_path: Path,
 ) -> None:
-    repo, approval = make_approved_repo(tmp_path)
+    repo, approval = make_approved_repo(tmp_path, handoff=False)
     line = repo / ".proofline/lines/line-0007/line-0007.md"
     line.write_text(
         '---\nid: "line-0007" # canonical identity\n'
@@ -288,6 +305,7 @@ def test_standalone_preflight_accepts_inline_comments_and_quoted_scalars(
     git(repo, "add", str(line.relative_to(repo)))
     git(repo, "commit", "-qm", "inline comment fixture")
     approval = git(repo, "rev-parse", "HEAD").stdout.strip()
+    commit_handoff(repo)
 
     result = run_script(repo, approval)
 
@@ -298,7 +316,7 @@ def test_standalone_preflight_accepts_inline_comments_and_quoted_scalars(
 def test_standalone_preflight_ignores_policy_literal_in_artifact_bodies(
     tmp_path: Path,
 ) -> None:
-    repo, _ = make_approved_repo(tmp_path)
+    repo, _ = make_approved_repo(tmp_path, handoff=False)
     artifact_paths = (
         ".proofline/lines/line-0007/line-0007.md",
         ".proofline/lines/line-0007/dcy-0007.md",
@@ -314,6 +332,7 @@ def test_standalone_preflight_ignores_policy_literal_in_artifact_bodies(
     git(repo, "add", *artifact_paths)
     git(repo, "commit", "-qm", "policy literal body fixtures")
     approval = git(repo, "rev-parse", "HEAD").stdout.strip()
+    commit_handoff(repo)
 
     result = run_script(repo, approval)
 
@@ -333,7 +352,7 @@ def test_standalone_preflight_reports_missing_executable(tmp_path: Path) -> None
 def test_standalone_preflight_rejects_repository_local_absolute_executable(
     tmp_path: Path,
 ) -> None:
-    repo, approval = make_approved_repo(tmp_path, config=True)
+    repo, approval = make_approved_repo(tmp_path, config=True, handoff=False)
     executable = repo / "proofline"
     marker = repo / "executed"
     executable.write_text(f"#!/bin/sh\ntouch {marker}\n", encoding="utf-8")
@@ -341,6 +360,7 @@ def test_standalone_preflight_rejects_repository_local_absolute_executable(
     git(repo, "add", "proofline")
     git(repo, "commit", "-qm", "add local validator fixture")
     approval = git(repo, "rev-parse", "HEAD").stdout.strip()
+    commit_handoff(repo)
 
     result = run_script_isolated(repo, approval, repo)
 
@@ -520,18 +540,58 @@ def test_repository_ignores_worktree_container() -> None:
 def test_worktree_script_accepts_direct_approval_without_draft_parent(tmp_path: Path) -> None:
     repo, approval = make_approved_repo(tmp_path)
     assert len(git(repo, "rev-list", "--parents", "-n", "1", approval).stdout.split()) == 1
+    handoff = git(repo, "rev-parse", "HEAD").stdout.strip()
+    assert git(repo, "rev-parse", "HEAD^").stdout.strip() == approval
 
     result = run_script(repo, approval)
 
     assert result.returncode == 0, result.stderr
     worktree = repo / ".worktrees/line-0007"
-    assert git(worktree, "rev-parse", "HEAD").stdout.strip() == approval
+    assert git(worktree, "rev-parse", "HEAD").stdout.strip() == handoff
     assert git(worktree, "branch", "--show-current").stdout.strip() == (
         "line/line-0007-implementation"
     )
     assert git(repo, "branch", "--show-current").stdout.strip() == "main"
     assert git(repo, "status", "--porcelain").stdout == ""
     assert not (worktree / ".venv").exists()
+
+
+def test_worktree_script_rejects_non_status_only_handoff_without_mutation(
+    tmp_path: Path,
+) -> None:
+    repo, approval = make_approved_repo(tmp_path, handoff=False)
+    line = repo / ".proofline/lines/line-0007/line-0007.md"
+    line.write_text(
+        line.read_text(encoding="utf-8").replace(
+            "execution_status: not_started", "execution_status: in_progress"
+        ),
+        encoding="utf-8",
+    )
+    (repo / "product.py").write_text("changed = True\n", encoding="utf-8")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "invalid mixed handoff")
+    refs_before = git(repo, "show-ref").stdout
+
+    result = run_script(repo, approval)
+
+    assert result.returncode == 2
+    assert "status-only direct child" in result.stderr
+    assert git(repo, "show-ref").stdout == refs_before
+    assert not (repo / ".worktrees/line-0007").exists()
+
+
+def test_worktree_script_same_handoff_retry_is_idempotent(tmp_path: Path) -> None:
+    repo, approval = make_approved_repo(tmp_path)
+    handoff = git(repo, "rev-parse", "HEAD").stdout.strip()
+
+    first = run_script(repo, approval)
+    second = run_script(repo, approval)
+
+    assert first.returncode == 0, first.stderr
+    assert second.returncode == 0, second.stderr
+    worktree = repo / ".worktrees/line-0007"
+    assert git(worktree, "rev-parse", "HEAD").stdout.strip() == handoff
+    assert git(repo, "for-each-ref", "--format=%(refname)", "refs/heads/line/line-0007-implementation").stdout.count("\n") == 1
 
 
 def test_worktree_script_dirty_main_fails_without_mutation(tmp_path: Path) -> None:

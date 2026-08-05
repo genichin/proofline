@@ -284,6 +284,33 @@ def assert_artifact(
             raise WorkflowError("Line.implementation_history must be first_parent")
 
 
+def assert_status_only_handoff(
+    repo: Path, approval_commit: str, handoff_commit: str, line_path: str
+) -> None:
+    parents = git(repo, "rev-list", "--parents", "-n", "1", handoff_commit).stdout.split()
+    if len(parents) != 2 or parents[1] != approval_commit:
+        raise WorkflowError("handoff commit must be the approval commit's status-only direct child")
+    changed = [
+        path
+        for path in git(
+            repo, "diff", "--name-only", "--no-renames", approval_commit, handoff_commit
+        ).stdout.splitlines()
+        if path
+    ]
+    if changed != [line_path]:
+        raise WorkflowError("handoff commit must be the approval commit's status-only direct child")
+    before = artifact_at(repo, approval_commit, line_path).splitlines(keepends=True)
+    after = artifact_at(repo, handoff_commit, line_path).splitlines(keepends=True)
+    if len(before) != len(after):
+        raise WorkflowError("handoff commit must be the approval commit's status-only direct child")
+    differences = [index for index, pair in enumerate(zip(before, after, strict=True)) if pair[0] != pair[1]]
+    if len(differences) != 1:
+        raise WorkflowError("handoff commit must be the approval commit's status-only direct child")
+    index = differences[0]
+    if before[index].replace("not_started", "in_progress", 1) != after[index]:
+        raise WorkflowError("handoff commit must be the approval commit's status-only direct child")
+
+
 def validate_transitional_history(repo: Path, line_path: str) -> None:
     """Allow only the documented fieldless P→B validation gap."""
     if not (repo / "proofline.yaml").is_file():
@@ -398,6 +425,7 @@ def create_worktree(
     ).stdout.strip()
     if resolved_commit != approval_commit:
         raise WorkflowError("approval commit does not resolve exactly")
+    handoff_commit = git(repo, "rev-parse", "HEAD").stdout.strip()
     if git(repo, "check-ref-format", "--branch", branch, check=False).returncode != 0:
         raise WorkflowError("implementation branch name is invalid")
 
@@ -427,6 +455,16 @@ def create_worktree(
         state_key="execution_status",
         expected_state="not_started",
     )
+    line_path = f"{line_dir}/{line_id}.md"
+    assert_status_only_handoff(repo, approval_commit, handoff_commit, line_path)
+    assert_artifact(
+        repo,
+        handoff_commit,
+        line_path,
+        expected_id=line_id,
+        state_key="execution_status",
+        expected_state="in_progress",
+    )
     validate_transitional_history(repo, f"{line_dir}/{line_id}.md")
 
     relative_path = Path(".worktrees") / line_id
@@ -434,20 +472,29 @@ def create_worktree(
     ignored = git(repo, "check-ignore", "-q", "--", str(relative_path), check=False)
     if ignored.returncode != 0:
         raise WorkflowError(".worktrees/line-NNNN must be ignored by Git")
-    if worktree.exists():
-        raise WorkflowError("worktree path collision")
-    if git(repo, "show-ref", "--verify", "--quiet", f"refs/heads/{branch}", check=False).returncode == 0:
-        raise WorkflowError("implementation branch collision")
     paths, branches = registered_worktrees(repo)
+    branch_exists = git(
+        repo, "show-ref", "--verify", "--quiet", f"refs/heads/{branch}", check=False
+    ).returncode == 0
+    path_registered = str(worktree) in paths
+    branch_registered = branch in branches
+    if worktree.exists() or branch_exists or path_registered or branch_registered:
+        if not (worktree.is_dir() and branch_exists and path_registered and branch_registered):
+            raise WorkflowError("partial worktree path, branch, or registration collision")
+        if git(worktree, "rev-parse", "HEAD").stdout.strip() != handoff_commit:
+            raise WorkflowError("existing worktree HEAD does not match handoff commit")
+        if git(worktree, "branch", "--show-current").stdout.strip() != branch:
+            raise WorkflowError("existing worktree branch does not match")
+        return worktree
     if str(worktree) in paths:
         raise WorkflowError("worktree path registration collision")
     if branch in branches:
         raise WorkflowError("worktree branch registration collision")
 
-    git(repo, "worktree", "add", str(relative_path), "-b", branch, approval_commit)
+    git(repo, "worktree", "add", str(relative_path), "-b", branch, handoff_commit)
 
-    if git(worktree, "rev-parse", "HEAD").stdout.strip() != approval_commit:
-        raise WorkflowError("created worktree HEAD does not match approval commit")
+    if git(worktree, "rev-parse", "HEAD").stdout.strip() != handoff_commit:
+        raise WorkflowError("created worktree HEAD does not match handoff commit")
     if git(worktree, "branch", "--show-current").stdout.strip() != branch:
         raise WorkflowError("created worktree branch does not match")
     if git(repo, "branch", "--show-current").stdout.strip() != "main":
