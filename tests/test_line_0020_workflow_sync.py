@@ -32,32 +32,105 @@ def commit(repo: Path, message: str) -> str:
     return git(repo, "rev-parse", "HEAD")
 
 
-def make_candidate(tmp_path: Path, *, mismatch: bool = False) -> tuple[Path, str, str, str]:
+def _line_text(line_id: str, status: str) -> str:
+    return (
+        f'---\nid: "{line_id}"\nexecution_status: {status}\n'
+        "implementation_history: first_parent\n---\n"
+    )
+
+
+def _ms_text(*, status: str, spec_status: str = "approved") -> str:
+    return (
+        '---\nid: "ms-0007-001"\nparent_req: "req-0007"\ncriteria:\n'
+        f'  - "ac-0001"\nspec_status: {spec_status}\nimplementation_status: {status}\n'
+        "---\n\n# Micro-SPEC\n\n## Scope\n\n범위.\n\n## Implementation\n\n구현."
+        "\n\n## Verification\n\n검증.\n"
+    )
+
+
+def make_candidate(
+    tmp_path: Path,
+    *,
+    mismatch: bool = False,
+    defect: str | None = None,
+) -> tuple[Path, str, str, str]:
     repo = tmp_path / "project"
     repo.mkdir()
     git(repo, "init", "-q", "-b", "main")
     git(repo, "config", "user.email", "proofline@example.invalid")
     git(repo, "config", "user.name", "ProofLine Test")
+    git(repo, "config", "core.autocrlf", "false")
+    git(repo, "config", "gc.auto", "0")
+    git(repo, "config", "maintenance.auto", "false")
     (repo / "base.txt").write_text("base\n", encoding="utf-8")
     commit(repo, "base")
 
-    git(repo, "switch", "-qc", "line-0007")
-    line = repo / ".proofline/lines/line-0007/line-0007.md"
-    line.parent.mkdir(parents=True)
-    line.write_text(
-        '---\nid: "line-0007"\nexecution_status: verifying\n'
-        "implementation_history: first_parent\n---\n",
-        encoding="utf-8",
-    )
-    (repo / "line.txt").write_text("line\n", encoding="utf-8")
-    q = commit(repo, "Line Q")
+    if defect == "arbitrary":
+        git(repo, "switch", "-qc", "line-0007")
+        (repo / "unrelated.txt").write_text("unrelated\n", encoding="utf-8")
+        q = commit(repo, "arbitrary X")
+    else:
+        git(repo, "switch", "-qc", "line-0007")
+        line = repo / ".proofline/lines/line-0007/line-0007.md"
+        ms = repo / ".proofline/lines/line-0007/micro-specs/ms-0007-001.md"
+        ms.parent.mkdir(parents=True)
+        line.write_text(_line_text("line-0007", "not_started"), encoding="utf-8")
+        ms.write_text(_ms_text(status="not_started"), encoding="utf-8")
+        specification = commit(repo, "approved specification")
+        line.write_text(_line_text("line-0007", "in_progress"), encoding="utf-8")
+        commit(repo, "Line handoff")
+        ms.write_text(_ms_text(status="in_progress"), encoding="utf-8")
+        commit(repo, "start implementation")
+        (repo / "product.py").write_text("IMPLEMENTED = True\n", encoding="utf-8")
+        implementation = commit(repo, "implementation")
+
+        line_id = "line-9999" if defect == "wrong-id" else "line-0007"
+        line.write_text(
+            _line_text(line_id, "in_progress" if defect == "not-verifying" else "verifying"),
+            encoding="utf-8",
+        )
+        ms.write_text(_ms_text(status="implemented"), encoding="utf-8")
+        iqc = repo / ".proofline/lines/line-0007/micro-specs/iqc-0007-001.md"
+        if defect != "missing-iqc":
+            iqc_result = "failed" if defect == "failed-iqc" else "passed"
+            bound_ms = "ms-0007-999" if defect == "mismatched-iqc" else "ms-0007-001"
+            bound_implementation = specification if defect == "stale-iqc" else implementation
+            iqc.write_text(
+                "---\n"
+                'id: "iqc-0007-001"\n'
+                f'micro_spec: "{bound_ms}"\n'
+                f'micro_spec_commit: "{specification}"\n'
+                f'implementation_commit: "{bound_implementation}"\n'
+                f"result: {iqc_result}\n"
+                "---\n\n# IQC\n\n## Target\n\n대상.\n\n## Checks\n\n통과."
+                "\n\n## Criteria Results\n\n통과.\n\n## Result\n\n통과.\n",
+                encoding="utf-8",
+            )
+        if defect == "wrong-path":
+            wrong = repo / ".proofline/lines/line-9999/line-9999.md"
+            wrong.parent.mkdir(parents=True)
+            wrong.write_text(_line_text("line-9999", "verifying"), encoding="utf-8")
+            line.unlink()
+        if defect == "multi-line":
+            other = repo / ".proofline/lines/line-0008/line-0008.md"
+            other.parent.mkdir(parents=True)
+            other.write_text(_line_text("line-0008", "verifying"), encoding="utf-8")
+        if defect == "unrelated-quality-change":
+            (repo / "late.txt").write_text("late\n", encoding="utf-8")
+        q = commit(repo, "Line Q")
+        if defect == "not-quality-transition":
+            git(repo, "commit", "--allow-empty", "-qm", "advance after Q")
+            q = git(repo, "rev-parse", "HEAD")
 
     git(repo, "switch", "-q", "main")
     (repo / "main.txt").write_text("main\n", encoding="utf-8")
     m = commit(repo, "Main M")
     git(repo, "switch", "-qc", "candidate/line-0007")
+    merge_args = ("git", "merge", "--no-ff", "--no-commit")
+    if defect in {"arbitrary", "wrong-path"}:
+        merge_args += ("-s", "ours")
     merged = subprocess.run(
-        ("git", "merge", "--no-ff", "--no-commit", "line-0007"),
+        (*merge_args, "line-0007"),
         cwd=repo,
         text=True,
         capture_output=True,
@@ -65,6 +138,7 @@ def make_candidate(tmp_path: Path, *, mismatch: bool = False) -> tuple[Path, str
     )
     assert merged.returncode == 0, merged.stderr
     manifest = repo / ".proofline/lines/line-0007/integration-0007.md"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(
         "---\n"
         'id: "integration-0007"\n'
@@ -95,11 +169,13 @@ def snapshot(repo: Path) -> tuple[str, str, str, int, dict[str, str]]:
     )
 
 
-def run_helper(repo: Path, m: str, q: str, v: str) -> subprocess.CompletedProcess[str]:
+def run_helper(
+    repo: Path, m: str, q: str, v: str, *, script: Path = HELPER
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         (
             sys.executable,
-            str(HELPER),
+            str(script),
             "--repo",
             str(repo),
             "--line-id",
@@ -130,6 +206,35 @@ def test_pre_admission_helper_passes_exact_m_q_v_without_mutation(tmp_path: Path
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == f"pre-admission: passed M={m} Q={q} V={v}"
+    assert snapshot(repo) == before
+
+
+@pytest.mark.parametrize(
+    ("defect", "diagnostic"),
+    [
+        ("arbitrary", "quality head target Line is missing"),
+        ("wrong-path", "quality head target Line is missing"),
+        ("wrong-id", "quality head target Line identity mismatch"),
+        ("not-verifying", "quality head Line status must be verifying"),
+        ("missing-iqc", "quality head IQC coverage/binding invalid: missing IQC for ms-0007-001"),
+        ("failed-iqc", "quality head IQC coverage/binding invalid: IQC iqc-0007-001 is not passed"),
+        ("mismatched-iqc", "quality head IQC coverage/binding invalid: IQC iqc-0007-001 identity mismatch"),
+        ("stale-iqc", "quality head IQC coverage/binding invalid: IQC iqc-0007-001 implementation binding is stale or invalid"),
+        ("multi-line", "quality head contains multiple Lines"),
+        ("unrelated-quality-change", "quality head transition contains unrelated paths"),
+        ("not-quality-transition", "quality head is not the exact first-parent quality transition"),
+    ],
+)
+def test_pre_admission_helper_rejects_non_quality_head_without_mutation(
+    tmp_path: Path, defect: str, diagnostic: str
+) -> None:
+    repo, m, q, v = make_candidate(tmp_path, defect=defect)
+    before = snapshot(repo)
+
+    result = run_helper(repo, m, q, v)
+
+    assert result.returncode == 2
+    assert result.stderr.strip() == f"pre-admission: failed: {diagnostic}"
     assert snapshot(repo) == before
 
 
@@ -221,7 +326,7 @@ def test_integration_template_is_canonical_frontmatter_only_and_packaged() -> No
 
 
 def test_synchronized_skill_versions_and_authority_language() -> None:
-    expected = {START: "1.4.0", APPROVE: "1.4.0", RUN_DQC: "1.3.0"}
+    expected = {START: "1.4.0", APPROVE: "1.4.0", RUN_DQC: "1.4.0"}
     for path, version in expected.items():
         _, frontmatter, body = path.read_text(encoding="utf-8").split("---", 2)
         assert yaml.safe_load(frontmatter)["version"] == version

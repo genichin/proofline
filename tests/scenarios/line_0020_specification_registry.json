@@ -51,6 +51,11 @@
 
     {"scenario_id": "dqc.exact-v-pass-delivery-and-later-commit.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
     {"scenario_id": "dqc.pass-then-failed-delivery.fail", "expected": {"passed": false, "diagnostic_code": "history.integration.dqc"}},
-    {"scenario_id": "dqc.pass-then-blocked-delivery.fail", "expected": {"passed": false, "diagnostic_code": "history.integration.dqc"}}
+    {"scenario_id": "dqc.pass-then-blocked-delivery.fail", "expected": {"passed": false, "diagnostic_code": "history.integration.dqc"}},
+
+    {"scenario_id": "preflight.valid.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
+    {"scenario_id": "preflight.arbitrary-q.fail", "expected": {"passed": false, "diagnostic_code": "DQC_QUALITY_HEAD_TARGET_MISSING"}},
+    {"scenario_id": "preflight.not-verifying.fail", "expected": {"passed": false, "diagnostic_code": "DQC_QUALITY_HEAD_STATUS"}},
+    {"scenario_id": "preflight.missing-iqc.fail", "expected": {"passed": false, "diagnostic_code": "DQC_IQC_COVERAGE"}}
   ]
 }

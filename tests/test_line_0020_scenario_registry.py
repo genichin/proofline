@@ -60,6 +60,10 @@ EXPECTED_IDS = {
     "dqc.exact-v-pass-delivery-and-later-commit.pass",
     "dqc.pass-then-failed-delivery.fail",
     "dqc.pass-then-blocked-delivery.fail",
+    "preflight.valid.pass",
+    "preflight.arbitrary-q.fail",
+    "preflight.not-verifying.fail",
+    "preflight.missing-iqc.fail",
 }
 
 
@@ -68,7 +72,7 @@ def test_registry_has_fixed_approved_scenario_id_set() -> None:
 
     assert registry.schema_version == 1
     assert {scenario.scenario_id for scenario in registry.scenarios} == EXPECTED_IDS
-    assert len(registry.scenarios) == len(EXPECTED_IDS) == 45
+    assert len(registry.scenarios) == len(EXPECTED_IDS) == 49
 
 
 def test_registry_rejects_duplicate_scenario_ids(tmp_path: Path) -> None:
@@ -97,6 +101,6 @@ def test_source_wheel_and_packaged_scripts_have_exact_registry_parity(
     assert evidence.packaged_script_ids == {
         scenario_id
         for scenario_id in EXPECTED_IDS
-        if scenario_id.startswith(("handoff.", "approval."))
+        if scenario_id.startswith(("handoff.", "approval.", "preflight."))
     }
     assert evidence.all_no_mutation_checks_passed

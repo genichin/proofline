@@ -1,7 +1,7 @@
 ---
 name: proofline-run-dqc
 description: Use when verifying a ProofLine integration candidate at DQC without repeating exact-bound component IQC checks unless a documented trigger requires them.
-version: 1.3.0
+version: 1.4.0
 author: ProofLine
 license: MIT
 metadata:
@@ -100,7 +100,7 @@ python3 ~/.proofline/skills/proofline-run-dqc/scripts/preflight_integration_cand
   --main-parent "$M" --line-head "$Q" --candidate "$V"
 ```
 
-Helper는 exact refs, clean/collision-safe state, `HEAD=V`, ordered exactly two parents와 frontmatter-only manifest binding을 읽기만 한다. `V`를 생성하거나 file/index/ref/object/worktree를 변경하지 않으며 approve, merge, push, publish도 하지 않는다. Stale `M`이면 same exact `Q`를 유지한 fresh `V`와 fresh hosted/DQC evidence를 만들고 old `V`를 merge/rebase/retry하지 않는다. Stale `Q`도 fresh verification head와 fresh `V`가 필요하다.
+Helper는 exact refs, clean/collision-safe state, `HEAD=V`, ordered exactly two parents와 frontmatter-only manifest binding뿐 아니라 designated `Q` 자체를 읽기만 한다. `Q`는 canonical target Line의 exact `in_progress → verifying` first-parent quality transition이어야 하고 그 commit의 변경은 target Line과 허용된 target Micro-SPEC/IQC path로 제한된다. 모든 non-withdrawn Micro-SPEC은 `approved`·`implemented`이고 canonical passed IQC가 exact approved specification, fresh persisted `in_progress`, non-governance implementation과 quality boundary를 bind해야 한다. Missing·failed·stale·identity-mismatched IQC, unrelated/multi-Line path 또는 arbitrary self-consistent second parent는 pre-admission에서 실패한다. Helper는 `V`를 생성하거나 file/index/ref/object/worktree를 변경하지 않으며 approve, merge, push, publish도 하지 않는다. Stale `M`이면 same exact `Q`를 유지한 fresh `V`와 fresh hosted/DQC evidence를 만들고 old `V`를 merge/rebase/retry하지 않는다. Stale `Q`도 fresh verification head와 fresh `V`가 필요하다.
 
 ### 2. Coverage와 IQC binding 확인
 

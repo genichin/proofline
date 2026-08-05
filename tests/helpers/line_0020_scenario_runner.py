@@ -224,10 +224,12 @@ def execute_cross_artifact_registry(root: Path, registry_path: Path, temp_root: 
     members = {
         "handoff": "proofline_home/skills/proofline-start-implementation/scripts/create_worktree.py",
         "approval": "proofline_home/skills/proofline-approve-specification/scripts/audit_approval_authority.py",
+        "preflight": "proofline_home/skills/proofline-run-dqc/scripts/preflight_integration_candidate.py",
     }
     source_scripts = {
         "handoff": root / "skills/proofline-start-implementation/scripts/create_worktree.py",
         "approval": root / "skills/proofline-approve-specification/scripts/audit_approval_authority.py",
+        "preflight": root / "skills/proofline-run-dqc/scripts/preflight_integration_candidate.py",
     }
     extracted_scripts: dict[str, Path] = {}
     byte_equal = True
@@ -249,6 +251,7 @@ def execute_cross_artifact_registry(root: Path, registry_path: Path, temp_root: 
         (sys.executable, "-I", str(runner), "run", *common, "--workspace", str(source_workspace),
          "--artifact", "source", "--handoff-script", str(source_scripts["handoff"]),
          "--approval-script", str(source_scripts["approval"]),
+         "--preflight-script", str(source_scripts["preflight"]),
          "--source-root", str(root / "src")),
         source_workspace,
         _sanitized_env(),
@@ -256,7 +259,8 @@ def execute_cross_artifact_registry(root: Path, registry_path: Path, temp_root: 
     wheel_payload = _run_json(
         (str(python), "-I", str(runner), "run", *common, "--workspace", str(wheel_workspace),
          "--artifact", "wheel", "--handoff-script", str(extracted_scripts["handoff"]),
-         "--approval-script", str(extracted_scripts["approval"])),
+         "--approval-script", str(extracted_scripts["approval"]),
+         "--preflight-script", str(extracted_scripts["preflight"])),
         wheel_workspace,
         _sanitized_env(),
     )
@@ -293,12 +297,14 @@ def _load_test_fixtures(root: Path) -> dict[str, Any]:
     import test_integration_history as integration
     import test_specification_approval_authority as approval
     import test_start_implementation_skill as handoff
+    import test_line_0020_workflow_sync as preflight
     return {
         "coverage": coverage,
         "chronology": chronology,
         "integration": integration,
         "approval": approval,
         "handoff": handoff,
+        "preflight": preflight,
     }
 
 
@@ -510,8 +516,34 @@ def _dqc_scenario(module: Any, scenario_id: str, workspace: Path) -> tuple[str, 
     return _normalize_errors(errors), _repo_git_snapshot(repo.path) == before
 
 
+def _preflight_scenario(
+    module: Any, scenario_id: str, workspace: Path, script: Path
+) -> tuple[str, bool]:
+    defects = {
+        "preflight.valid.pass": None,
+        "preflight.arbitrary-q.fail": "arbitrary",
+        "preflight.not-verifying.fail": "not-verifying",
+        "preflight.missing-iqc.fail": "missing-iqc",
+    }
+    repo, main, line_head, candidate = module.make_candidate(
+        workspace, defect=defects[scenario_id]
+    )
+    before = _repo_git_snapshot(repo)
+    result = module.run_helper(repo, main, line_head, candidate, script=script)
+    unchanged = _repo_git_snapshot(repo) == before
+    if result.returncode == 0:
+        return "PASS", unchanged
+    exact = {
+        "pre-admission: failed: quality head target Line is missing": "DQC_QUALITY_HEAD_TARGET_MISSING",
+        "pre-admission: failed: quality head Line status must be verifying": "DQC_QUALITY_HEAD_STATUS",
+        "pre-admission: failed: quality head IQC coverage/binding invalid: missing IQC for ms-0007-001": "DQC_IQC_COVERAGE",
+    }
+    return exact.get(result.stderr.strip(), "DQC_PREFLIGHT_UNEXPECTED"), unchanged
+
+
 def run_registry(root: Path, registry_path: Path, workspace: Path, artifact: str,
                  handoff_script: Path, approval_script: Path,
+                 preflight_script: Path,
                  source_root: Path | None = None) -> dict[str, Any]:
     registry = load_registry(registry_path)
     if source_root is not None:
@@ -545,6 +577,12 @@ def run_registry(root: Path, registry_path: Path, workspace: Path, artifact: str
             code, unchanged = _integration_scenario(modules["integration"], scenario.scenario_id, scenario_workspace)
         elif scenario.scenario_id.startswith("dqc."):
             code, unchanged = _dqc_scenario(modules["integration"], scenario.scenario_id, scenario_workspace)
+        elif scenario.scenario_id.startswith("preflight."):
+            code, unchanged = _preflight_scenario(
+                modules["preflight"], scenario.scenario_id, scenario_workspace, preflight_script
+            )
+            if artifact == "wheel":
+                packaged_ids.add(scenario.scenario_id)
         else:
             raise AssertionError(scenario.scenario_id)
         if unchanged is not None:
@@ -574,10 +612,12 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--artifact", choices=("source", "wheel"), required=True)
     run.add_argument("--handoff-script", type=Path, required=True)
     run.add_argument("--approval-script", type=Path, required=True)
+    run.add_argument("--preflight-script", type=Path, required=True)
     run.add_argument("--source-root", type=Path)
     args = parser.parse_args(argv)
     payload = run_registry(args.root.resolve(), args.registry.resolve(), args.workspace.resolve(),
                            args.artifact, args.handoff_script.resolve(), args.approval_script.resolve(),
+                           args.preflight_script.resolve(),
                            args.source_root.resolve() if args.source_root else None)
     print(json.dumps(payload, sort_keys=True))
     return 0

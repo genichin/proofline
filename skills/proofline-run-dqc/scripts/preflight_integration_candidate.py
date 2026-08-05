@@ -10,16 +10,43 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 
 SHA = re.compile(r"^[0-9a-f]{40}$")
 LINE = re.compile(r"^line-(\d{4})$")
 REF = re.compile(r"^refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]*$")
+MS_ID = re.compile(r"^ms-(\d{4})-(\d{3})$")
+IQC_ID = re.compile(r"^iqc-(\d{4})-(\d{3})$")
 TIMEOUT_SECONDS = 5
 OUTPUT_LIMIT = 8 * 1024 * 1024
 
 
 class PreflightError(RuntimeError):
     pass
+
+
+class _UniqueLoader(yaml.SafeLoader):
+    pass
+
+
+def _unique_mapping(
+    loader: yaml.SafeLoader, node: yaml.nodes.MappingNode, deep: bool = False
+) -> dict[object, object]:
+    result: dict[object, object] = {}
+    for key_node, value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        if key in result:
+            raise yaml.constructor.ConstructorError(
+                "while constructing a mapping", node.start_mark, f"duplicate key: {key}", key_node.start_mark
+            )
+        result[key] = loader.construct_object(value_node, deep=deep)
+    return result
+
+
+_UniqueLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _unique_mapping
+)
 
 
 def git(repo: Path, *args: str) -> str:
@@ -79,6 +106,254 @@ def parse_manifest(text: str) -> dict[str, str]:
     return values
 
 
+def frontmatter(text: str, label: str) -> tuple[dict[str, object], str]:
+    if not text.startswith("---\n"):
+        raise PreflightError(f"{label} frontmatter is invalid")
+    closing = text.find("\n---\n", 4)
+    if closing >= 0:
+        body = text[closing + 5 :]
+    elif text.endswith("\n---"):
+        closing = len(text) - 4
+        body = ""
+    else:
+        raise PreflightError(f"{label} frontmatter is invalid")
+    try:
+        value = yaml.load(text[4:closing], Loader=_UniqueLoader)
+    except (yaml.YAMLError, UnicodeError) as exc:
+        raise PreflightError(f"{label} frontmatter is invalid") from exc
+    if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
+        raise PreflightError(f"{label} frontmatter is invalid")
+    return value, body
+
+
+def tree_paths(repo: Path, commit: str, prefix: str) -> list[str]:
+    raw = git(repo, "ls-tree", "-rz", "--name-only", commit, "--", prefix)
+    paths = [path for path in raw.split("\0") if path]
+    for path in paths:
+        parts = Path(path).parts
+        if path.startswith("/") or "\\" in path or ".." in parts or not path.startswith(prefix):
+            raise PreflightError("quality head contains an unsafe artifact path")
+    return sorted(paths)
+
+
+def object_text(repo: Path, commit: str, path: str, paths: set[str]) -> str | None:
+    if path not in paths:
+        return None
+    return git(repo, "show", f"{commit}:{path}")
+
+
+def revision_without_status(
+    state: dict[str, object], body: str, field: str
+) -> tuple[dict[str, object], str]:
+    normalized = dict(state)
+    normalized.pop(field, None)
+    return normalized, body
+
+
+def changed_paths(repo: Path, commit: str) -> list[str]:
+    return [
+        path
+        for path in git(
+            repo, "diff", "--name-only", "--no-renames", f"{commit}^1", commit
+        ).splitlines()
+        if path
+    ]
+
+
+def first_parent_chain(repo: Path, commit: str) -> tuple[list[str], dict[str, int]]:
+    if git(repo, "rev-parse", "--is-shallow-repository") != "false":
+        raise PreflightError("quality head first-parent history is unavailable")
+    commits = git(repo, "rev-list", "--first-parent", "--reverse", commit).splitlines()
+    if not commits or commits[-1] != commit:
+        raise PreflightError("quality head first-parent history is unavailable")
+    return commits, {sha: index for index, sha in enumerate(commits)}
+
+
+def _schema(state: dict[str, object], required: set[str], label: str) -> None:
+    if set(state) != required:
+        raise PreflightError(f"{label} frontmatter schema is invalid")
+
+
+def _state_at(
+    repo: Path, commit: str, path: str, label: str
+) -> tuple[dict[str, object], str] | None:
+    paths = set(tree_paths(repo, commit, path))
+    text = object_text(repo, commit, path, paths)
+    return None if text is None else frontmatter(text, label)
+
+
+def validate_quality_head(repo: Path, line_id: str, q: str) -> None:
+    number = LINE.fullmatch(line_id).group(1)  # type: ignore[union-attr]
+    line_directory = f".proofline/lines/{line_id}"
+    line_path = f"{line_directory}/{line_id}.md"
+    micro_directory = f"{line_directory}/micro-specs/"
+    q_paths = set(tree_paths(repo, q, ".proofline/lines/"))
+    line_text = object_text(repo, q, line_path, q_paths)
+    if line_text is None:
+        raise PreflightError("quality head target Line is missing")
+    line_state, line_body = frontmatter(line_text, "quality head Line")
+    _schema(
+        line_state,
+        {"id", "execution_status", "implementation_history"},
+        "quality head Line",
+    )
+    if line_state.get("id") != line_id:
+        raise PreflightError("quality head target Line identity mismatch")
+    if line_state.get("execution_status") != "verifying":
+        raise PreflightError("quality head Line status must be verifying")
+    if line_state.get("implementation_history") != "first_parent" or line_body.strip():
+        raise PreflightError("quality head target Line contract is invalid")
+
+    quality_changes = changed_paths(repo, q)
+    changed_lines = [
+        path
+        for path in quality_changes
+        if re.fullmatch(r"\.proofline/lines/line-\d{4}/line-\d{4}\.md", path)
+    ]
+    if any(path != line_path for path in changed_lines):
+        raise PreflightError("quality head contains multiple Lines")
+    allowed_ms = re.compile(rf"^{re.escape(micro_directory)}ms-{number}-\d{{3}}\.md$")
+    allowed_iqc = re.compile(rf"^{re.escape(micro_directory)}iqc-{number}-\d{{3}}\.md$")
+    if any(
+        path != line_path and allowed_ms.fullmatch(path) is None and allowed_iqc.fullmatch(path) is None
+        for path in quality_changes
+    ):
+        raise PreflightError("quality head transition contains unrelated paths")
+    if line_path not in quality_changes:
+        raise PreflightError("quality head is not the exact first-parent quality transition")
+
+    parent = exact_commit(repo, git(repo, "rev-parse", f"{q}^1"), "quality parent")
+    parent_line = _state_at(repo, parent, line_path, "quality parent Line")
+    if parent_line is None:
+        raise PreflightError("quality head is not the exact first-parent quality transition")
+    parent_line_state, parent_line_body = parent_line
+    if (
+        parent_line_state.get("execution_status") != "in_progress"
+        or revision_without_status(parent_line_state, parent_line_body, "execution_status")
+        != revision_without_status(line_state, line_body, "execution_status")
+    ):
+        raise PreflightError("quality head is not the exact first-parent quality transition")
+
+    commits, positions = first_parent_chain(repo, q)
+    ms_paths = sorted(path for path in q_paths if path.startswith(micro_directory) and "/ms-" in path)
+    canonical_ms_paths = [path for path in ms_paths if allowed_ms.fullmatch(path)]
+    if ms_paths != canonical_ms_paths:
+        raise PreflightError("quality head IQC coverage/binding invalid: noncanonical Micro-SPEC path")
+    if not canonical_ms_paths:
+        raise PreflightError("quality head IQC coverage/binding invalid: no target Micro-SPEC")
+
+    required_iqc_paths: set[str] = set()
+    for ms_path in canonical_ms_paths:
+        ms_id = Path(ms_path).stem
+        suffix = MS_ID.fullmatch(ms_id)
+        assert suffix is not None
+        current = _state_at(repo, q, ms_path, f"Micro-SPEC {ms_id}")
+        assert current is not None
+        ms_state, ms_body = current
+        _schema(
+            ms_state,
+            {"id", "parent_req", "criteria", "spec_status", "implementation_status"},
+            f"Micro-SPEC {ms_id}",
+        )
+        if (
+            ms_state.get("id") != ms_id
+            or ms_state.get("parent_req") != f"req-{number}"
+            or not isinstance(ms_state.get("criteria"), list)
+            or not ms_state["criteria"]
+            or any(re.fullmatch(r"ac-\d{4}", item) is None for item in ms_state["criteria"] if isinstance(item, str))
+            or any(not isinstance(item, str) for item in ms_state["criteria"])
+            or len(set(ms_state["criteria"])) != len(ms_state["criteria"])
+        ):
+            raise PreflightError(
+                f"quality head IQC coverage/binding invalid: Micro-SPEC {ms_id} identity mismatch"
+            )
+        if ms_state.get("spec_status") == "withdrawn":
+            continue
+        if ms_state.get("spec_status") != "approved" or ms_state.get("implementation_status") != "implemented":
+            raise PreflightError(
+                f"quality head IQC coverage/binding invalid: Micro-SPEC {ms_id} is not approved and implemented"
+            )
+        iqc_id = ms_id.replace("ms-", "iqc-", 1)
+        iqc_path = f"{micro_directory}{iqc_id}.md"
+        required_iqc_paths.add(iqc_path)
+        iqc_text = object_text(repo, q, iqc_path, q_paths)
+        if iqc_text is None:
+            raise PreflightError(
+                f"quality head IQC coverage/binding invalid: missing IQC for {ms_id}"
+            )
+        iqc_state, _ = frontmatter(iqc_text, f"IQC {iqc_id}")
+        _schema(
+            iqc_state,
+            {"id", "micro_spec", "micro_spec_commit", "implementation_commit", "result"},
+            f"IQC {iqc_id}",
+        )
+        if iqc_state.get("id") != iqc_id or iqc_state.get("micro_spec") != ms_id:
+            raise PreflightError(
+                f"quality head IQC coverage/binding invalid: IQC {iqc_id} identity mismatch"
+            )
+        if iqc_state.get("result") != "passed":
+            raise PreflightError(
+                f"quality head IQC coverage/binding invalid: IQC {iqc_id} is not passed"
+            )
+
+        states = [_state_at(repo, commit, ms_path, f"Micro-SPEC {ms_id}") for commit in commits]
+        latest_start: int | None = None
+        implemented_transition: int | None = None
+        previous_status: object = None
+        for index, state in enumerate(states):
+            status = state[0].get("implementation_status") if state is not None else None
+            if status == "in_progress" and previous_status != "in_progress":
+                latest_start = index
+            if status == "implemented" and previous_status == "in_progress":
+                implemented_transition = index
+            previous_status = status
+        iqc_boundaries: list[int] = []
+        previous_iqc: str | None = None
+        for index, commit in enumerate(commits):
+            commit_paths = set(tree_paths(repo, commit, iqc_path))
+            content = object_text(repo, commit, iqc_path, commit_paths)
+            if content == iqc_text and previous_iqc != iqc_text:
+                iqc_boundaries.append(index)
+            previous_iqc = content
+        specification_value = iqc_state.get("micro_spec_commit")
+        implementation_value = iqc_state.get("implementation_commit")
+        specification = positions.get(specification_value) if isinstance(specification_value, str) else None
+        implementation = positions.get(implementation_value) if isinstance(implementation_value, str) else None
+        specification_state = (
+            _state_at(repo, specification_value, ms_path, f"Micro-SPEC {ms_id}")
+            if isinstance(specification_value, str) and SHA.fullmatch(specification_value)
+            else None
+        )
+        valid_specification = (
+            specification_state is not None
+            and specification_state[0].get("spec_status") == "approved"
+            and revision_without_status(specification_state[0], specification_state[1], "implementation_status")
+            == revision_without_status(ms_state, ms_body, "implementation_status")
+        )
+        if (
+            latest_start is None
+            or implemented_transition is None
+            or len(iqc_boundaries) != 1
+            or iqc_boundaries[0] != implemented_transition
+            or not valid_specification
+            or specification is None
+            or implementation is None
+            or not (specification < latest_start < implementation < implemented_transition <= positions[q])
+            or all(path.startswith(".proofline/") for path in changed_paths(repo, implementation_value))
+        ):
+            raise PreflightError(
+                f"quality head IQC coverage/binding invalid: IQC {iqc_id} implementation binding is stale or invalid"
+            )
+
+    if not any(allowed_iqc.fullmatch(path) for path in quality_changes):
+        raise PreflightError("quality head is not the exact first-parent quality transition")
+    extra_iqcs = sorted(
+        path for path in q_paths if path.startswith(micro_directory) and "/iqc-" in path and path not in required_iqc_paths
+    )
+    if extra_iqcs:
+        raise PreflightError("quality head IQC coverage/binding invalid: unmatched IQC artifact")
+
+
 def preflight(
     repo: Path,
     line_id: str,
@@ -114,6 +389,8 @@ def preflight(
     parents = git(repo, "rev-list", "--parents", "-n", "1", v).split()
     if parents != [v, m, q]:
         raise PreflightError("candidate V must have exactly ordered parents M then Q")
+
+    validate_quality_head(repo, line_id, q)
 
     number = match.group(1)
     manifest_path = f".proofline/lines/{line_id}/integration-{number}.md"
