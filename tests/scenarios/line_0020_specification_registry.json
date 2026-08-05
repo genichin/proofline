@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "registry_id": "line-0020-cross-artifact-parity-v1",
+  "scenarios": [
+    {"scenario_id": "coverage.dormant-partial.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
+    {"scenario_id": "coverage.active-exact.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
+    {"scenario_id": "coverage.active-missing.fail", "expected": {"passed": false, "diagnostic_code": "criteria.uncovered"}},
+    {"scenario_id": "coverage.active-duplicate.fail", "expected": {"passed": false, "diagnostic_code": "criteria.duplicate"}},
+    {"scenario_id": "coverage.active-direct-noncanonical.fail", "expected": {"passed": false, "diagnostic_code": "criteria.out-of-scope"}},
+
+    {"scenario_id": "handoff.exact-a-full-target.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
+    {"scenario_id": "handoff.missing-target.fail", "expected": {"passed": false, "diagnostic_code": "HANDOFF_TARGET_MISSING"}},
+    {"scenario_id": "handoff.path-id-target.fail", "expected": {"passed": false, "diagnostic_code": "HANDOFF_TARGET_ID"}},
+    {"scenario_id": "handoff.draft-target.fail", "expected": {"passed": false, "diagnostic_code": "HANDOFF_TARGET_DRAFT"}},
+    {"scenario_id": "handoff.clean-exact-h-retry.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
+    {"scenario_id": "handoff.tracked-dirty-retry.fail", "expected": {"passed": false, "diagnostic_code": "HANDOFF_RETRY_DIRTY"}},
+    {"scenario_id": "handoff.untracked-dirty-retry.fail", "expected": {"passed": false, "diagnostic_code": "HANDOFF_RETRY_DIRTY"}},
+
+    {"scenario_id": "approval.normal.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
+    {"scenario_id": "approval.bootstrap.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
+    {"scenario_id": "approval.self-approval.fail", "expected": {"passed": false, "diagnostic_code": "ACTOR_SEPARATION"}},
+    {"scenario_id": "approval.missing-user.fail", "expected": {"passed": false, "diagnostic_code": "EVIDENCE_MISSING"}},
+    {"scenario_id": "approval.denied-user.fail", "expected": {"passed": false, "diagnostic_code": "USER_DECISION"}},
+    {"scenario_id": "approval.reviewer-mutation.fail", "expected": {"passed": false, "diagnostic_code": "REVIEW_MUTATION"}},
+    {"scenario_id": "approval.stale-target-and-digest.fail", "expected": {"passed": false, "diagnostic_code": "TARGET_BINDING"}},
+    {"scenario_id": "approval.body-and-concurrent-mutation.fail", "expected": {"passed": false, "diagnostic_code": "TRANSITION_PATH"}},
+    {"scenario_id": "approval.stale-digest.fail", "expected": {"passed": false, "diagnostic_code": "REVIEW_DIGEST"}},
+
+    {"scenario_id": "chronology.line-0020-bootstrap.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
+    {"scenario_id": "chronology.future-a-h-s0-s-p.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
+    {"scenario_id": "chronology.missing-s.fail", "expected": {"passed": false, "diagnostic_code": "history.spec.chronology"}},
+    {"scenario_id": "chronology.non-direct-s.fail", "expected": {"passed": false, "diagnostic_code": "history.spec.chronology"}},
+    {"scenario_id": "chronology.body-changing-s.fail", "expected": {"passed": false, "diagnostic_code": "history.spec.chronology"}},
+    {"scenario_id": "chronology.stale-s.fail", "expected": {"passed": false, "diagnostic_code": "history.spec.chronology"}},
+    {"scenario_id": "chronology.p-before-s.fail", "expected": {"passed": false, "diagnostic_code": "history.spec.chronology"}},
+
+    {"scenario_id": "integration.main-first-two-parent-manifest-tree.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
+    {"scenario_id": "integration.reversed-parents.fail", "expected": {"passed": false, "diagnostic_code": "history.integration.parent"}},
+    {"scenario_id": "integration.octopus.fail", "expected": {"passed": false, "diagnostic_code": "history.integration.parent"}},
+    {"scenario_id": "integration.wrong-binding.fail", "expected": {"passed": false, "diagnostic_code": "history.integration.parent"}},
+    {"scenario_id": "integration.merge-only-product-change.fail", "expected": {"passed": false, "diagnostic_code": "history.integration.tree"}},
+
+    {"scenario_id": "dqc.exact-v-pass-delivery-and-later-commit.pass", "expected": {"passed": true, "diagnostic_code": "PASS"}},
+    {"scenario_id": "dqc.pass-then-failed-delivery.fail", "expected": {"passed": false, "diagnostic_code": "history.integration.dqc"}},
+    {"scenario_id": "dqc.pass-then-blocked-delivery.fail", "expected": {"passed": false, "diagnostic_code": "history.integration.dqc"}}
+  ]
+}
