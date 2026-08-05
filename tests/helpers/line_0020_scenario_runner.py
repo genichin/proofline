@@ -474,7 +474,9 @@ def _chronology_scenario(module: Any, scenario_id: str, workspace: Path) -> tupl
 
 
 def _integration_scenario(module: Any, scenario_id: str, workspace: Path) -> tuple[str, bool]:
-    if scenario_id == "integration.wrong-binding.fail":
+    if scenario_id == "integration.missing-line-second-parent.fail":
+        repo = module.build_missing_line_second_parent_candidate(workspace)
+    elif scenario_id == "integration.wrong-binding.fail":
         repo, _, _, _ = module.build_candidate(workspace, line_head="e" * 40)
     elif scenario_id == "integration.merge-only-product-change.fail":
         repo, _, _, _ = module.build_candidate(workspace, merge_only_path="product/merge-only.py")

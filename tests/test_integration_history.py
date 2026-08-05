@@ -105,6 +105,44 @@ def build_candidate(
     return repo, main_sha, line_head_sha, candidate
 
 
+def build_missing_line_second_parent_candidate(tmp_path: Path) -> HistoryRepo:
+    """Build V(M, X) whose new manifest binds an unrelated Line-less X."""
+    repo = HistoryRepo.create(tmp_path)
+    repo.write_line("not_started", policy="first_parent")
+    approval = repo.commit("specification", "approve policy-bearing specification")
+    repo.write_line("in_progress", policy="first_parent")
+    main_parent = repo.commit("handoff", "status-only handoff")
+
+    git(repo.path, "switch", "-qc", "unrelated", approval)
+    (repo.path / LINE).unlink()
+    (repo.path / "unrelated.txt").write_text("unrelated\n", encoding="utf-8")
+    line_head = repo.commit("unrelated", "create unrelated Line-less parent")
+    assert LINE not in git(repo.path, "ls-tree", "-r", "--name-only", line_head).splitlines()
+
+    git(repo.path, "switch", "-q", "main")
+    merged = subprocess.run(
+        ("git", "merge", "--no-ff", "--no-commit", "-s", "ours", "unrelated"),
+        cwd=repo.path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert merged.returncode == 0, merged.stderr
+    (repo.path / INTEGRATION).write_text(
+        "---\n"
+        'id: "integration-0001"\n'
+        'line_id: "line-0001"\n'
+        f'main_parent: "{main_parent}"\n'
+        f'line_head: "{line_head}"\n'
+        "---\n",
+        encoding="utf-8",
+    )
+    repo.commit("candidate", "bind unrelated Line-less parent")
+    assert git(repo.path, "rev-parse", "HEAD^1") == main_parent
+    assert git(repo.path, "rev-parse", "HEAD^2") == line_head
+    return repo
+
+
 def history_codes(repo: HistoryRepo) -> set[tuple[str, str]]:
     return {(error.path, error.code) for error in validate_project(repo.path)}
 
@@ -340,6 +378,22 @@ def test_integration_candidate_rejects_arbitrary_second_parent_after_quality(
     repo, _, _, _ = build_candidate(tmp_path, line_tip_after_quality=True)
 
     assert (INTEGRATION, "history.integration.parent") in history_codes(repo)
+
+
+def test_manifest_candidate_rejects_second_parent_without_target_line_read_only(
+    tmp_path: Path,
+) -> None:
+    repo = build_missing_line_second_parent_candidate(tmp_path)
+    before = repository_snapshot(repo.path)
+
+    errors = [
+        (error.path, error.code)
+        for error in validate_project(repo.path)
+        if error.code.startswith("history.")
+    ]
+
+    assert errors == [(INTEGRATION, "history.integration.parent")]
+    assert repository_snapshot(repo.path) == before
 
 
 @pytest.mark.parametrize(

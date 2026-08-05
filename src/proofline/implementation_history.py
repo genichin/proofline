@@ -527,8 +527,10 @@ def _integration_spine(
             manifest_path in commit_paths
             and manifest_path not in _tree_paths(session, main_parent)
         )
-        if line_path in _tree_paths(session, line_head) and (
-            introduces_manifest or _is_line_quality_head(session, line_path, line_head)
+        line_head_paths = _tree_paths(session, line_head)
+        if introduces_manifest or (
+            line_path in line_head_paths
+            and _is_line_quality_head(session, line_path, line_head)
         ):
             candidates.append((index, commit, main_parent, line_head))
     if not candidates:
@@ -588,6 +590,29 @@ def _integration_spine(
                 manifest_path,
                 "history.integration.parent",
                 "integration manifest는 path/Line identity와 candidate parent를 exact하게 bind해야 합니다.",
+            )
+        ]
+
+    line_head_paths = _tree_paths(session, line_head)
+    line_head_bytes = _file(session, line_head, line_path, line_head_paths)
+    if line_head_bytes is None:
+        return main_commits, main_trees, [
+            _line_error(
+                manifest_path,
+                "history.integration.parent",
+                "designated second parent에는 target Line이 canonical identity로 존재해야 합니다.",
+            )
+        ]
+    try:
+        line_head_state = _frontmatter(line_head_bytes)
+    except HistoryUnavailable:
+        return main_commits, main_trees, [_unavailable(line_path)]
+    if line_head_state.get("id") != f"line-{line_number}":
+        return main_commits, main_trees, [
+            _line_error(
+                manifest_path,
+                "history.integration.parent",
+                "designated second parent에는 target Line이 canonical identity로 존재해야 합니다.",
             )
         ]
 

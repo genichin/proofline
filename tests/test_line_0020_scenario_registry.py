@@ -56,6 +56,7 @@ EXPECTED_IDS = {
     "integration.octopus.fail",
     "integration.wrong-binding.fail",
     "integration.merge-only-product-change.fail",
+    "integration.missing-line-second-parent.fail",
     "dqc.exact-v-pass-delivery-and-later-commit.pass",
     "dqc.pass-then-failed-delivery.fail",
     "dqc.pass-then-blocked-delivery.fail",
@@ -67,7 +68,7 @@ def test_registry_has_fixed_approved_scenario_id_set() -> None:
 
     assert registry.schema_version == 1
     assert {scenario.scenario_id for scenario in registry.scenarios} == EXPECTED_IDS
-    assert len(registry.scenarios) == len(EXPECTED_IDS) == 44
+    assert len(registry.scenarios) == len(EXPECTED_IDS) == 45
 
 
 def test_registry_rejects_duplicate_scenario_ids(tmp_path: Path) -> None:
