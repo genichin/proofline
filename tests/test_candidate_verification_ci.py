@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import re
+import shutil
+import subprocess
+import sys
 
 import yaml
 
@@ -10,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/candidate-verification.yml"
 WINDOWS_GATE = ROOT / ".github/scripts/verify-windows-candidate.ps1"
 HOME_INIT_TESTS = ROOT / "tests/test_home_init.py"
+WINDOWS_FIXTURE = ROOT / "tests/fixtures/valid-minimal"
 JOBS = {"build-candidate", "ubuntu-python311", "windows-python311"}
 
 
@@ -115,6 +120,34 @@ def test_windows_gate_exercises_exact_wheel_and_full_fresh_install_sequence() ->
     assert "line-0017" not in text
     assert "Start-Process -Verb RunAs" not in text
     assert "git push" not in text.lower()
+
+
+def test_windows_gate_fixture_is_persisted_as_valid_terminal_history(tmp_path: Path) -> None:
+    fixture_line = WINDOWS_FIXTURE / ".proofline/lines/line-0001/line-0001.md"
+    assert "execution_status: verifying" in fixture_line.read_text(encoding="utf-8")
+    gate = WINDOWS_GATE.read_text(encoding="utf-8")
+    assert '$FixtureLineText.Replace("execution_status: verifying", "execution_status: delivered")' in gate
+    project = tmp_path / "windows-gate-fixture"
+    shutil.copytree(WINDOWS_FIXTURE, project)
+    copied_line = project / ".proofline/lines/line-0001/line-0001.md"
+    copied_line.write_text(
+        copied_line.read_text(encoding="utf-8").replace(
+            "execution_status: verifying", "execution_status: delivered"
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(("git", "init", "-q", "-b", "main"), cwd=project, check=True)
+    subprocess.run(("git", "config", "user.name", "ProofLine Gate"), cwd=project, check=True)
+    subprocess.run(("git", "config", "user.email", "proofline@example.invalid"), cwd=project, check=True)
+    subprocess.run(("git", "add", "-A"), cwd=project, check=True)
+    subprocess.run(("git", "commit", "-qm", "fixture baseline"), cwd=project, check=True)
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(ROOT / "src")
+    validated = subprocess.run(
+        (sys.executable, "-c", "from proofline.cli import main; raise SystemExit(main())", "validate"),
+        cwd=project, env=environment, text=True, capture_output=True, check=False,
+    )
+    assert validated.returncode == 0, validated.stderr
 
 
 def test_workflow_and_gate_preserve_governance_and_home_boundaries() -> None:
