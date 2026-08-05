@@ -1395,10 +1395,8 @@ def _validate_specification_chronology(
         for index in range(1, len(line_states))
         if line_states[index] is not None
         and line_states[index].get("execution_status") == "in_progress"
-        and (
-            line_states[index - 1] is None
-            or line_states[index - 1].get("execution_status") != "in_progress"
-        )
+        and (previous := line_states[index - 1]) is not None
+        and previous.get("execution_status") == "not_started"
         and index >= approval
     ]
     if len(handoffs) != 1:

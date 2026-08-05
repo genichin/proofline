@@ -544,6 +544,29 @@ def test_future_a_h_s0_s_p_i_q_chronology_passes(tmp_path: Path) -> None:
     assert validate_project(repo.path) == []
 
 
+def test_future_chronology_accepts_verifying_to_in_progress_rework_start(
+    tmp_path: Path,
+) -> None:
+    repo = chronology_repo(tmp_path, bootstrap=False)
+    repo.write_line("verifying", policy="first_parent")
+    repo.commit("verified", "complete hosted verification")
+    repo.write_line("in_progress", policy="first_parent")
+    repo.write_ms(1, "in_progress", criteria_numbers=(1, 2, 3, 4))
+    repo.commit("rework-P", "start hosted correction")
+
+    assert validate_project(repo.path) == []
+
+
+def test_future_chronology_rejects_an_extra_initial_handoff(tmp_path: Path) -> None:
+    repo = chronology_repo(tmp_path, bootstrap=False, complete=False)
+    repo.write_line("not_started", policy="first_parent")
+    repo.commit("invalid-reset", "reset Line after initial handoff")
+    repo.write_line("in_progress", policy="first_parent")
+    repo.commit("duplicate-H", "repeat initial handoff")
+
+    assert (MS, "history.spec.chronology") in history_codes(repo)
+
+
 @pytest.mark.parametrize(
     "defect",
     [

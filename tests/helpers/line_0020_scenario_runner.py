@@ -118,6 +118,18 @@ def _python_in(venv: Path) -> Path:
     return venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 
+def _candidate_install_command(python: Path, wheel: Path) -> tuple[str, ...]:
+    return (
+        "uv",
+        "pip",
+        "install",
+        "--python",
+        str(python),
+        str(wheel),
+        "pytest>=8",
+    )
+
+
 def _sanitized_env(*, source_root: Path | None = None) -> dict[str, str]:
     env = {
         key: value
@@ -210,7 +222,7 @@ def execute_cross_artifact_registry(root: Path, registry_path: Path, temp_root: 
     assert created.returncode == 0, created.stderr
     python = _python_in(venv)
     installed = subprocess.run(
-        ("uv", "pip", "install", "--offline", "--python", str(python), str(wheel), "pytest>=8"),
+        _candidate_install_command(python, wheel),
         cwd=temp_root,
         env=_sanitized_env(),
         text=True,

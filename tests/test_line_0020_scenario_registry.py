@@ -7,6 +7,7 @@ import pytest
 
 from helpers.line_0020_scenario_runner import (
     ScenarioRegistryError,
+    _candidate_install_command,
     execute_cross_artifact_registry,
     load_registry,
 )
@@ -90,6 +91,26 @@ def test_registry_rejects_duplicate_scenario_ids(tmp_path: Path) -> None:
 
     with pytest.raises(ScenarioRegistryError, match="duplicate scenario_id"):
         load_registry(duplicate)
+
+
+def test_candidate_install_uses_exact_wheel_without_forcing_offline_pytest(
+    tmp_path: Path,
+) -> None:
+    python = tmp_path / "candidate-venv/bin/python"
+    wheel = tmp_path / "candidate-dist/proofline-0.5.0-py3-none-any.whl"
+
+    command = _candidate_install_command(python, wheel)
+
+    assert command == (
+        "uv",
+        "pip",
+        "install",
+        "--python",
+        str(python),
+        str(wheel),
+        "pytest>=8",
+    )
+    assert "--offline" not in command
 
 
 @pytest.mark.candidate_build_only
