@@ -48,7 +48,7 @@ def test_run_dqc_skill_has_valid_frontmatter() -> None:
     metadata = yaml.safe_load(frontmatter)
     assert metadata["name"] == "proofline-run-dqc"
     assert metadata["description"].startswith("Use when ")
-    assert metadata["version"] == "1.1.0"
+    assert metadata["version"] == "1.2.0"
     assert "## When to Use" in body
     assert body.strip()
 
@@ -60,6 +60,27 @@ def test_policy_has_only_line_level_default_checks() -> None:
     defaults = "\n".join(policy["required_line_checks"])
     for component_check in ["compileall", "lock", "wheel", "package", "skill_metadata"]:
         assert component_check not in defaults
+
+
+def test_policy_requires_exact_github_hosted_candidate_gate() -> None:
+    gate = load_policy()["hosted_candidate_gate"]
+    assert gate == {
+        "mandatory": True,
+        "provider": "github-actions",
+        "workflow_path": ".github/workflows/candidate-verification.yml",
+        "candidate_branch": "candidate/{line_id}",
+        "required_jobs": [
+            "build-candidate",
+            "ubuntu-python311",
+            "windows-python311",
+        ],
+        "artifact_name": "proofline-candidate-{run_id}-{run_attempt}",
+        "provenance_filename": "CANDIDATE_PROVENANCE.json",
+        "checksum_filename": "SHA256SUMS",
+        "evidence_helper": ".github/scripts/verify-candidate-evidence.py",
+        "non_pass_action": "block_dqc",
+        "same_v_retry": "forbidden",
+    }
 
 
 def test_exact_bound_passed_iqc_is_reused_without_triggers() -> None:
@@ -92,6 +113,10 @@ def test_contract_separates_required_and_conditional_dqc_responsibilities() -> N
         "explicit Line-level requirement",
         "skip rationale",
         "`proofline validate`의 validation scope를 확대하지 않는다",
+        "mandatory hosted candidate gate",
+        "same-`V` retry",
+        "DQC Checks",
+        "run attempt",
     ]:
         assert required in text
 
@@ -113,6 +138,17 @@ def test_dqc_template_records_bindings_required_checks_and_conditional_decisions
         "explicit_line_level_requirement",
         "Exact IQC binding",
         "Skip 또는 실행 rationale",
+        "### Mandatory Hosted Candidate Gate",
+        "Candidate V",
+        "Run ID / attempt",
+        "build-candidate",
+        "ubuntu-python311",
+        "windows-python311",
+        "Artifact ID / name / expiry",
+        "Wheel filename / SHA-256",
+        "CANDIDATE_PROVENANCE.json",
+        "SHA256SUMS",
+        "verify-candidate-evidence.py",
     ]:
         assert required in text
 
@@ -125,5 +161,8 @@ def test_workflow_keeps_authority_and_runtime_boundaries() -> None:
         "Git branch, commit, merge 또는 push",
         "not applicable은 실패가 아니다",
         "candidate 이후 제품 source 불변",
+        "same-`V` retry",
+        "DQC Checks",
+        "main integration이나 release authority를 부여하지 않는다",
     ]:
         assert required in text

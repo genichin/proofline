@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import re
-import selectors
 import subprocess
 import threading
 import time
@@ -105,6 +104,74 @@ def _transfer_reap_ownership(process: subprocess.Popen[bytes]) -> None:
         reaper.start()
 
 
+def _capture_process(
+    process: subprocess.Popen[bytes], *, deadline: float, output_limit: int
+) -> tuple[int, bytes, bytes]:
+    """Portable bounded capture for POSIX and Windows anonymous pipes."""
+    if process.stdout is None or process.stderr is None:
+        _cleanup_process(process, deadline=deadline)
+        raise HistoryUnavailable
+    buffers = [bytearray(), bytearray()]
+    finished = [threading.Event(), threading.Event()]
+    overflow = threading.Event()
+    read_error = threading.Event()
+    buffer_lock = threading.Lock()
+    captured = 0
+
+    def drain(index: int, stream: object) -> None:
+        nonlocal captured
+        try:
+            while True:
+                chunk = stream.read(65536)  # type: ignore[attr-defined]
+                if not chunk:
+                    break
+                with buffer_lock:
+                    remaining = output_limit - captured
+                    if len(chunk) > remaining:
+                        accepted = max(0, remaining)
+                        buffers[index].extend(chunk[:accepted])
+                        captured += accepted
+                        overflow.set()
+                        break
+                    buffers[index].extend(chunk)
+                    captured += len(chunk)
+        except (OSError, ValueError):
+            read_error.set()
+        finally:
+            finished[index].set()
+
+    readers = [
+        threading.Thread(target=drain, args=(0, process.stdout), daemon=True),
+        threading.Thread(target=drain, args=(1, process.stderr), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+    try:
+        while not all(event.is_set() for event in finished):
+            if overflow.is_set() or read_error.is_set() or time.monotonic() >= deadline:
+                raise HistoryUnavailable
+            time.sleep(0.005)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise HistoryUnavailable
+        returncode = process.wait(timeout=remaining)
+        if overflow.is_set() or read_error.is_set():
+            raise HistoryUnavailable
+        return returncode, bytes(buffers[0]), bytes(buffers[1])
+    except (OSError, subprocess.TimeoutExpired, ValueError) as error:
+        raise HistoryUnavailable from error
+    finally:
+        _cleanup_process(process, deadline=deadline)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+        for reader in readers:
+            reader.join(timeout=PROCESS_CLEANUP_GRACE_SECONDS)
+
+
 def _git(session: _GitSession, *arguments: str) -> bytes:
     command_key = tuple(arguments)
     if time.monotonic() - session.started >= GIT_SESSION_DEADLINE_SECONDS:
@@ -124,10 +191,6 @@ def _git(session: _GitSession, *arguments: str) -> bytes:
         raise HistoryUnavailable
     session.commands += 1
     process: subprocess.Popen[bytes] | None = None
-    selector: selectors.BaseSelector | None = None
-    streams: dict[object, bytearray] = {}
-    output_buffers: dict[object, bytearray] = {}
-    command_output_bytes = 0
     command_deadline = min(
         time.monotonic() + GIT_TIMEOUT_SECONDS,
         session.started + GIT_SESSION_DEADLINE_SECONDS,
@@ -141,59 +204,23 @@ def _git(session: _GitSession, *arguments: str) -> bytes:
             env=environment,
             stdin=subprocess.DEVNULL,
         )
-        if process.stdout is None or process.stderr is None:
+        returncode, stdout, stderr = _capture_process(
+            process,
+            deadline=min(command_deadline, session_deadline),
+            output_limit=min(
+                GIT_OUTPUT_LIMIT,
+                GIT_SESSION_OUTPUT_LIMIT - session.output_bytes,
+            ),
+        )
+        session.output_bytes += len(stdout) + len(stderr)
+        if session.output_bytes > GIT_SESSION_OUTPUT_LIMIT:
             raise HistoryUnavailable
-        selector = selectors.DefaultSelector()
-        for stream in (process.stdout, process.stderr):
-            os.set_blocking(stream.fileno(), False)
-            selector.register(stream, selectors.EVENT_READ)
-            streams[stream] = bytearray()
-            output_buffers[stream] = streams[stream]
-        while streams:
-            now = time.monotonic()
-            remaining = min(command_deadline, session_deadline) - now
-            if remaining <= 0:
-                raise HistoryUnavailable
-            for selector_key, _ in selector.select(timeout=min(0.05, remaining)):
-                stream = selector_key.fileobj
-                chunk = os.read(stream.fileno(), 65536)
-                if not chunk:
-                    selector.unregister(stream)
-                    streams.pop(stream, None)
-                    continue
-                session.output_bytes += len(chunk)
-                command_output_bytes += len(chunk)
-                if (
-                    session.output_bytes > GIT_SESSION_OUTPUT_LIMIT
-                    or command_output_bytes > GIT_OUTPUT_LIMIT
-                ):
-                    raise HistoryUnavailable
-                streams[stream].extend(chunk)
-            if process.poll() is not None and not streams:
-                break
-        remaining = min(command_deadline, session_deadline) - time.monotonic()
-        if remaining <= 0:
-            raise HistoryUnavailable
-        returncode = process.wait(timeout=remaining)
     except (OSError, subprocess.TimeoutExpired, ValueError) as error:
         raise HistoryUnavailable from error
     except HistoryUnavailable:
         raise
-    finally:
-        if selector is not None:
-            selector.close()
-        if process is not None:
-            _cleanup_process(process, deadline=command_deadline)
-            for stream in (process.stdout, process.stderr):
-                if stream is not None:
-                    try:
-                        stream.close()
-                    except OSError:
-                        pass
     if returncode != 0:
         raise HistoryUnavailable
-    stdout = bytes(output_buffers[process.stdout])
-    stderr = bytes(output_buffers[process.stderr])
     if session.cache_bytes + len(stdout) > GIT_SESSION_CACHE_LIMIT:
         raise HistoryUnavailable
     session.cache[command_key] = stdout

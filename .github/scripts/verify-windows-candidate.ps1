@@ -132,7 +132,7 @@ $VersionMatch = [regex]::Match($WheelName, '^proofline-(\d+\.\d+\.\d+)-py3-none-
 Assert-True $VersionMatch.Success "candidate wheel filename is invalid"
 $Version = $VersionMatch.Groups[1].Value
 $CandidateDigest = (Get-FileHash -LiteralPath $WheelPath -Algorithm SHA256).Hash.ToLowerInvariant()
-$ChecksumLines = @(Get-Content -LiteralPath $ChecksumPath | Where-Object { $_.Trim().Length -gt 0 })
+$ChecksumLines = @(Get-Content -LiteralPath $ChecksumPath)
 Assert-True ($ChecksumLines.Count -eq 1) "artifact SHA256SUMS must contain exactly one expected wheel record"
 $EscapedWheelName = [regex]::Escape($WheelName)
 Assert-True ($ChecksumLines[0] -match "^([0-9A-Fa-f]{64})\s+\*?${EscapedWheelName}$") "artifact SHA256SUMS expected wheel record is malformed"
@@ -147,14 +147,14 @@ foreach ($Name in @("USERPROFILE", "HOME", "UV_TOOL_DIR", "UV_TOOL_BIN_DIR", "Pa
 $MachinePathBefore = [Environment]::GetEnvironmentVariable("Path", "Machine")
 $MachineEnvironmentBefore = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" | ConvertTo-Json -Compress)
 $GitPath = Get-FirstApplicationPath "git"
-$Root = Join-Path ([System.IO.Path]::GetTempPath()) ("proofline line 0017 " + [guid]::NewGuid().ToString("N"))
+$Root = Join-Path ([System.IO.Path]::GetTempPath()) ("proofline candidate " + [guid]::NewGuid().ToString("N"))
 $ServerJob = $null
 
 try {
     [void](New-Item -ItemType Directory -Path $Root)
     $Application = Join-Path $Root "application with spaces"
     Copy-Item -LiteralPath (Join-Path $RepoRoot "tests\fixtures\valid-minimal") -Destination $Application -Recurse
-    Set-Content -LiteralPath (Join-Path $Application "pyproject.toml") -Value "[project]`nname='line-0017-fixture'`nversion='0.0.0'`n" -NoNewline
+    Set-Content -LiteralPath (Join-Path $Application "pyproject.toml") -Value "[project]`nname='candidate-fixture'`nversion='0.0.0'`n" -NoNewline
     Set-Content -LiteralPath (Join-Path $Application "uv.lock") -Value "version = 1`nrevision = 1`n" -NoNewline
     & $GitPath -C $Application init -q -b main
     Assert-True ($LASTEXITCODE -eq 0) "fixture git init failed"
@@ -374,7 +374,7 @@ Write-Output "CALLER_SURVIVED"
     Assert-True ([Environment]::GetEnvironmentVariable("Path", "Machine") -ceq $MachinePathBefore) "machine PATH changed"
     $MachineEnvironmentAfter = (Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" | ConvertTo-Json -Compress)
     Assert-True ($MachineEnvironmentAfter -ceq $MachineEnvironmentBefore) "machine-scoped registry environment changed"
-    Write-Output "Line 0017 Windows candidate verification PASS"
+    Write-Output "Candidate Windows verification PASS"
 } finally {
     if ($null -ne $ServerJob) {
         Stop-Job -Id $ServerJob.Id -ErrorAction SilentlyContinue

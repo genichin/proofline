@@ -311,17 +311,19 @@ def test_installed_wheel_cli_accepts_committed_update_draft_lifecycle(
     replace(project / ".proofline/criteria/ac-0003.md", "status: active", "status: draft")
     commit_all(project, "begin AC update")
     before = snapshot(project)
-    dist = tmp_path / "dist"
-    dist.mkdir()
-    built = subprocess.run(
-        ["uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert built.returncode == 0, built.stderr
-    wheel = next(dist.glob("proofline-*.whl"))
+    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
+    if provided:
+        wheel = Path(provided)
+        assert wheel.is_absolute() and wheel.is_file()
+    else:
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        built = subprocess.run(
+            ["uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+        )
+        assert built.returncode == 0, built.stderr
+        wheel = next(dist.glob("proofline-*.whl"))
     venv = tmp_path / "wheel-venv"
     created = subprocess.run(
         ["uv", "venv", "--python", sys.executable, str(venv)],

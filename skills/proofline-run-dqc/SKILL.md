@@ -1,7 +1,7 @@
 ---
 name: proofline-run-dqc
 description: Use when verifying a ProofLine integration candidate at DQC without repeating exact-bound component IQC checks unless a documented trigger requires them.
-version: 1.1.0
+version: 1.2.0
 author: ProofLine
 license: MIT
 metadata:
@@ -66,6 +66,21 @@ conditional_triggers:
   explicit_line_level_requirement:
     action: run_explicit_line_checks
     result_required_before_pass: true
+hosted_candidate_gate:
+  mandatory: true
+  provider: github-actions
+  workflow_path: .github/workflows/candidate-verification.yml
+  candidate_branch: candidate/{line_id}
+  required_jobs:
+    - build-candidate
+    - ubuntu-python311
+    - windows-python311
+  artifact_name: proofline-candidate-{run_id}-{run_attempt}
+  provenance_filename: CANDIDATE_PROVENANCE.json
+  checksum_filename: SHA256SUMS
+  evidence_helper: .github/scripts/verify-candidate-evidence.py
+  non_pass_action: block_dqc
+  same_v_retry: forbidden
 ```
 
 `compileall`, lock, wheel, package, skill metadata와 설치 검사는 `required_line_checks`가 아니다. 해당 검사가 IQC에서 exact-bound passed evidence로 남고 trigger가 없으면 재사용한다.
@@ -117,6 +132,12 @@ Canonical template를 사용해 다음을 남긴다.
 - 네 conditional trigger의 observed 여부, reuse·rerun·blocked decision과 rationale
 - 모든 대상 AC의 종합 판정
 
+### Mandatory Hosted Candidate Gate
+
+`hosted_candidate_gate`는 mandatory이며, exact candidate를 `candidate/{line_id}` remote ref로 push하고 선언된 workflow·세 job·run attempt·artifact·provenance·wheel digest를 `.github/scripts/verify-candidate-evidence.py`로 read-back한다. Helper는 remote ref의 Line identity와 허용된 단일 canonical DQC path를 결속한다. Hosted run, required job, artifact 또는 exact candidate identity가 누락·실패·stale이면 원인과 관계없이 DQC를 blocked로 유지한다. Evidence read-back 이후 DQC commit까지 제품 source, test, build 또는 runtime configuration 변경은 stale이다. same-`V` retry는 허용하지 않는다.
+
+원격 identity와 wheel identity는 DQC Checks에 기록하며, 이 gate는 main integration이나 release authority를 부여하지 않는다.
+
 실행하지 않은 검사를 PASS라고 쓰지 않는다. `reuse` 또는 `not applicable`과 근거를 쓴다.
 
 ### 6. Main integration handoff
@@ -141,3 +162,5 @@ DQC passed 후에도 자동 merge하지 않는다. Main checkout의 branch·clea
 - [ ] DQC 이후 candidate 대비 제품 source 불변을 확인했다.
 - [ ] Main fast-forward 가능성을 확인했다.
 - [ ] 사용자의 통합 authority를 보존했다.
+- [ ] Mandatory hosted candidate gate의 Candidate V, run attempt, required jobs, artifact와 wheel SHA-256을 DQC Checks에 기록했다.
+- [ ] Hosted non-PASS·누락·stale evidence에서 DQC PASS를 차단했고 same-`V` retry를 사용하지 않았다.

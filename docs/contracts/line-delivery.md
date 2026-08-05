@@ -127,7 +127,11 @@ DQC는 다음 Line-level 신호를 candidate마다 확인한다.
 5. 통합 대상 main의 ancestor·fast-forward 가능성
 6. DQC candidate 이후 제품 source 불변
 
+7. mandatory hosted candidate gate의 exact candidate SHA, terminal run attempt, required job 결과, 동일 artifact·provenance·wheel SHA-256 read-back
+
 이 검사는 여러 구현 단위가 합쳐진 candidate와 main integration readiness를 판정하므로 IQC evidence만으로 생략할 수 없다.
+
+Hosted candidate gate는 `.github/workflows/candidate-verification.yml`의 `candidate/**` push만 대상으로 하며, `build-candidate`, `ubuntu-python311`, `windows-python311`의 terminal success와 attempt-qualified artifact를 `.github/scripts/verify-candidate-evidence.py`로 검증한다. Evidence가 누락·실패·identity drift·artifact ambiguity·stale이면 DQC PASS를 금지한다. 이 판단과 remote identity는 DQC Checks에 기록하고 main integration이나 release authority를 부여하지 않는다. same-`V` retry는 허용하지 않는다.
 
 ### IQC evidence 재사용과 조건부 재검사
 

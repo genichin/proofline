@@ -7,7 +7,6 @@ import argparse
 import os
 from pathlib import Path
 import re
-import selectors
 import shutil
 import subprocess
 import sys
@@ -17,7 +16,7 @@ import time
 
 LINE_RE = re.compile(r"line-[0-9]{4}\Z")
 COMMIT_RE = re.compile(r"[0-9a-f]{40}\Z")
-VALIDATE_TIMEOUT_SECONDS = 10
+VALIDATE_TIMEOUT_SECONDS = 30
 VALIDATE_OUTPUT_LIMIT = 256 * 1024
 _REAPER_LOCK = threading.Lock()
 _REAPER_REGISTRY: dict[int, subprocess.Popen[bytes]] = {}
@@ -62,6 +61,80 @@ def _cleanup_validate_process(process: subprocess.Popen[bytes]) -> None:
             process.wait(timeout=0.1)
         except (OSError, subprocess.TimeoutExpired):
             _transfer_validate_reap(process)
+
+
+def _capture_validate_process(
+    process: subprocess.Popen[bytes], *, deadline: float
+) -> tuple[int, bytes, bytes]:
+    """Drain Windows and POSIX anonymous pipes concurrently with hard bounds."""
+    if process.stdout is None or process.stderr is None:
+        _cleanup_validate_process(process)
+        raise WorkflowError("ProofLine validate executable failed to start")
+    buffers = [bytearray(), bytearray()]
+    finished = [threading.Event(), threading.Event()]
+    excessive = threading.Event()
+    read_error = threading.Event()
+    buffer_lock = threading.Lock()
+    captured = 0
+
+    def drain(index: int, stream: object) -> None:
+        nonlocal captured
+        try:
+            while True:
+                chunk = stream.read(65536)  # type: ignore[attr-defined]
+                if not chunk:
+                    break
+                with buffer_lock:
+                    remaining = VALIDATE_OUTPUT_LIMIT - captured
+                    if len(chunk) > remaining:
+                        accepted = max(0, remaining)
+                        buffers[index].extend(chunk[:accepted])
+                        captured += accepted
+                        excessive.set()
+                        break
+                    buffers[index].extend(chunk)
+                    captured += len(chunk)
+        except (OSError, ValueError):
+            read_error.set()
+        finally:
+            finished[index].set()
+
+    readers = [
+        threading.Thread(target=drain, args=(0, process.stdout), daemon=True),
+        threading.Thread(target=drain, args=(1, process.stderr), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+    try:
+        while not all(event.is_set() for event in finished):
+            if excessive.is_set():
+                raise WorkflowError("ProofLine validate produced excessive output")
+            if read_error.is_set():
+                raise WorkflowError("ProofLine validate pipe read failed")
+            if time.monotonic() >= deadline:
+                raise subprocess.TimeoutExpired("proofline validate", VALIDATE_TIMEOUT_SECONDS)
+            time.sleep(0.005)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired("proofline validate", VALIDATE_TIMEOUT_SECONDS)
+        returncode = process.wait(timeout=remaining)
+        if excessive.is_set():
+            raise WorkflowError("ProofLine validate produced excessive output")
+        if read_error.is_set():
+            raise WorkflowError("ProofLine validate pipe read failed")
+        return returncode, bytes(buffers[0]), bytes(buffers[1])
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        raise
+    finally:
+        _cleanup_validate_process(process)
+        for stream in (process.stdout, process.stderr):
+            if stream is not None:
+                try:
+                    stream.close()
+                except OSError:
+                    pass
+        for reader in readers:
+            reader.join(timeout=0.1)
 
 
 def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -247,59 +320,19 @@ def validate_transitional_history(repo: Path, line_path: str) -> None:
     except OSError as exc:
         raise WorkflowError("ProofLine validate executable is unavailable") from exc
 
-    process: subprocess.Popen[bytes] | None = None
-    selector: selectors.BaseSelector | None = None
-    streams: dict[object, bytearray] = {}
-    output_buffers: dict[object, bytearray] = {}
     deadline = time.monotonic() + VALIDATE_TIMEOUT_SECONDS
     try:
         process = subprocess.Popen(
             (str(executable), "validate"), cwd=repo, env=environment,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, stdin=subprocess.DEVNULL,
         )
-        if process.stdout is None or process.stderr is None:
-            raise WorkflowError("ProofLine validate executable failed to start")
-        selector = selectors.DefaultSelector()
-        for stream in (process.stdout, process.stderr):
-            os.set_blocking(stream.fileno(), False)
-            selector.register(stream, selectors.EVENT_READ)
-            streams[stream] = bytearray()
-            output_buffers[stream] = streams[stream]
-        total = 0
-        while streams:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise subprocess.TimeoutExpired((str(executable), "validate"), VALIDATE_TIMEOUT_SECONDS)
-            for key, _ in selector.select(timeout=min(0.05, remaining)):
-                stream = key.fileobj
-                chunk = os.read(stream.fileno(), 65536)
-                if not chunk:
-                    selector.unregister(stream)
-                    streams.pop(stream, None)
-                    continue
-                total += len(chunk)
-                if total > VALIDATE_OUTPUT_LIMIT:
-                    raise WorkflowError("ProofLine validate produced excessive output")
-                streams[stream].extend(chunk)
-        returncode = process.wait(timeout=max(0.0, deadline - time.monotonic()))
-        stdout = bytes(output_buffers.get(process.stdout, b""))
-        stderr = bytes(output_buffers.get(process.stderr, b""))
+        returncode, stdout, stderr = _capture_validate_process(process, deadline=deadline)
     except subprocess.TimeoutExpired as exc:
         raise WorkflowError("ProofLine validate executable timed out") from exc
     except FileNotFoundError as exc:
         raise WorkflowError("ProofLine validate executable is unavailable") from exc
     except OSError as exc:
         raise WorkflowError("ProofLine validate executable failed to start") from exc
-    finally:
-        if selector is not None:
-            selector.close()
-        if process is not None:
-            _cleanup_validate_process(process)
-        if process is not None:
-            for stream in (process.stdout, process.stderr):
-                if stream is not None:
-                    stream.close()
-
     stdout_text = stdout.decode("utf-8", errors="replace")
     stderr_text = stderr.decode("utf-8", errors="replace")
     if stdout_text:

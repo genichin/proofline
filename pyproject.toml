@@ -26,6 +26,9 @@ dev = [
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
+markers = [
+  "candidate_build_only: packaging test executed only by the candidate build job in hosted CI",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/proofline", "src/proofline_home"]

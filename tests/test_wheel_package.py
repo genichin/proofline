@@ -274,6 +274,7 @@ def test_source_checkout_rejects_ledger_only_delta_without_mutation(
     ).stdout == remotes_before
 
 
+@pytest.mark.candidate_build_only
 def test_built_sdist_contains_project_schema_resources(tmp_path: Path) -> None:
     dist = tmp_path / "dist"
     build = subprocess.run(
@@ -296,16 +297,18 @@ def test_built_sdist_contains_project_schema_resources(tmp_path: Path) -> None:
 
 
 def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Path) -> None:
-    dist = tmp_path / "dist"
-    build = subprocess.run(
-        ["uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert build.returncode == 0, build.stderr
-    wheel = next(dist.glob("proofline-*.whl"))
+    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
+    if provided:
+        wheel = Path(provided)
+        assert wheel.is_absolute() and wheel.is_file()
+    else:
+        dist = tmp_path / "dist"
+        build = subprocess.run(
+            ["uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+        )
+        assert build.returncode == 0, build.stderr
+        wheel = next(dist.glob("proofline-*.whl"))
     with zipfile.ZipFile(wheel) as archive:
         names = set(archive.namelist())
         assert "proofline_schema_v1_templates/artifacts/line.md" in names
@@ -820,16 +823,18 @@ print(diagnostic, end='', file=sys.stderr)
 def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workflow(
     tmp_path: Path,
 ) -> None:
-    dist = tmp_path / "dist"
-    build = subprocess.run(
-        ["uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert build.returncode == 0, build.stderr
-    wheel = next(dist.glob("proofline-*.whl"))
+    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
+    if provided:
+        wheel = Path(provided)
+        assert wheel.is_absolute() and wheel.is_file()
+    else:
+        dist = tmp_path / "dist"
+        build = subprocess.run(
+            ["uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)],
+            cwd=ROOT, text=True, capture_output=True, check=False,
+        )
+        assert build.returncode == 0, build.stderr
+        wheel = next(dist.glob("proofline-*.whl"))
     resources = {
         "docs/contracts/line-delivery.md": "proofline_home/contracts/line-delivery.md",
         "docs/contracts/micro-spec-and-iqc.md": "proofline_home/contracts/micro-spec-and-iqc.md",

@@ -1389,6 +1389,13 @@ def run_source_with_env(
 
 @pytest.fixture(scope="module")
 def installed_wheel_cli(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    provided = os.environ.get("PROOFLINE_INSTALLED_EXECUTABLE")
+    if provided:
+        executable = Path(provided)
+        assert executable.is_absolute(), "provided installed executable must be absolute"
+        assert executable.is_file(), "provided installed executable must exist"
+        return executable
+
     root = tmp_path_factory.mktemp("installed-wheel")
     dist = root / "dist"
     dist.mkdir()
@@ -1437,6 +1444,18 @@ def installed_wheel_cli(tmp_path_factory: pytest.TempPathFactory) -> Path:
     assert provenance.returncode == 0, provenance.stderr
 
     return executable
+
+
+def test_installed_wheel_cli_uses_hosted_candidate_executable_without_building(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = tmp_path / ("proofline.exe" if os.name == "nt" else "proofline")
+    executable.write_bytes(b"candidate executable")
+    monkeypatch.setenv("PROOFLINE_INSTALLED_EXECUTABLE", str(executable.resolve()))
+
+    resolved = installed_wheel_cli.__wrapped__(None)  # type: ignore[arg-type]
+
+    assert resolved == executable.resolve()
 
 
 def run_wheel(

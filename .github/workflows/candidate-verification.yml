@@ -1,0 +1,167 @@
+name: Candidate verification
+
+on:
+  push:
+    branches:
+      - 'candidate/**'
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build-candidate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Assert exact candidate HEAD
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v6
+      - name: Build exact candidate wheel
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/proofline-candidate"
+          uv build --wheel --out-dir "$RUNNER_TEMP/proofline-candidate"
+          cd "$RUNNER_TEMP/proofline-candidate"
+          wheel=$(find . -maxdepth 1 -name 'proofline-*.whl' -type f)
+          test "$(printf '%s\n' "$wheel" | sed '/^$/d' | wc -l)" -eq 1
+          wheel_name=${wheel#./}
+          digest=$(sha256sum "$wheel_name" | cut -d ' ' -f1)
+          printf '%s  %s\n' "$digest" "$wheel_name" > SHA256SUMS
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          wheel = next(Path('.').glob('proofline-*.whl'))
+          digest = __import__('hashlib').sha256(wheel.read_bytes()).hexdigest()
+          artifact = f"proofline-candidate-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
+          Path('CANDIDATE_PROVENANCE.json').write_text(json.dumps({
+              'schema_version': 1, 'candidate_sha': os.environ['GITHUB_SHA'],
+              'run_id': int(os.environ['GITHUB_RUN_ID']),
+              'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
+              'workflow_path': '.github/workflows/candidate-verification.yml',
+              'artifact_name': artifact, 'wheel_filename': wheel.name,
+              'wheel_sha256': digest}, sort_keys=True) + '\n')
+          PY
+          cd "$GITHUB_WORKSPACE"
+          PROOFLINE_HOSTED_CANDIDATE_WHEEL="$RUNNER_TEMP/proofline-candidate/$wheel_name" uv run pytest -q -m candidate_build_only
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proofline-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/proofline-candidate/
+          if-no-files-found: error
+          retention-days: 14
+
+  ubuntu-python311:
+    runs-on: ubuntu-latest
+    needs: build-candidate
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Assert exact candidate HEAD
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: proofline-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/proofline-candidate
+      - name: Verify exact wheel and source candidate
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/proofline-candidate"
+          sha256sum --check --strict SHA256SUMS
+          python - <<'PY'
+          import hashlib, json, os
+          from pathlib import Path
+          provenance = json.loads(Path('CANDIDATE_PROVENANCE.json').read_text())
+          wheel = next(Path('.').glob('proofline-*.whl'))
+          expected = {
+              'schema_version': 1, 'candidate_sha': os.environ['GITHUB_SHA'],
+              'run_id': int(os.environ['GITHUB_RUN_ID']),
+              'run_attempt': int(os.environ['GITHUB_RUN_ATTEMPT']),
+              'workflow_path': '.github/workflows/candidate-verification.yml',
+              'artifact_name': f"proofline-candidate-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}",
+              'wheel_filename': wheel.name,
+              'wheel_sha256': hashlib.sha256(wheel.read_bytes()).hexdigest(),
+          }
+          assert provenance == expected
+          PY
+          uv venv --python 3.11 "$RUNNER_TEMP/proofline-wheel-env"
+          uv pip install --python "$RUNNER_TEMP/proofline-wheel-env/bin/python" proofline-*.whl
+          WHEEL=$(realpath proofline-*.whl)
+          cd "$GITHUB_WORKSPACE"
+          export PROOFLINE_INSTALLED_EXECUTABLE="$RUNNER_TEMP/proofline-wheel-env/bin/proofline"
+          export PROOFLINE_HOSTED_CANDIDATE_WHEEL="$WHEEL"
+          PYTHONPATH=src uv run proofline validate
+          "$PROOFLINE_INSTALLED_EXECUTABLE" validate
+          python -m compileall -q src tests
+          uv run pytest -q -m "not candidate_build_only"
+
+  windows-python311:
+    runs-on: windows-latest
+    needs: build-candidate
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Assert exact candidate HEAD
+        shell: pwsh
+        run: if ((git rev-parse HEAD) -ne "${{ github.sha }}") { throw 'candidate HEAD drift' }
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/download-artifact@v4
+        with:
+          name: proofline-candidate-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}\proofline-candidate
+      - name: Run tracked Windows candidate gate
+        shell: powershell
+        run: |
+          $wheel = Get-ChildItem -LiteralPath "${{ runner.temp }}\proofline-candidate" -Filter "proofline-*.whl" -File
+          if ($wheel.Count -ne 1) { throw "expected exactly one candidate wheel" }
+          $checksum = "${{ runner.temp }}\proofline-candidate\SHA256SUMS"
+          $wheelHash = (Get-FileHash -LiteralPath $wheel[0].FullName -Algorithm SHA256).Hash
+          if ([string]::IsNullOrWhiteSpace($wheelHash)) { throw 'candidate wheel digest unavailable' }
+          & .github/scripts/verify-windows-candidate.ps1 -WheelPath $wheel[0].FullName -ChecksumPath $checksum
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify source history and installed wheel regressions
+        shell: pwsh
+        run: |
+          $artifact = "$env:RUNNER_TEMP\proofline-candidate"
+          $wheel = @(Get-ChildItem -LiteralPath $artifact -Filter "proofline-*.whl" -File)
+          if ($wheel.Count -ne 1) { throw "expected exactly one candidate wheel" }
+          $provenance = Get-Content -LiteralPath (Join-Path $artifact "CANDIDATE_PROVENANCE.json") -Raw | ConvertFrom-Json
+          $expectedArtifact = "proofline-candidate-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $digest = (Get-FileHash -LiteralPath $wheel[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($provenance.schema_version -ne 1 -or
+              $provenance.candidate_sha -cne $env:GITHUB_SHA -or
+              $provenance.run_id -ne [int64]$env:GITHUB_RUN_ID -or
+              $provenance.run_attempt -ne [int]$env:GITHUB_RUN_ATTEMPT -or
+              $provenance.workflow_path -cne ".github/workflows/candidate-verification.yml" -or
+              $provenance.artifact_name -cne $expectedArtifact -or
+              $provenance.wheel_filename -cne $wheel[0].Name -or
+              $provenance.wheel_sha256 -cne $digest) { throw "candidate provenance mismatch" }
+          uv venv --python 3.11 "$env:RUNNER_TEMP\proofline-wheel-env"
+          uv pip install --python "$env:RUNNER_TEMP\proofline-wheel-env\Scripts\python.exe" $wheel[0].FullName
+          $env:PROOFLINE_INSTALLED_EXECUTABLE = "$env:RUNNER_TEMP\proofline-wheel-env\Scripts\proofline.exe"
+          $env:PROOFLINE_HOSTED_CANDIDATE_WHEEL = $wheel[0].FullName
+          uv run pytest -q tests/test_windows_history_runtime.py tests/test_start_implementation_windows_runtime.py tests/test_implementation_history.py
+          python -m compileall -q src tests
+          uv run pytest -q -m "not candidate_build_only"
