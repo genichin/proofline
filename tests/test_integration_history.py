@@ -211,6 +211,153 @@ def test_main_first_candidate_accepts_designated_line_spine_and_manifest(
     assert validate_project(repo.path) == []
 
 
+def test_integration_parent_topology_uses_one_bulk_git_query(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, _, _, _ = build_candidate(tmp_path)
+    original_git = implementation_history._git
+    parent_queries: list[tuple[str, ...]] = []
+
+    def counting_git(
+        session: implementation_history._GitSession,
+        *arguments: str,
+        **kwargs: object,
+    ) -> bytes:
+        if arguments and arguments[0] == "rev-list" and "--parents" in arguments:
+            parent_queries.append(arguments)
+        return original_git(session, *arguments, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(implementation_history, "_git", counting_git)
+
+    assert validate_project(repo.path) == []
+    assert len(parent_queries) == 1
+    assert parent_queries[0][:4] == (
+        "rev-list",
+        "--first-parent",
+        "--parents",
+        "--reverse",
+    )
+
+
+def test_bulk_parent_rows_preserve_root_normal_and_merge_shapes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    commits = ["a" * 40, "b" * 40, "c" * 40]
+    rows = b"\n".join(
+        (
+            commits[0].encode("ascii"),
+            f"{commits[1]} {commits[0]}".encode("ascii"),
+            f"{commits[2]} {commits[1]} {'d' * 40}".encode("ascii"),
+        )
+    ) + b"\n"
+    monkeypatch.setattr(implementation_history, "_git", lambda *args, **kwargs: rows)
+
+    assert implementation_history._first_parent_parent_rows(
+        implementation_history._GitSession(tmp_path), commits
+    ) == [
+        [commits[0]],
+        [commits[1], commits[0]],
+        [commits[2], commits[1], "d" * 40],
+    ]
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        f"{'a' * 40}\n".encode("ascii"),
+        f"{'b' * 40} {'a' * 40}\n{'a' * 40}\n".encode("ascii"),
+        f"{'a' * 40}\n{'b' * 40} {'x' * 40}\n".encode("ascii"),
+        f"{'a' * 40}\n{'b' * 40} {'a' * 40}\n".encode("ascii") + b"\xff",
+    ],
+)
+def test_bulk_parent_rows_fail_closed_on_malformed_or_misaligned_output(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rows: bytes
+) -> None:
+    commits = ["a" * 40, "b" * 40]
+    monkeypatch.setattr(implementation_history, "_git", lambda *args, **kwargs: rows)
+
+    with pytest.raises(implementation_history.HistoryUnavailable):
+        implementation_history._first_parent_parent_rows(
+            implementation_history._GitSession(tmp_path), commits
+        )
+
+
+def test_unchanged_history_reads_each_artifact_blob_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, _, _, _ = build_candidate(tmp_path)
+    for index in range(24):
+        path = repo.path / f"governance-{index:02d}.txt"
+        path.write_text(f"governance {index}\n", encoding="utf-8")
+        repo.commit(f"governance-{index:02d}", "advance unrelated governance")
+    commit_count = len(git(repo.path, "rev-list", "--first-parent", "HEAD").splitlines())
+    original_git = implementation_history._git
+    uncached: list[tuple[str, ...]] = []
+
+    def counting_git(
+        session: implementation_history._GitSession,
+        *arguments: str,
+        **kwargs: object,
+    ) -> bytes:
+        before = session.commands
+        result = original_git(session, *arguments, **kwargs)  # type: ignore[arg-type]
+        if session.commands == before + 1:
+            uncached.append(arguments)
+        return result
+
+    monkeypatch.setattr(implementation_history, "_git", counting_git)
+
+    assert validate_project(repo.path) == []
+    blob_reads = [command for command in uncached if command[:2] == ("cat-file", "blob")]
+    assert blob_reads
+    assert len(blob_reads) == len({command[2] for command in blob_reads})
+    assert len(blob_reads) < commit_count
+    assert not [command for command in uncached if command[:1] == ("show",)]
+
+
+@pytest.mark.parametrize(
+    "tree_output",
+    [
+        b"100644 blob " + b"a" * 40 + b" missing-tab\0",
+        b"100644 blob " + b"a" * 40 + b"\t.proofline/lines/line-0001/line-0001.md",
+        (
+            b"100644 blob "
+            + b"a" * 40
+            + b"\t.proofline/lines/line-0001/line-0001.md\0"
+        )
+        * 2,
+        b"100644 blob " + b"A" * 40 + b"\t.proofline/lines/line-0001/line-0001.md\0",
+        b"100644 blob " + b"a" * 40 + b"\t.proofline/lines/\xff.md\0",
+    ],
+)
+def test_tree_entries_fail_closed_on_malformed_or_duplicate_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tree_output: bytes
+) -> None:
+    monkeypatch.setattr(
+        implementation_history, "_git", lambda *args, **kwargs: tree_output
+    )
+
+    with pytest.raises(implementation_history.HistoryUnavailable):
+        implementation_history._tree_paths(
+            implementation_history._GitSession(tmp_path), "a" * 40
+        )
+
+
+def test_canonical_artifact_must_be_a_blob(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = ".proofline/lines/line-0001/line-0001.md"
+    tree_output = b"160000 commit " + b"a" * 40 + b"\t" + path.encode() + b"\0"
+    monkeypatch.setattr(
+        implementation_history, "_git", lambda *args, **kwargs: tree_output
+    )
+    session = implementation_history._GitSession(tmp_path)
+    paths = implementation_history._tree_paths(session, "b" * 40)
+
+    with pytest.raises(implementation_history.HistoryUnavailable):
+        implementation_history._file(session, "b" * 40, path, paths)
+
+
 def test_positive_integration_validation_preserves_exact_repository_snapshot(
     tmp_path: Path,
 ) -> None:

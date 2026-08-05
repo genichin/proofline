@@ -33,6 +33,10 @@ GIT_SESSION_DEADLINE_SECONDS = 120
 PROCESS_CLEANUP_GRACE_SECONDS = 0.1
 _REAPER_LOCK = threading.Lock()
 _REAPER_REGISTRY: dict[int, subprocess.Popen[bytes]] = {}
+_LS_TREE_RECORD = re.compile(
+    rb"(040000|100644|100755|120000|160000) (blob|tree|commit) "
+    rb"([0-9a-f]{40}|[0-9a-f]{64})\t(.+)"
+)
 
 
 @dataclass(frozen=True, order=True)
@@ -50,9 +54,12 @@ class HistoryUnavailable(Exception):
 class _GitSession:
     root: Path
     cache: dict[tuple[str, ...], bytes] = field(default_factory=dict)
+    tree_entries: dict[str, dict[str, tuple[str, str]]] = field(default_factory=dict)
+    tree_paths: dict[str, set[str]] = field(default_factory=dict)
     commands: int = 0
     output_bytes: int = 0
     cache_bytes: int = 0
+    tree_cache_bytes: int = 0
     started: float = field(default_factory=time.monotonic)
 
 
@@ -233,7 +240,10 @@ def _git(
     if returncode != 0:
         raise HistoryUnavailable
     if cache:
-        if session.cache_bytes + len(stdout) > GIT_SESSION_CACHE_LIMIT:
+        if (
+            session.cache_bytes + session.tree_cache_bytes + len(stdout)
+            > GIT_SESSION_CACHE_LIMIT
+        ):
             raise HistoryUnavailable
         session.cache[command_key] = stdout
         session.cache_bytes += len(stdout)
@@ -409,19 +419,56 @@ def _spec_revision_bytes(content: bytes | None) -> bytes | None:
 
 
 def _tree_paths(session: _GitSession, commit: str) -> set[str]:
-    output = _git(
-        session, "ls-tree", "-r", "--name-only", commit, "--", ".proofline/lines"
-    )
-    try:
-        return set(output.decode("utf-8").splitlines())
-    except UnicodeError as error:
-        raise HistoryUnavailable from error
+    cached = session.tree_paths.get(commit)
+    if cached is not None:
+        return cached
+
+    output = _git(session, "ls-tree", "-r", "-z", "--full-tree", commit)
+    if output and not output.endswith(b"\0"):
+        raise HistoryUnavailable
+    entries: dict[str, tuple[str, str]] = {}
+    cache_charge = 128
+    for raw_record in output.split(b"\0")[:-1] if output else ():
+        match = _LS_TREE_RECORD.fullmatch(raw_record)
+        if match is None:
+            raise HistoryUnavailable
+        mode_bytes, type_bytes, oid_bytes, path_bytes = match.groups()
+        if (
+            (type_bytes == b"blob" and mode_bytes not in {b"100644", b"100755", b"120000"})
+            or (type_bytes == b"tree" and mode_bytes != b"040000")
+            or (type_bytes == b"commit" and mode_bytes != b"160000")
+        ):
+            raise HistoryUnavailable
+        try:
+            path = path_bytes.decode("utf-8", errors="strict")
+            object_type = type_bytes.decode("ascii")
+            oid = oid_bytes.decode("ascii")
+        except UnicodeError as error:
+            raise HistoryUnavailable from error
+        if path in entries:
+            raise HistoryUnavailable
+        entries[path] = (object_type, oid)
+        cache_charge += 256 + len(path_bytes) + len(type_bytes) + len(oid_bytes)
+
+    if session.cache_bytes + session.tree_cache_bytes + cache_charge > GIT_SESSION_CACHE_LIMIT:
+        raise HistoryUnavailable
+    paths = set(entries)
+    session.tree_entries[commit] = entries
+    session.tree_paths[commit] = paths
+    session.tree_cache_bytes += cache_charge
+    return paths
 
 
 def _file(session: _GitSession, commit: str, path: str, paths: set[str]) -> bytes | None:
     if path not in paths:
         return None
-    return _git(session, "show", f"{commit}:{path}")
+    entries = session.tree_entries.get(commit)
+    if entries is None:
+        raise HistoryUnavailable
+    entry = entries.get(path)
+    if entry is None or entry[0] != "blob":
+        raise HistoryUnavailable
+    return _git(session, "cat-file", "blob", entry[1])
 
 
 def _current_artifacts(root: Path) -> tuple[dict[str, dict[str, object]], list[str]]:
@@ -475,6 +522,46 @@ def _history(
     return commits, [_tree_paths(session, commit) for commit in commits]
 
 
+def _first_parent_parent_rows(
+    session: _GitSession, main_commits: list[str]
+) -> list[list[str]]:
+    """Collect exact first-parent topology in one validated Git query."""
+    if not main_commits:
+        raise HistoryUnavailable
+    output = _git(
+        session,
+        "rev-list",
+        "--first-parent",
+        "--parents",
+        "--reverse",
+        main_commits[-1],
+    )
+    try:
+        lines = output.decode("ascii").splitlines()
+    except UnicodeError as error:
+        raise HistoryUnavailable from error
+    if len(lines) != len(main_commits):
+        raise HistoryUnavailable
+
+    oid_length = len(main_commits[0])
+    rows: list[list[str]] = []
+    for index, (expected, line) in enumerate(zip(main_commits, lines, strict=True)):
+        values = line.split()
+        if (
+            not values
+            or values[0] != expected
+            or (index == 0 and len(values) != 1)
+            or (index > 0 and len(values) < 2)
+            or any(
+                len(value) != oid_length or re.fullmatch(r"[0-9a-f]+", value) is None
+                for value in values
+            )
+        ):
+            raise HistoryUnavailable
+        rows.append(values)
+    return rows
+
+
 def _is_line_quality_head(
     session: _GitSession, line_path: str, line_head: str
 ) -> bool:
@@ -513,12 +600,10 @@ def _integration_spine(
         f".proofline/lines/line-{line_number}/integration-{line_number}.md"
     )
     candidates: list[tuple[int, str, str, str]] = []
-    for index, commit in enumerate(main_commits):
-        parent_line = _git(session, "rev-list", "--parents", "-n", "1", commit)
-        try:
-            values = parent_line.decode("ascii").split()
-        except UnicodeError as error:
-            raise HistoryUnavailable from error
+    parent_rows = _first_parent_parent_rows(session, main_commits)
+    for index, (commit, values) in enumerate(
+        zip(main_commits, parent_rows, strict=True)
+    ):
         if len(values) < 3:
             continue
         main_parent, line_head = values[1], values[2]
@@ -538,11 +623,7 @@ def _integration_spine(
 
     candidate_index, candidate, main_parent, line_head = candidates[-1]
     candidate_paths = main_trees[candidate_index]
-    parent_line = _git(session, "rev-list", "--parents", "-n", "1", candidate)
-    try:
-        parent_values = parent_line.decode("ascii").split()
-    except UnicodeError as error:
-        raise HistoryUnavailable from error
+    parent_values = parent_rows[candidate_index]
     if len(parent_values) != 3:
         return main_commits, main_trees, [
             _line_error(
@@ -1064,14 +1145,8 @@ def _validate_historical_cycles(
 
 
 def _artifact_at(session: _GitSession, commit: str, path: str) -> bytes | None:
-    listed = _git(session, "ls-tree", "--name-only", commit, "--", path)
-    try:
-        paths = listed.decode("utf-8").splitlines()
-    except UnicodeError as error:
-        raise HistoryUnavailable from error
-    if paths != [path]:
-        return None
-    return _git(session, "show", f"{commit}:{path}")
+    paths = _tree_paths(session, commit)
+    return _file(session, commit, path, paths)
 
 
 def _changed_paths(session: _GitSession, commit: str) -> list[str]:
