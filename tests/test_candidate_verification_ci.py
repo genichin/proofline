@@ -127,6 +127,9 @@ def test_windows_gate_fixture_is_persisted_as_valid_terminal_history(tmp_path: P
     assert "execution_status: verifying" in fixture_line.read_text(encoding="utf-8")
     gate = WINDOWS_GATE.read_text(encoding="utf-8")
     assert '$FixtureLineText.Replace("execution_status: verifying", "execution_status: delivered")' in gate
+    disable_normalization = '& $GitPath -C $Application config core.autocrlf false'
+    assert disable_normalization in gate
+    assert gate.index(disable_normalization) < gate.index('& $GitPath -C $Application add -A')
     project = tmp_path / "windows-gate-fixture"
     shutil.copytree(WINDOWS_FIXTURE, project)
     copied_line = project / ".proofline/lines/line-0001/line-0001.md"

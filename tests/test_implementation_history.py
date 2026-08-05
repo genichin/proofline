@@ -45,6 +45,8 @@ class HistoryRepo:
         git(path, "init", "-q", "-b", "main")
         git(path, "config", "user.email", "proofline@example.invalid")
         git(path, "config", "user.name", "ProofLine Test")
+        git(path, "config", "gc.auto", "0")
+        git(path, "config", "maintenance.auto", "false")
         repo = cls(path)
         repo.write_line("not_started", policy=None)
         repo.write_discovery()
@@ -54,7 +56,6 @@ class HistoryRepo:
             repo.write_ms(number, "not_started")
         repo.commit("approval", "approve specification")
         return repo
-
     def commit(self, name: str, message: str) -> str:
         git(self.path, "add", "-A")
         git(self.path, "commit", "-qm", message)
@@ -186,6 +187,12 @@ class HistoryRepo:
             if line.startswith("implementation_history:"):
                 return line.split(":", 1)[1].strip()
         return None
+
+
+def test_history_repo_disables_background_git_maintenance(tmp_path: Path) -> None:
+    repo = HistoryRepo.create(tmp_path)
+    assert git(repo.path, "config", "--get", "gc.auto").stdout.strip() == "0"
+    assert git(repo.path, "config", "--get", "maintenance.auto").stdout.strip() == "false"
 
 
 def build_valid_cycle(tmp_path: Path, *, order: str = "baseline-first") -> HistoryRepo:

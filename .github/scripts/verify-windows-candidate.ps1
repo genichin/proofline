@@ -162,6 +162,8 @@ try {
     Set-Content -LiteralPath (Join-Path $Application "uv.lock") -Value "version = 1`nrevision = 1`n" -NoNewline
     & $GitPath -C $Application init -q -b main
     Assert-True ($LASTEXITCODE -eq 0) "fixture git init failed"
+    & $GitPath -C $Application config core.autocrlf false
+    Assert-True ($LASTEXITCODE -eq 0) "fixture git newline configuration failed"
     & $GitPath -C $Application add -A
     & $GitPath -C $Application -c user.name="ProofLine Gate" -c user.email="proofline@example.invalid" commit -qm "fixture baseline"
     Assert-True ($LASTEXITCODE -eq 0) "fixture git commit failed"
