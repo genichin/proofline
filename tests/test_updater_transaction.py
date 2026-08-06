@@ -293,6 +293,7 @@ def test_target_package_post_verification_failure_rolls_back_package_and_harness
     assert installs == ["0.6.2", "0.6.0"]
     for relative, content in old_payload.items():
         assert (home / ".proofline" / relative).read_bytes() == content
+    assert not (home / ".proofline/operations").exists()
     assert not list(home.glob(".proofline-update-*"))
 
 
@@ -312,4 +313,5 @@ def test_home_post_verification_failure_restores_old_package_and_harness(
     assert installs == ["0.6.2", "0.6.0"]
     for relative, content in old_payload.items():
         assert (home / ".proofline" / relative).read_bytes() == content
+    assert not (home / ".proofline/operations").exists()
     assert not list(home.glob(".proofline-update-*"))
