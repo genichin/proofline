@@ -1,0 +1,154 @@
+{
+  "schema_version": 1,
+  "plan_id": "candidate-clean-runner-v1",
+  "harness_dependencies": [
+    {
+      "name": "colorama",
+      "version": "0.4.6",
+      "version_source": "uv.lock",
+      "online_endpoint": "https://pypi.org/simple",
+      "offline_wheelhouse_required": true
+    },
+    {
+      "name": "iniconfig",
+      "version": "2.3.0",
+      "version_source": "uv.lock",
+      "online_endpoint": "https://pypi.org/simple",
+      "offline_wheelhouse_required": true
+    },
+    {
+      "name": "packaging",
+      "version": "26.2",
+      "version_source": "uv.lock",
+      "online_endpoint": "https://pypi.org/simple",
+      "offline_wheelhouse_required": true
+    },
+    {
+      "name": "pluggy",
+      "version": "1.6.0",
+      "version_source": "uv.lock",
+      "online_endpoint": "https://pypi.org/simple",
+      "offline_wheelhouse_required": true
+    },
+    {
+      "name": "pygments",
+      "version": "2.20.0",
+      "version_source": "uv.lock",
+      "online_endpoint": "https://pypi.org/simple",
+      "offline_wheelhouse_required": true
+    },
+    {
+      "name": "pytest",
+      "version": "9.1.1",
+      "version_source": "uv.lock",
+      "online_endpoint": "https://pypi.org/simple",
+      "offline_wheelhouse_required": true
+    }
+  ],
+  "platforms": {
+    "ubuntu-python311": {
+      "steps": [
+        {
+          "step_id": "verify-wheel",
+          "argv": ["proofline-clean-runner-internal", "verify-wheel", "{wheel}"],
+          "endpoint": null,
+          "version_source": null,
+          "network_mode": "none",
+          "publication_prerequisite": "none"
+        },
+        {
+          "step_id": "verify-checksum",
+          "argv": ["proofline-clean-runner-internal", "verify-checksum", "{wheel}", "{wheel_sha256}"],
+          "endpoint": null,
+          "version_source": null,
+          "network_mode": "none",
+          "publication_prerequisite": "none"
+        },
+        {
+          "step_id": "create-environment",
+          "argv": ["uv", "venv", "--python", "{python_interpreter}", "{environment}"],
+          "endpoint": null,
+          "version_source": null,
+          "network_mode": "none",
+          "publication_prerequisite": "none"
+        },
+        {
+          "step_id": "install-candidate",
+          "argv": ["uv", "pip", "install", "--python", "{python}", "--no-deps", "--no-index", "{wheel}"],
+          "endpoint": null,
+          "version_source": null,
+          "network_mode": "none",
+          "publication_prerequisite": "none"
+        },
+        {
+          "step_id": "provision-harness",
+          "argv": ["uv", "pip", "install", "--python", "{python}", "--index-url", "https://pypi.org/simple", "colorama==0.4.6", "iniconfig==2.3.0", "packaging==26.2", "pluggy==1.6.0", "pygments==2.20.0", "pytest==9.1.1"],
+          "endpoint": "https://pypi.org/simple",
+          "version_source": "uv.lock",
+          "network_mode": "online-offline",
+          "publication_prerequisite": "none"
+        },
+        {
+          "step_id": "contract-probe",
+          "argv": ["{python}", "-m", "pytest", "-p", "no:cacheprovider", "{contract_probe}"],
+          "endpoint": null,
+          "version_source": "uv.lock",
+          "network_mode": "none",
+          "publication_prerequisite": "none"
+        }
+      ]
+    },
+    "windows-python311": {
+      "steps": [
+        {
+          "step_id": "verify-wheel",
+          "argv": ["proofline-clean-runner-internal", "verify-wheel", "{wheel}"],
+          "endpoint": null,
+          "version_source": null,
+          "network_mode": "none",
+          "publication_prerequisite": "none"
+        },
+        {
+          "step_id": "verify-checksum",
+          "argv": ["proofline-clean-runner-internal", "verify-checksum", "{wheel}", "{wheel_sha256}"],
+          "endpoint": null,
+          "version_source": null,
+          "network_mode": "none",
+          "publication_prerequisite": "none"
+        },
+        {
+          "step_id": "create-environment",
+          "argv": ["uv", "venv", "--python", "{python_interpreter}", "{environment}"],
+          "endpoint": null,
+          "version_source": null,
+          "network_mode": "none",
+          "publication_prerequisite": "none"
+        },
+        {
+          "step_id": "install-candidate",
+          "argv": ["uv", "pip", "install", "--python", "{python}", "--no-deps", "--no-index", "{wheel}"],
+          "endpoint": null,
+          "version_source": null,
+          "network_mode": "none",
+          "publication_prerequisite": "none"
+        },
+        {
+          "step_id": "provision-harness",
+          "argv": ["uv", "pip", "install", "--python", "{python}", "--index-url", "https://pypi.org/simple", "colorama==0.4.6", "iniconfig==2.3.0", "packaging==26.2", "pluggy==1.6.0", "pygments==2.20.0", "pytest==9.1.1"],
+          "endpoint": "https://pypi.org/simple",
+          "version_source": "uv.lock",
+          "network_mode": "online-offline",
+          "publication_prerequisite": "none"
+        },
+        {
+          "step_id": "contract-probe",
+          "argv": ["{python}", "-m", "pytest", "-p", "no:cacheprovider", "{contract_probe}"],
+          "endpoint": null,
+          "version_source": "uv.lock",
+          "network_mode": "none",
+          "publication_prerequisite": "none"
+        }
+      ]
+    }
+  }
+}

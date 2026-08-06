@@ -135,6 +135,19 @@ DQC는 다음 Line-level 신호를 candidate마다 확인한다.
 
 Hosted candidate gate는 `.github/workflows/candidate-verification.yml`의 `candidate/**` push만 대상으로 하며, `build-candidate`, `ubuntu-python311`, `windows-python311`의 terminal success와 attempt-qualified artifact를 `.github/scripts/verify-candidate-evidence.py`로 검증한다. Evidence가 누락·실패·identity drift·artifact ambiguity·stale이면 DQC PASS를 금지한다. 이 판단과 remote identity는 DQC Checks에 기록하고 main integration이나 release authority를 부여하지 않는다. same-`V` retry는 허용하지 않는다.
 
+Remote candidate ref handoff 전에는 exact `V`와 이미 build된 single wheel에 대해 non-authoritative local contract gate를 다음 순서로 수행한다.
+
+```bash
+python3 skills/proofline-run-dqc/scripts/preflight_clean_runner.py \
+  --repo "$PWD" --candidate "$V" \
+  --wheel "$WHEEL" --provenance "$PREFLIGHT_PROVENANCE" \
+  --network-mode online
+```
+
+Offline mode는 `--network-mode offline --wheelhouse "$WHEELHOUSE"`를 사용한다. 이 helper는 shared `candidate-clean-runner-v1` plan의 exact wheel-before-check order, declared endpoint, `uv.lock` version source, online/offline network mode와 `publication_prerequisite: none`을 검사한다. Windows plan 판정은 `contract_only`이며 native Windows 또는 hosted PASS가 아니다. Helper는 remote push·workflow dispatch를 수행하지 않고 hosted result field나 DQC result를 만들지 않으며 mandatory hosted authority를 대체하지 않는다.
+
+운영 순서는 (1) `preflight_clean_runner.py` pre-push PASS, (2) 별도 handoff의 `candidate/{line_id}` ref push, (3) mandatory hosted `build-candidate`, `ubuntu-python311`, `windows-python311` 세 job, (4) `.github/scripts/verify-candidate-evidence.py`의 exact attempt evidence read-back, (5) 별도 mandatory Line-level evidence를 포함한 DQC 판정이다. Local PASS와 hosted 세 job/evidence/DQC는 각각 독립 gate다.
+
 ### IQC evidence 재사용과 조건부 재검사
 
 IQC는 exact Micro-SPEC·implementation commit에서 focused behavior, component-specific safety, package·wheel, skill 형식, compile, lock과 설치 검사를 소유한다. Passed IQC의 exact binding이 candidate ancestry에 포함되고 아래 trigger가 없으면 DQC는 그 evidence를 재사용하며 동일 검사를 기본적으로 반복하지 않는다.

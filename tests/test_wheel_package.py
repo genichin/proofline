@@ -894,6 +894,8 @@ def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workfl
         "skills/proofline-run-iqc/SKILL.md": "proofline_home/skills/proofline-run-iqc/SKILL.md",
         "skills/proofline-run-dqc/SKILL.md": "proofline_home/skills/proofline-run-dqc/SKILL.md",
         "skills/proofline-run-dqc/scripts/preflight_integration_candidate.py": "proofline_home/skills/proofline-run-dqc/scripts/preflight_integration_candidate.py",
+        "skills/proofline-run-dqc/scripts/preflight_clean_runner.py": "proofline_home/skills/proofline-run-dqc/scripts/preflight_clean_runner.py",
+        "skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json": "proofline_home/skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json",
         "templates/schema-v1/artifacts/integration.md": "proofline_home/templates/schema-v1/artifacts/integration.md",
         "templates/schema-v1/artifacts/legacy-migration.md": "proofline_home/templates/schema-v1/artifacts/legacy-migration.md",
         "docs/operations/legacy-nonterminal-history-migration.md": "proofline_home/operations/legacy-nonterminal-history-migration.md",
