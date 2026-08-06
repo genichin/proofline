@@ -19,6 +19,13 @@ from proofline.home_writer import (
 )
 
 
+OPERATIONS = {
+    "legacy-nonterminal-history-migration.md": b"migration operation\n",
+    "official-wheel-release.md": b"release operation\n",
+    "proofline-tool-environment.md": b"environment operation\n",
+}
+
+
 def snapshot(root: Path) -> dict[str, tuple[str, bytes | None]]:
     if not root.exists() and not root.is_symlink():
         return {}
@@ -38,6 +45,12 @@ def resource_files(marker: str) -> dict[str, bytes]:
     return {
         "agent-context.md": f"agent-{marker}\n".encode(),
         "contracts/storage.md": f"contract-{marker}\n".encode(),
+        **{
+            f"operations/{name}": content.replace(
+                b"operation", f"operation-{marker}".encode()
+            )
+            for name, content in OPERATIONS.items()
+        },
         "templates/schema-v1/artifacts/line.md": f"template-{marker}\n".encode(),
         "skills/proofline-start-line/SKILL.md": f"skill-{marker}\n".encode(),
     }
@@ -69,7 +82,13 @@ def test_target_wheel_payload_is_path_safe_and_manifest_bound(tmp_path: Path) ->
     ]
 
 
-@pytest.mark.parametrize("entry", ["proofline_home/contracts/../../escape", "proofline_home/unexpected.txt"])
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "proofline_home/operations/../../escape",
+        "proofline_home/unexpected.txt",
+    ],
+)
 def test_target_wheel_rejects_unsafe_or_unexpected_resource(tmp_path: Path, entry: str) -> None:
     wheel = tmp_path / "proofline-0.4.0-py3-none-any.whl"
     with zipfile.ZipFile(wheel, "w") as archive:
@@ -85,7 +104,7 @@ def test_target_wheel_rejects_resource_symlink(tmp_path: Path) -> None:
     with zipfile.ZipFile(wheel, "w") as archive:
         for relative, content in resource_files("new").items():
             archive.writestr(f"proofline_home/{relative}", content)
-        link = zipfile.ZipInfo("proofline_home/contracts/link.md")
+        link = zipfile.ZipInfo("proofline_home/operations/link.md")
         link.create_system = 3
         link.external_attr = 0o120777 << 16
         archive.writestr(link, b"../../outside")
@@ -99,8 +118,34 @@ def test_target_wheel_rejects_duplicate_resource_name(tmp_path: Path) -> None:
         for relative, content in resource_files("new").items():
             archive.writestr(f"proofline_home/{relative}", content)
         with pytest.warns(UserWarning, match="Duplicate name"):
-            archive.writestr("proofline_home/contracts/storage.md", b"duplicate")
+            archive.writestr(
+                "proofline_home/operations/official-wheel-release.md", b"duplicate"
+            )
     with pytest.raises(HomeInitError, match="duplicate"):
+        payload_from_wheel(wheel, "0.4.0")
+
+
+@pytest.mark.parametrize("kind", ["missing", "empty", "incomplete"])
+def test_target_wheel_rejects_incomplete_operations_group(
+    tmp_path: Path, kind: str
+) -> None:
+    wheel = tmp_path / "proofline-0.4.0-py3-none-any.whl"
+    resources = resource_files("new")
+    if kind in {"missing", "empty"}:
+        resources = {
+            relative: content
+            for relative, content in resources.items()
+            if not relative.startswith("operations/")
+        }
+    else:
+        resources.pop("operations/proofline-tool-environment.md")
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for relative, content in resources.items():
+            archive.writestr(f"proofline_home/{relative}", content)
+        if kind == "empty":
+            archive.writestr("proofline_home/operations/", b"")
+
+    with pytest.raises(HomeInitError, match="incomplete home resource payload"):
         payload_from_wheel(wheel, "0.4.0")
 
 

@@ -17,21 +17,28 @@ import zipfile
 import yaml
 
 
-_RESOURCE_GROUPS = ("contracts", "templates", "skills")
+_RESOURCE_GROUPS = ("contracts", "operations", "templates", "skills")
 _SOURCE_ROOT = Path(__file__).resolve().parents[2]
 _STABLE_VERSION = re.compile(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)")
 _SOURCE_GROUPS = {
     "contracts": _SOURCE_ROOT / "docs" / "contracts",
+    "operations": _SOURCE_ROOT / "docs" / "operations",
     "templates": _SOURCE_ROOT / "templates",
     "skills": _SOURCE_ROOT / "skills",
 }
 _PATHS = (
     "~/.proofline/manifest.yaml",
     "~/.proofline/contracts/",
+    "~/.proofline/operations/",
     "~/.proofline/templates/",
     "~/.proofline/skills/",
     "~/.proofline/agent-context.md",
 )
+_REQUIRED_OPERATIONS = {
+    "legacy-nonterminal-history-migration.md",
+    "official-wheel-release.md",
+    "proofline-tool-environment.md",
+}
 
 
 class HomeInitError(Exception):
@@ -61,7 +68,9 @@ def _included(parts: tuple[str, ...]) -> bool:
     )
 
 
-def _source_files(root: Path, *, skills: bool = False) -> dict[str, bytes]:
+def _source_files(
+    root: Path, *, skills: bool = False, markdown: bool = False
+) -> dict[str, bytes]:
     if root.is_symlink() or not root.is_dir():
         raise HomeInitError(f"resource conflict: {root}")
     payload: dict[str, bytes] = {}
@@ -72,6 +81,8 @@ def _source_files(root: Path, *, skills: bool = False) -> dict[str, bytes]:
             continue
         relative = path.relative_to(root)
         if skills and (not relative.parts or not relative.parts[0].startswith("proofline-")):
+            continue
+        if markdown and path.suffix != ".md":
             continue
         if _included(relative.parts):
             payload[relative.as_posix()] = path.read_bytes()
@@ -99,7 +110,9 @@ def _payload() -> dict[str, bytes]:
         for group in _RESOURCE_GROUPS:
             packaged = package.joinpath(group)
             files = _package_files(packaged) if packaged.is_dir() else _source_files(
-                _SOURCE_GROUPS[group], skills=group == "skills"
+                _SOURCE_GROUPS[group],
+                skills=group == "skills",
+                markdown=group == "operations",
             )
             if not files:
                 raise HomeInitError(f"empty resource group: {group}")
@@ -119,7 +132,7 @@ def _payload() -> dict[str, bytes]:
 def build_home_payload(version: str, resources_payload: dict[str, bytes]) -> dict[str, bytes]:
     if not resources_payload:
         raise HomeInitError("empty home resource payload")
-    allowed_roots = {"contracts", "templates", "skills"}
+    allowed_roots = set(_RESOURCE_GROUPS)
     groups: set[str] = set()
     clean: dict[str, bytes] = {}
     for relative, content in resources_payload.items():
@@ -133,7 +146,16 @@ def build_home_payload(version: str, resources_payload: dict[str, bytes]) -> dic
                 raise HomeInitError(f"unexpected resource path: {relative}")
             groups.add(candidate.parts[0])
         clean[relative] = content
-    if "agent-context.md" not in clean or groups != allowed_roots:
+    operations = {
+        relative.removeprefix("operations/")
+        for relative in clean
+        if relative.startswith("operations/")
+    }
+    if (
+        "agent-context.md" not in clean
+        or groups != allowed_roots
+        or not _REQUIRED_OPERATIONS.issubset(operations)
+    ):
         raise HomeInitError("incomplete home resource payload")
     records = [
         {"path": path, "sha256": hashlib.sha256(content).hexdigest()}
