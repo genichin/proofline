@@ -428,12 +428,30 @@ def _clean_environment(cache: Path, home: Path, temp: Path) -> dict[str, str]:
     return environment
 
 
-def _become_subreaper() -> None:
-    if sys.platform.startswith("linux"):
-        try:
-            ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)
-        except (AttributeError, OSError):
-            pass
+def _linux_child_subreaper_state() -> int | None:
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        prctl = ctypes.CDLL(None, use_errno=True).prctl
+    except (AttributeError, OSError) as exc:
+        raise OSError("Linux prctl is unavailable") from exc
+    state = ctypes.c_int()
+    if prctl(37, ctypes.byref(state), 0, 0, 0) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    return state.value
+
+
+def _set_linux_child_subreaper_state(value: int) -> None:
+    if not sys.platform.startswith("linux"):
+        return
+    try:
+        prctl = ctypes.CDLL(None, use_errno=True).prctl
+    except (AttributeError, OSError) as exc:
+        raise OSError("Linux prctl is unavailable") from exc
+    if prctl(36, value, 0, 0, 0) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
 
 
 def _stop_process_group(process: subprocess.Popen[bytes]) -> None:
@@ -467,14 +485,13 @@ def _stop_process_group(process: subprocess.Popen[bytes]) -> None:
                 break
 
 
-def _run_provision(
+def _run_provision_with_subreaper(
     argv: list[str],
     *,
     cwd: Path,
     environment: dict[str, str],
     budget: ExecutionBudget,
 ) -> None:
-    _become_subreaper()
     try:
         process = subprocess.Popen(
             argv,
@@ -570,6 +587,35 @@ def _run_provision(
         process.stderr.close()
         for reader in readers:
             reader.join(timeout=0.2)
+
+
+def _run_provision(
+    argv: list[str],
+    *,
+    cwd: Path,
+    environment: dict[str, str],
+    budget: ExecutionBudget,
+) -> None:
+    try:
+        previous_subreaper = _linux_child_subreaper_state()
+        if previous_subreaper == 0:
+            _set_linux_child_subreaper_state(1)
+    except OSError as exc:
+        raise ValidationError(
+            "clean_preflight.provision.failed", "child subreaper setup failed"
+        ) from exc
+    try:
+        _run_provision_with_subreaper(
+            argv, cwd=cwd, environment=environment, budget=budget
+        )
+    finally:
+        if previous_subreaper is not None:
+            try:
+                _set_linux_child_subreaper_state(previous_subreaper)
+            except OSError as exc:
+                raise ValidationError(
+                    "clean_preflight.provision.failed", "child subreaper restore failed"
+                ) from exc
 
 
 def _provision_clean_environment(

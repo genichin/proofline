@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import ctypes
 import hashlib
 import importlib.util
 import json
 import os
 import stat
 import subprocess
+import sys
 import textwrap
 import time
 from pathlib import Path
@@ -563,6 +565,56 @@ def _pid_exists(pid: int) -> bool:
     except ProcessLookupError:
         return False
     return True
+
+
+def _linux_child_subreaper_state(value: int | None = None) -> int:
+    libc = ctypes.CDLL(None, use_errno=True)
+    if value is not None:
+        if libc.prctl(36, value, 0, 0, 0) != 0:
+            error = ctypes.get_errno()
+            raise OSError(error, os.strerror(error))
+    state = ctypes.c_int()
+    if libc.prctl(37, ctypes.byref(state), 0, 0, 0) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    return state.value
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux prctl contract")
+@pytest.mark.parametrize("outcome", ["success", "timeout", "output-overflow", "nonzero"])
+def test_provision_restores_callers_child_subreaper_state(helper, tmp_path, outcome):
+    bodies = {
+        "success": "pass",
+        "timeout": "import time; time.sleep(60)",
+        "output-overflow": "import os; os.write(1, b'x' * 1200)",
+        "nonzero": "raise SystemExit(7)",
+    }
+    expected_codes = {
+        "timeout": "clean_preflight.timeout",
+        "output-overflow": "clean_preflight.output_limit",
+        "nonzero": "clean_preflight.provision.failed",
+    }
+    executable = _fixture_executable(tmp_path, bodies[outcome])
+    original = _linux_child_subreaper_state()
+    try:
+        _linux_child_subreaper_state(0)
+        before = _linux_child_subreaper_state()
+        operation = lambda: helper._run_provision(
+            [str(executable)],
+            cwd=tmp_path,
+            environment=helper._clean_environment(tmp_path / "cache", tmp_path, tmp_path),
+            budget=helper.ExecutionBudget(
+                seconds=0.1 if outcome == "timeout" else 5,
+                output_limit=1024,
+            ),
+        )
+        if outcome == "success":
+            operation()
+        else:
+            _assert_code(helper, expected_codes[outcome], operation)
+        assert _linux_child_subreaper_state() == before
+    finally:
+        _linux_child_subreaper_state(original)
 
 
 def test_execution_timeout_kills_child_and_descendant(helper, tmp_path):
