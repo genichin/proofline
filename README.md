@@ -25,16 +25,32 @@ curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.6.0/install.s
 curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.6.0/install.sh | sh -s -- --force
 ```
 
-Windows 11에서는 repository root의 candidate `install.ps1`을 native PowerShell에서 실행합니다. 이 경로는 Windows native temporary path, `Invoke-WebRequest`, `Get-FileHash`를 사용하며 Git Bash나 관리자 권한을 요구하지 않고 machine PATH 또는 registry를 변경하지 않습니다.
+Windows 11에서는 exact-tag installer를 native PowerShell의 temporary file로 내려받아 실행합니다.
 
 ```powershell
-.\install.ps1
+$InstallerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("proofline-install-" + [guid]::NewGuid().ToString("N") + ".ps1")
+try {
+    Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/genichin/proofline/v0.6.0/install.ps1" -OutFile $InstallerPath
+    & $InstallerPath
+} finally {
+    if (Test-Path -LiteralPath $InstallerPath) {
+        Remove-Item -LiteralPath $InstallerPath -Force
+    }
+}
 ```
 
 기존 installation을 명시적으로 교체할 때만 `-Force`를 전달합니다.
 
 ```powershell
-.\install.ps1 -Force
+$InstallerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("proofline-install-" + [guid]::NewGuid().ToString("N") + ".ps1")
+try {
+    Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/genichin/proofline/v0.6.0/install.ps1" -OutFile $InstallerPath
+    & $InstallerPath -Force
+} finally {
+    if (Test-Path -LiteralPath $InstallerPath) {
+        Remove-Item -LiteralPath $InstallerPath -Force
+    }
+}
 ```
 
 설치 후에는 user harness를 먼저 초기화하고, initialized harness의 update 상태를 확인한 다음 project를 검증합니다.

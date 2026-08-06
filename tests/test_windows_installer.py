@@ -76,15 +76,23 @@ def test_windows_installer_errors_do_not_exit_the_calling_powershell_host() -> N
     assert not re.search(r"catch\s*\{[^}]*exit\s+1", text, re.DOTALL)
 
 
-def test_readme_documents_repository_candidate_windows_install_without_unpublished_url() -> None:
+def test_readme_documents_immutable_tagged_windows_install_from_a_temporary_file() -> None:
     text = README.read_text(encoding="utf-8")
-    unpublished = "https://raw.githubusercontent.com/genichin/proofline/v0.6.0/install.ps1"
+    installer_url = "https://raw.githubusercontent.com/genichin/proofline/v0.6.0/install.ps1"
 
-    assert unpublished not in text
-    assert ".\\install.ps1" in text
-    assert ".\\install.ps1 -Force" in text
-    assert "관리자 권한" in text
-    assert "Git Bash" in text
+    assert text.count(installer_url) == 2
+    assert "Invoke-WebRequest" in text
+    assert "[System.IO.Path]::GetTempPath()" in text
+    assert "& $InstallerPath" in text
+    assert "& $InstallerPath -Force" in text
+    assert "Remove-Item -LiteralPath $InstallerPath -Force" in text
+    assert ".\\install.ps1" not in text
+    assert "repository root" not in text
+    assert "candidate `install.ps1`" not in text
+    assert "관리자 권한" not in text
+    assert "Git Bash" not in text
+    assert "machine PATH" not in text
+    assert "registry" not in text
 
 
 def test_readme_install_verification_sections_use_initialized_approved_order() -> None:
