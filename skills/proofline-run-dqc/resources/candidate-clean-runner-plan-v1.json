@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "plan_id": "candidate-clean-runner-v1",
+  "harness_dependencies": [
+    {
+      "name": "pytest",
+      "version": "9.1.1",
+      "version_source": "uv.lock",
+      "online_endpoint": "https://pypi.org/simple",
+      "offline_wheelhouse_required": true
+    }
+  ],
+  "platforms": {
+    "ubuntu-python311": {
+      "steps": [
+        {
+          "step_id": "verify-wheel",
+          "argv": ["python3", "-m", "proofline_clean_runner", "verify-wheel", "{wheel}"],
+          "endpoint": null,
+          "version_source": null,
+          "network_mode": "none",
+          "publication_prerequisite": "none"
+        },
+        {
+          "step_id": "verify-checksum",
+          "argv": ["python3", "-m", "proofline_clean_runner", "verify-checksum", "{wheel}", "{wheel_sha256}"],
+          "endpoint": null,
+          "version_source": null,
+          "network_mode": "none",
+          "publication_prerequisite": "none"
+        },
+        {
+          "step_id": "create-environment",
+          "argv": ["uv", "venv", "--python", "3.11", "{environment}"],
+          "endpoint": null,
+          "version_source": null,
+          "network_mode": "none",
+          "publication_prerequisite": "none"
+        },
+        {
+          "step_id": "provision-harness",
+          "argv": ["uv", "pip", "install", "--python", "{python}", "--index-url", "https://pypi.org/simple", "pytest==9.1.1"],
+          "endpoint": "https://pypi.org/simple",
+          "version_source": "uv.lock",
+          "network_mode": "online-offline",
+          "publication_prerequisite": "none"
+        },
+        {
+          "step_id": "contract-probe",
+          "argv": ["{python}", "-m", "pytest", "-p", "no:cacheprovider", "{contract_probe}"],
+          "endpoint": null,
+          "version_source": "uv.lock",
+          "network_mode": "none",
+          "publication_prerequisite": "none"
+        }
+      ]
+    },
+    "windows-python311": {
+      "steps": [
+        {
+          "step_id": "verify-wheel",
+          "argv": ["python", "-m", "proofline_clean_runner", "verify-wheel", "{wheel}"],
+          "endpoint": null,
+          "version_source": null,
+          "network_mode": "none",
+          "publication_prerequisite": "none"
+        },
+        {
+          "step_id": "verify-checksum",
+          "argv": ["python", "-m", "proofline_clean_runner", "verify-checksum", "{wheel}", "{wheel_sha256}"],
+          "endpoint": null,
+          "version_source": null,
+          "network_mode": "none",
+          "publication_prerequisite": "none"
+        },
+        {
+          "step_id": "create-environment",
+          "argv": ["uv", "venv", "--python", "3.11", "{environment}"],
+          "endpoint": null,
+          "version_source": null,
+          "network_mode": "none",
+          "publication_prerequisite": "none"
+        },
+        {
+          "step_id": "provision-harness",
+          "argv": ["uv", "pip", "install", "--python", "{python}", "--index-url", "https://pypi.org/simple", "pytest==9.1.1"],
+          "endpoint": "https://pypi.org/simple",
+          "version_source": "uv.lock",
+          "network_mode": "online-offline",
+          "publication_prerequisite": "none"
+        },
+        {
+          "step_id": "contract-probe",
+          "argv": ["{python}", "-m", "pytest", "-p", "no:cacheprovider", "{contract_probe}"],
+          "endpoint": null,
+          "version_source": "uv.lock",
+          "network_mode": "none",
+          "publication_prerequisite": "none"
+        }
+      ]
+    }
+  }
+}
