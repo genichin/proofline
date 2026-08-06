@@ -29,6 +29,7 @@ ProofLine artifact의 역할은 다음과 같이 구분한다.
 | IQC | Micro-SPEC 구현의 검증 결과 | exact Micro-SPEC과 implementation commit에 대한 검사, AC별 결과 및 전체 판정 |
 | DQC | Line 통합 후보의 전체 검증 결과 | 모든 IQC를 종합한 exact candidate commit의 전체 판정 |
 | Integration manifest | main-first 통합 후보의 immutable parent binding | target Line, exact main parent `M`, exact Line head `Q` |
+| Legacy migration | pre-policy non-terminal Line의 one-time history adoption authority | exact `B^1`, exhaustive MS/IQC/DQC blob inventory와 containing baseline `B` |
 
 핵심 source-of-truth 규칙은 다음과 같다.
 
@@ -60,6 +61,7 @@ Micro-SPEC      ms-NNNN-SSS
 IQC             iqc-NNNN-SSS
 DQC             dqc-NNNN
 Integration     integration-NNNN
+Legacy migration legacy-migration-NNNN
 ```
 
 - `NNNN`은 `0001`부터 시작하는 4자리 decimal Line ID이다.
@@ -103,6 +105,7 @@ line-0001/
 │   │   │   ├── req-0001.md
 │   │   │   ├── dqc-0001.md
 │   │   │   ├── integration-0001.md
+│   │   │   ├── legacy-migration-0001.md
 │   │   │   └── micro-specs/
 │   │   │       ├── ms-0001-001.md
 │   │   │       ├── iqc-0001-001.md
@@ -131,6 +134,7 @@ Micro-SPEC      .proofline/lines/line-<NNNN>/micro-specs/ms-<NNNN>-<SSS>.md
 IQC             .proofline/lines/line-<NNNN>/micro-specs/iqc-<NNNN>-<SSS>.md
 DQC             .proofline/lines/line-<NNNN>/dqc-<NNNN>.md
 Integration     .proofline/lines/line-<NNNN>/integration-<NNNN>.md
+Legacy migration .proofline/lines/line-<NNNN>/legacy-migration-<NNNN>.md
 AC              .proofline/criteria/ac-<NNNN>.md
 ```
 
