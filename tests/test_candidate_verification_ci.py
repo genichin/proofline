@@ -141,11 +141,19 @@ def test_verified_absolute_wheel_is_exported_to_each_hosted_consumer_suite() -> 
         for step in workflow["jobs"]["ubuntu-python311"]["steps"]
         if step.get("name") == "Verify exact wheel and source candidate"
     )
-    windows = next(
-        step["run"]
-        for step in workflow["jobs"]["windows-python311"]["steps"]
+    windows_steps = workflow["jobs"]["windows-python311"]["steps"]
+    checksum_index = next(
+        index
+        for index, step in enumerate(windows_steps)
+        if step.get("name") == "Run tracked Windows candidate gate"
+    )
+    consumer_index = next(
+        index
+        for index, step in enumerate(windows_steps)
         if step.get("name") == "Verify source history and installed wheel regressions"
     )
+    assert checksum_index < consumer_index
+    windows = windows_steps[consumer_index]["run"]
 
     assert ubuntu.index("sha256sum --check --strict SHA256SUMS") < ubuntu.index(
         "WHEEL=$(realpath proofline-*.whl)"
