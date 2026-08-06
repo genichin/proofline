@@ -7,6 +7,7 @@ import os
 import stat
 import subprocess
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -420,6 +421,8 @@ def test_disposable_provisioning_uses_exact_local_wheel_and_isolated_state(
     assert all(str(valid_case["wheel"]) not in record["argv"] for record in (create, harness_install))
     for record in records:
         assert Path(record["cwd"]).is_absolute()
+        assert not Path(record["cwd"]).exists()
+        assert not Path(record["env"]["HOME"]).exists()
         assert record["env"]["HOME"] != str(ambient_home)
         assert record["env"]["USERPROFILE"] != str(ambient_home)
         assert record["env"]["UV_CACHE_DIR"] != str(ambient_cache)
@@ -505,5 +508,173 @@ def test_offline_network_attempt_has_exact_diagnostic(helper, valid_case, fake_u
             repo=valid_case["repo"], candidate=valid_case["candidate"], wheel=valid_case["wheel"],
             provenance_path=valid_case["provenance"], plan_path=PLAN, network_mode="offline",
             wheelhouse=wheelhouse, uv_executable=str(fake_uv[0]),
+        ),
+    )
+
+
+OUTCOME_KEYS = {
+    "schema_version", "outcome", "diagnostic_code", "candidate_commit",
+    "wheel_filename", "wheel_sha256", "network_mode", "plan_id",
+}
+
+
+def test_argparse_interface_is_exact_and_required(helper):
+    parser = helper._parser()
+    options = {option for action in parser._actions for option in action.option_strings}
+    assert options == {
+        "-h", "--help", "--repo", "--candidate", "--wheel", "--provenance",
+        "--network-mode", "--wheelhouse", "--plan",
+    }
+    assert {action.dest for action in parser._actions if action.required} == {
+        "repo", "candidate", "wheel", "provenance", "network_mode",
+    }
+
+
+def test_cli_parse_failure_emits_one_strict_safe_json_outcome(helper, capsys):
+    assert helper.main([]) != 0
+    captured = capsys.readouterr()
+    lines = captured.out.splitlines()
+    assert len(lines) == 1
+    outcome = json.loads(lines[0])
+    assert set(outcome) == OUTCOME_KEYS
+    assert outcome == {
+        "schema_version": 1,
+        "outcome": "fail",
+        "diagnostic_code": "clean_preflight.input.invalid",
+        "candidate_commit": "",
+        "wheel_filename": "",
+        "wheel_sha256": "",
+        "network_mode": "",
+        "plan_id": "",
+    }
+    assert len(captured.err.encode()) <= 1024
+
+
+def _fixture_executable(tmp_path: Path, body: str) -> Path:
+    executable = tmp_path / "fixture-child"
+    executable.write_text("#!/usr/bin/env python3\n" + textwrap.dedent(body), encoding="utf-8")
+    executable.chmod(executable.stat().st_mode | stat.S_IXUSR)
+    return executable
+
+
+def _pid_exists(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def test_execution_timeout_kills_child_and_descendant(helper, tmp_path):
+    pid_file = tmp_path / "descendant.pid"
+    executable = _fixture_executable(
+        tmp_path,
+        """
+        import pathlib, subprocess, sys, time
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        pathlib.Path(sys.argv[1]).write_text(str(child.pid), encoding="ascii")
+        time.sleep(60)
+        """,
+    )
+    budget = helper.ExecutionBudget(seconds=0.5, output_limit=4096)
+    _assert_code(
+        helper,
+        "clean_preflight.timeout",
+        lambda: helper._run_provision(
+            [str(executable), str(pid_file)], cwd=tmp_path,
+            environment=helper._clean_environment(tmp_path / "cache", tmp_path, tmp_path),
+            budget=budget,
+        ),
+    )
+    descendant = int(pid_file.read_text(encoding="ascii"))
+    for _ in range(50):
+        if not _pid_exists(descendant):
+            break
+        time.sleep(0.02)
+    assert not _pid_exists(descendant)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "os.write(1, b'o' * 1200)",
+        "os.write(2, b'e' * 1200)",
+        "os.write(1, b'o' * 600); os.write(2, b'e' * 600)",
+    ],
+    ids=["stdout-only", "stderr-only", "shared-combined"],
+)
+def test_output_cap_has_exact_diagnostic_for_each_stream_shape(helper, tmp_path, body):
+    executable = _fixture_executable(tmp_path, f"import os\n{body}\n")
+    started = time.monotonic()
+    _assert_code(
+        helper,
+        "clean_preflight.output_limit",
+        lambda: helper._run_provision(
+            [str(executable)], cwd=tmp_path,
+            environment=helper._clean_environment(tmp_path / "cache", tmp_path, tmp_path),
+            budget=helper.ExecutionBudget(seconds=5, output_limit=1024),
+        ),
+    )
+    assert time.monotonic() - started < 2
+
+
+def test_fast_exit_buffered_output_is_fully_drained_and_counted(helper, tmp_path):
+    executable = _fixture_executable(
+        tmp_path,
+        """
+        import os
+        os.write(1, b"o" * 30000)
+        os.write(2, b"e" * 30000)
+        """,
+    )
+    budget = helper.ExecutionBudget(seconds=5, output_limit=100000)
+    helper._run_provision(
+        [str(executable)], cwd=tmp_path,
+        environment=helper._clean_environment(tmp_path / "cache", tmp_path, tmp_path),
+        budget=budget,
+    )
+    assert budget.output_used == 60000
+
+
+def test_mutation_is_detected_after_successful_provision(helper, valid_case, fake_uv):
+    executable, _ = fake_uv
+    marker = valid_case["repo"] / "tracked.txt"
+    source = executable.read_text(encoding="utf-8")
+    executable.write_text(
+        source.replace(
+            "record = {",
+            f"pathlib.Path({str(marker)!r}).write_text('mutated\\n', encoding='utf-8')\nrecord = {{",
+        ),
+        encoding="utf-8",
+    )
+    _assert_code(
+        helper,
+        "clean_preflight.mutation",
+        lambda: helper.run_clean_preflight(
+            repo=valid_case["repo"], candidate=valid_case["candidate"], wheel=valid_case["wheel"],
+            provenance_path=valid_case["provenance"], plan_path=PLAN, network_mode="online",
+            wheelhouse=None, uv_executable=str(executable),
+        ),
+    )
+
+
+def test_nonzero_precedes_mutation_diagnostic(helper, valid_case, fake_uv):
+    executable, _ = fake_uv
+    marker = valid_case["repo"] / "tracked.txt"
+    source = executable.read_text(encoding="utf-8")
+    executable.write_text(
+        source.replace(
+            "record = {",
+            f"pathlib.Path({str(marker)!r}).write_text('mutated\\n', encoding='utf-8')\nraise SystemExit(9)\nrecord = {{",
+        ),
+        encoding="utf-8",
+    )
+    _assert_code(
+        helper,
+        "clean_preflight.provision.failed",
+        lambda: helper.run_clean_preflight(
+            repo=valid_case["repo"], candidate=valid_case["candidate"], wheel=valid_case["wheel"],
+            provenance_path=valid_case["provenance"], plan_path=PLAN, network_mode="online",
+            wheelhouse=None, uv_executable=str(executable),
         ),
     )

@@ -4,15 +4,21 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import enum
 import hashlib
 import json
 import os
+import queue
 import re
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 
 PROVENANCE_KEYS = {
@@ -62,6 +68,35 @@ class ValidationError(RuntimeError):
         super().__init__(detail)
         self.code = code
         self.detail = detail
+
+
+class ExecutionBudget:
+    """One deadline and one output allowance shared by all child commands."""
+
+    def __init__(self, seconds: float = 30.0, output_limit: int = 64 * 1024):
+        self.deadline = time.monotonic() + seconds
+        self.output_limit = output_limit
+        self.output_used = 0
+
+    def remaining(self) -> float:
+        return max(0.0, self.deadline - time.monotonic())
+
+
+class _ExecutionFailure(enum.Enum):
+    TIMEOUT = "timeout"
+    OUTPUT_LIMIT = "output_limit"
+
+
+_EXECUTION_FAILURES = {
+    _ExecutionFailure.TIMEOUT: (
+        "clean_preflight.timeout",
+        "provisioning deadline exceeded",
+    ),
+    _ExecutionFailure.OUTPUT_LIMIT: (
+        "clean_preflight.output_limit",
+        "provisioning output limit exceeded",
+    ),
+}
 
 
 def _fail(code: str, detail: str) -> None:
@@ -393,27 +428,148 @@ def _clean_environment(cache: Path, home: Path, temp: Path) -> dict[str, str]:
     return environment
 
 
-def _run_provision(argv: list[str], *, cwd: Path, environment: dict[str, str]) -> None:
+def _become_subreaper() -> None:
+    if sys.platform.startswith("linux"):
+        try:
+            ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0)
+        except (AttributeError, OSError):
+            pass
+
+
+def _stop_process_group(process: subprocess.Popen[bytes]) -> None:
+    if os.name == "posix":
+        for sig, pause in ((signal.SIGTERM, 0.2), (signal.SIGKILL, 0.2)):
+            try:
+                os.killpg(process.pid, sig)
+            except ProcessLookupError:
+                break
+            end = time.monotonic() + pause
+            while process.poll() is None and time.monotonic() < end:
+                time.sleep(0.01)
+    elif process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=0.2)
+        except subprocess.TimeoutExpired:
+            process.kill()
     try:
-        completed = subprocess.run(
+        process.wait(timeout=0.2)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        process.wait(timeout=0.2)
+    if os.name == "posix":
+        while True:
+            try:
+                descendant, _ = os.waitpid(-process.pid, os.WNOHANG)
+            except ChildProcessError:
+                break
+            if descendant == 0:
+                break
+
+
+def _run_provision(
+    argv: list[str],
+    *,
+    cwd: Path,
+    environment: dict[str, str],
+    budget: ExecutionBudget,
+) -> None:
+    _become_subreaper()
+    try:
+        process = subprocess.Popen(
             argv,
             cwd=cwd,
             env=environment,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True,
-            timeout=30,
-            check=False,
+            start_new_session=(os.name == "posix"),
         )
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except OSError as exc:
         raise ValidationError(
             "clean_preflight.provision.failed", "provisioning command could not complete"
         ) from exc
-    if completed.returncode != 0:
-        if "clean_preflight.network.forbidden" in completed.stderr:
-            _fail("clean_preflight.network.forbidden", "offline subprocess attempted network access")
-        _fail("clean_preflight.provision.failed", "provisioning command returned nonzero")
+    assert process.stdout is not None and process.stderr is not None
+    chunks: queue.Queue[tuple[str, bytes | None]] = queue.Queue(maxsize=4)
+    stop_readers = threading.Event()
+
+    def publish(item: tuple[str, bytes | None]) -> bool:
+        while not stop_readers.is_set():
+            try:
+                chunks.put(item, timeout=0.02)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def read_stream(name: str, stream: Any) -> None:
+        try:
+            while not stop_readers.is_set():
+                chunk = stream.read(4096)
+                if not publish((name, chunk or None)) or not chunk:
+                    return
+        except OSError:
+            publish((name, None))
+
+    readers = [
+        threading.Thread(target=read_stream, args=("stdout", process.stdout), daemon=True),
+        threading.Thread(target=read_stream, args=("stderr", process.stderr), daemon=True),
+    ]
+    for reader in readers:
+        reader.start()
+    stderr = bytearray()
+    closed: set[str] = set()
+    failure: _ExecutionFailure | None = None
+    contained = False
+    drain_deadline: float | None = None
+    try:
+        while len(closed) != 2:
+            if failure is None and budget.remaining() <= 0:
+                failure = _ExecutionFailure.TIMEOUT
+            if (failure is not None or process.poll() is not None) and not contained:
+                # The direct child may exit while descendants still own its pipes.
+                # Contain the whole group first, then consume every queued/final byte.
+                _stop_process_group(process)
+                contained = True
+                drain_deadline = time.monotonic() + 1.0
+            if drain_deadline is not None and time.monotonic() >= drain_deadline:
+                break
+            try:
+                wait = 0.05
+                if drain_deadline is not None:
+                    wait = min(wait, max(0.0, drain_deadline - time.monotonic()))
+                else:
+                    wait = min(wait, budget.remaining())
+                name, chunk = chunks.get(timeout=wait)
+            except queue.Empty:
+                continue
+            if chunk is None:
+                closed.add(name)
+                continue
+            budget.output_used += len(chunk)
+            if name == "stderr" and len(stderr) < 1024:
+                stderr.extend(chunk[: 1024 - len(stderr)])
+            if failure is None and budget.output_used > budget.output_limit:
+                failure = _ExecutionFailure.OUTPUT_LIMIT
+        returncode = process.poll()
+        if not contained:
+            _stop_process_group(process)
+            returncode = process.returncode
+        if failure is not None:
+            code, detail = _EXECUTION_FAILURES[failure]
+            _fail(code, detail)
+        if returncode != 0:
+            if b"clean_preflight.network.forbidden" in stderr:
+                _fail("clean_preflight.network.forbidden", "offline subprocess attempted network access")
+            _fail("clean_preflight.provision.failed", "provisioning command returned nonzero")
+    finally:
+        if process.poll() is None:
+            _stop_process_group(process)
+        stop_readers.set()
+        process.stdout.close()
+        process.stderr.close()
+        for reader in readers:
+            reader.join(timeout=0.2)
 
 
 def _provision_clean_environment(
@@ -423,6 +579,7 @@ def _provision_clean_environment(
     network_mode: str,
     wheelhouse: Path | None,
     uv_executable: str,
+    budget: ExecutionBudget,
 ) -> None:
     exact_wheelhouse = (
         _offline_inventory(wheelhouse, dependencies)
@@ -454,6 +611,7 @@ def _provision_clean_environment(
             [uv_executable, "venv", "--python", "3.11", str(environment_path)],
             cwd=work,
             environment=environment,
+            budget=budget,
         )
         _run_provision(
             [
@@ -468,6 +626,7 @@ def _provision_clean_environment(
             ],
             cwd=work,
             environment=environment,
+            budget=budget,
         )
         requirements = [f"{name}=={version}" for name, version in dependencies]
         harness_argv = [
@@ -485,7 +644,37 @@ def _provision_clean_environment(
                 ["--offline", "--no-index", "--find-links", str(exact_wheelhouse)]
             )
         harness_argv.extend(requirements)
-        _run_provision(harness_argv, cwd=work, environment=environment)
+        _run_provision(
+            harness_argv, cwd=work, environment=environment, budget=budget
+        )
+
+
+def _path_snapshot(path: Path) -> tuple[tuple[str, int, bytes], ...]:
+    records: list[tuple[str, int, bytes]] = []
+    candidates = [path]
+    if path.is_dir() and not path.is_symlink():
+        candidates.extend(sorted(path.rglob("*")))
+    for candidate in candidates:
+        try:
+            metadata = candidate.lstat()
+        except OSError:
+            records.append((str(candidate), -1, b""))
+            continue
+        payload = b""
+        if candidate.is_symlink():
+            payload = os.readlink(candidate).encode("utf-8", errors="surrogateescape")
+        elif candidate.is_file():
+            try:
+                payload = candidate.read_bytes()
+            except OSError:
+                payload = b"<unreadable>"
+        records.append((str(candidate), metadata.st_mode, payload))
+    return tuple(records)
+
+
+def _observable_snapshot(paths: list[Path]) -> tuple[tuple[str, tuple[tuple[str, int, bytes], ...]], ...]:
+    unique = sorted({str(path): path for path in paths}.items())
+    return tuple((name, _path_snapshot(path)) for name, path in unique)
 
 
 def run_clean_preflight(
@@ -509,18 +698,39 @@ def run_clean_preflight(
     if network_mode not in {"online", "offline"}:
         _fail("clean_preflight.plan.invalid", "network mode is invalid")
     dependencies = _plan_dependencies(plan_path)
-    _provision_clean_environment(
-        wheel=wheel,
-        dependencies=dependencies,
-        network_mode=network_mode,
-        wheelhouse=wheelhouse,
-        uv_executable=uv_executable,
-    )
+    if network_mode == "offline":
+        _offline_inventory(wheelhouse, dependencies)
+    protected = [repo, wheel, provenance_path, plan_path]
+    if wheelhouse is not None:
+        protected.append(wheelhouse)
+    before = _observable_snapshot(protected)
+    primary: ValidationError | None = None
+    try:
+        _provision_clean_environment(
+            wheel=wheel,
+            dependencies=dependencies,
+            network_mode=network_mode,
+            wheelhouse=wheelhouse,
+            uv_executable=uv_executable,
+            budget=ExecutionBudget(),
+        )
+    except ValidationError as exc:
+        primary = exc
+    mutated = _observable_snapshot(protected) != before
+    if primary is not None:
+        raise primary
+    if mutated:
+        _fail("clean_preflight.mutation", "protected observable state changed")
     return {**identity, "network_mode": network_mode}
 
 
+class _OutcomeParser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        raise ValidationError("clean_preflight.input.invalid", message)
+
+
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = _OutcomeParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path)
     parser.add_argument("--candidate", required=True)
     parser.add_argument("--wheel", required=True, type=Path)
@@ -536,9 +746,20 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _emit_outcome(value: dict[str, Any]) -> None:
+    print(json.dumps(value, separators=(",", ":"), sort_keys=True))
+
+
+def _bounded_stderr(detail: str) -> None:
+    single_line = " ".join(detail.splitlines())
+    payload = single_line.encode("utf-8", errors="replace")[:1023]
+    print(payload.decode("utf-8", errors="ignore"), file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    args: argparse.Namespace | None = None
     try:
+        args = _parser().parse_args(argv)
         identity = run_clean_preflight(
             repo=args.repo,
             candidate=args.candidate,
@@ -549,34 +770,28 @@ def main(argv: list[str] | None = None) -> int:
             wheelhouse=args.wheelhouse,
         )
     except ValidationError as exc:
-        print(
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "outcome": "fail",
-                    "diagnostic_code": exc.code,
-                    "candidate_commit": "",
-                    "wheel_filename": "",
-                    "wheel_sha256": "",
-                    "network_mode": args.network_mode,
-                    "plan_id": "candidate-clean-runner-v1",
-                },
-                separators=(",", ":"),
-            )
-        )
-        print(exc.detail[:1024], file=sys.stderr)
-        return 1
-    print(
-        json.dumps(
+        _emit_outcome(
             {
                 "schema_version": 1,
-                "outcome": "pass",
-                "diagnostic_code": "clean_preflight.pass",
-                **identity,
-                "network_mode": args.network_mode,
-            },
-            separators=(",", ":"),
+                "outcome": "fail",
+                "diagnostic_code": exc.code,
+                "candidate_commit": "",
+                "wheel_filename": "",
+                "wheel_sha256": "",
+                "network_mode": "" if args is None else args.network_mode,
+                "plan_id": "",
+            }
         )
+        _bounded_stderr(exc.detail)
+        return 1
+    _emit_outcome(
+        {
+            "schema_version": 1,
+            "outcome": "pass",
+            "diagnostic_code": "clean_preflight.pass",
+            **identity,
+            "network_mode": args.network_mode,
+        }
     )
     return 0
 
