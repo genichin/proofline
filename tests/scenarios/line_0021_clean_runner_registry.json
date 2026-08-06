@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "scenario_count": 23,
+  "scenarios": [
+    {"id": "valid-baseline", "axis": "baseline", "expect": [0, "clean_preflight.pass"]},
+    {"id": "provenance-schema", "axis": "provenance_schema", "expect": [1, "clean_preflight.provenance.invalid"]},
+    {"id": "provenance-duplicate", "axis": "provenance_duplicate", "expect": [1, "clean_preflight.provenance.invalid"]},
+    {"id": "provenance-type", "axis": "provenance_type", "expect": [1, "clean_preflight.provenance.invalid"]},
+    {"id": "candidate-binding", "axis": "candidate", "expect": [1, "clean_preflight.candidate.mismatch"]},
+    {"id": "wheel-count", "axis": "wheel_count", "expect": [1, "clean_preflight.wheel.count"]},
+    {"id": "wheel-filename", "axis": "wheel_filename", "expect": [1, "clean_preflight.wheel.filename"]},
+    {"id": "wheel-digest", "axis": "wheel_digest", "expect": [1, "clean_preflight.wheel.digest"]},
+    {"id": "plan-endpoint", "axis": "plan_endpoint", "expect": [1, "clean_preflight.plan.invalid"]},
+    {"id": "plan-version-source", "axis": "plan_version_source", "expect": [1, "clean_preflight.plan.invalid"]},
+    {"id": "plan-network", "axis": "plan_network", "expect": [1, "clean_preflight.plan.invalid"]},
+    {"id": "plan-publication", "axis": "plan_publication", "expect": [1, "clean_preflight.publication_prerequisite"]},
+    {"id": "plan-unbounded", "axis": "plan_unbounded", "expect": [1, "clean_preflight.plan.unbounded"]},
+    {"id": "plan-undeclared", "axis": "plan_undeclared", "expect": [1, "clean_preflight.dependency.undeclared"]},
+    {"id": "online-empty-cache", "axis": "empty_cache", "expect": [0, "clean_preflight.pass"]},
+    {"id": "online-warm-cache", "axis": "warm_cache", "expect": [0, "clean_preflight.pass"]},
+    {"id": "offline-complete", "axis": "offline_complete", "expect": [0, "clean_preflight.pass"]},
+    {"id": "offline-missing", "axis": "offline_missing", "expect": [1, "clean_preflight.dependency.missing_offline"]},
+    {"id": "offline-network-trap", "axis": "offline_network_trap", "expect": [1, "clean_preflight.network.forbidden"]},
+    {"id": "execution-timeout", "axis": "timeout", "expect": [1, "clean_preflight.timeout"]},
+    {"id": "execution-output-cap", "axis": "output_cap", "expect": [1, "clean_preflight.output_limit"]},
+    {"id": "protected-mutation", "axis": "mutation", "expect": [1, "clean_preflight.mutation"]},
+    {"id": "authority-schema", "axis": "authority_schema", "expect": [1, "clean_preflight.plan.invalid"]}
+  ]
+}
