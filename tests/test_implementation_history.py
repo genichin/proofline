@@ -50,7 +50,9 @@ class HistoryRepo:
     commits: dict[str, str] = field(default_factory=dict)
 
     @classmethod
-    def create(cls, tmp_path: Path, *, specs: int = 1) -> "HistoryRepo":
+    def create(
+        cls, tmp_path: Path, *, specs: int = 1, object_format: str = "sha1"
+    ) -> "HistoryRepo":
         path = tmp_path / "project"
         (path / ".proofline/lines/line-0001/micro-specs").mkdir(parents=True)
         (path / ".proofline/criteria").mkdir(parents=True)
@@ -59,7 +61,7 @@ class HistoryRepo:
         (path / "proofline.yaml").write_text(
             "schema_version: 1\nartifact_root: .proofline\n", encoding="utf-8"
         )
-        git(path, "init", "-q", "-b", "main")
+        git(path, "init", "-q", "-b", "main", f"--object-format={object_format}")
         git(path, "config", "user.email", "proofline@example.invalid")
         git(path, "config", "user.name", "ProofLine Test")
         git(path, "config", "core.autocrlf", "false")
@@ -258,9 +260,13 @@ def build_legacy_migration(
     policy_before: str | None = None,
     inventory_defect: str | None = None,
     inventory_mode: str | None = None,
+    object_format: str = "sha1",
+    iqc_binding_defect: str | None = None,
+    line_body_delta: bool = False,
+    split_baseline: bool = False,
 ) -> HistoryRepo:
     """Build an eligible fieldless S/P/I/Q cycle followed by exact migration B."""
-    repo = HistoryRepo.create(tmp_path)
+    repo = HistoryRepo.create(tmp_path, object_format=object_format)
     if activate_before_cycle:
         line2 = repo.path / ".proofline/lines/line-0002"
         line2.mkdir()
@@ -312,9 +318,30 @@ def build_legacy_migration(
     if target_state != "in_progress" or policy_before is not None:
         repo.write_line(target_state, policy=policy_before)
         repo.commit("legacy-target", "set migration target state")
+    if iqc_binding_defect is not None:
+        iqc_path = repo.path / IQC
+        text = iqc_path.read_text(encoding="utf-8")
+        native_length = len(repo.commits["approval"])
+        replacement = {
+            "opposite": "a" * (64 if native_length == 40 else 40),
+            "uppercase": repo.commits["approval"].upper(),
+            "nonhex": "g" * native_length,
+            "wrong-length": "a" * (native_length - 1),
+        }[iqc_binding_defect]
+        iqc_path.write_text(
+            text.replace(repo.commits["approval"], replacement, 1), encoding="utf-8"
+        )
+        repo.commit("bad-iqc-binding", "persist invalid native IQC binding")
     if inventory_mode is not None:
         ms_oid = git(repo.path, "rev-parse", f"HEAD:{MS}").stdout.strip()
-        object_oid = repo.commits["approval"] if inventory_mode == "160000" else ms_oid
+        if inventory_mode == "160000":
+            object_oid = repo.commits["approval"]
+        elif inventory_mode == "040000":
+            object_oid = git(
+                repo.path, "hash-object", "-t", "tree", "/dev/null"
+            ).stdout.strip()
+        else:
+            object_oid = ms_oid
         git(repo.path, "update-index", "--add", "--cacheinfo", f"{inventory_mode},{object_oid},{MS}")
         git(repo.path, "commit", "-qm", f"persist {inventory_mode} migration evidence")
     pre_migration_parent = git(repo.path, "rev-parse", "HEAD").stdout.strip()
@@ -347,6 +374,9 @@ def build_legacy_migration(
         f'pre_migration_parent: "{parent or pre_migration_parent}"\nevidence:\n{entries}---\n',
         encoding="utf-8",
     )
+    if split_baseline:
+        git(repo.path, "add", "--", MIGRATION)
+        git(repo.path, "commit", "-qm", "persist migration authority separately")
     current = (repo.path / LINE).read_text(encoding="utf-8")
     if "implementation_history:" not in current:
         status_line = next(
@@ -360,6 +390,11 @@ def build_legacy_migration(
             ),
             encoding="utf-8",
         )
+    if line_body_delta:
+        (repo.path / LINE).write_text(
+            (repo.path / LINE).read_text(encoding="utf-8") + "\nchanged body\n",
+            encoding="utf-8",
+        )
     if extra_change:
         (repo.path / "product.py").write_text("MIGRATION_CHANGED = True\n", encoding="utf-8")
     if inventory_mode is None:
@@ -371,11 +406,58 @@ def build_legacy_migration(
     return repo
 
 
-def test_eligible_legacy_nonterminal_migration_passes_without_mutation(tmp_path: Path) -> None:
-    repo = build_legacy_migration(tmp_path)
+@pytest.mark.parametrize(("object_format", "oid_length"), [("sha1", 40), ("sha256", 64)])
+def test_eligible_legacy_nonterminal_migration_passes_in_native_repository_without_mutation(
+    tmp_path: Path, object_format: str, oid_length: int
+) -> None:
+    repo = build_legacy_migration(tmp_path, object_format=object_format)
+    before = repository_snapshot(repo.path)
+    artifact = (repo.path / MIGRATION).read_text(encoding="utf-8")
+
+    assert len(repo.commits["migration"]) == oid_length
+    assert f'pre_migration_parent: "{repo.commits["quality"]}"' in artifact
+    assert validate_project(repo.path) == []
+    assert repository_snapshot(repo.path) == before
+
+
+@pytest.mark.parametrize("object_format", ["sha1", "sha256"])
+@pytest.mark.parametrize(
+    "defect", ["opposite", "uppercase", "nonhex", "wrong-length"]
+)
+def test_real_git_migration_rejects_non_native_iqc_commit_binding(
+    tmp_path: Path, object_format: str, defect: str
+) -> None:
+    repo = build_legacy_migration(
+        tmp_path, object_format=object_format, iqc_binding_defect=defect
+    )
     before = repository_snapshot(repo.path)
 
-    assert validate_project(repo.path) == []
+    assert (MS, "history.ms.transition") in history_codes(repo)
+    assert repository_snapshot(repo.path) == before
+
+
+@pytest.mark.parametrize("object_format", ["sha1", "sha256"])
+@pytest.mark.parametrize(
+    "defect", ["opposite", "uppercase", "nonhex", "wrong-length"]
+)
+def test_real_git_migration_rejects_non_native_parent_oid(
+    tmp_path: Path, object_format: str, defect: str
+) -> None:
+    seed = HistoryRepo.create(tmp_path / "seed", object_format=object_format)
+    native = seed.commits["approval"]
+    shutil.rmtree(seed.path, onerror=remove_readonly)
+    replacement = {
+        "opposite": "a" * (64 if len(native) == 40 else 40),
+        "uppercase": native.upper(),
+        "nonhex": "g" * len(native),
+        "wrong-length": "a" * (len(native) - 1),
+    }[defect]
+    repo = build_legacy_migration(
+        tmp_path / "case", object_format=object_format, parent=replacement
+    )
+    before = repository_snapshot(repo.path)
+
+    assert (MIGRATION, "migration.parent.mismatch") in history_codes(repo)
     assert repository_snapshot(repo.path) == before
 
 
@@ -460,6 +542,39 @@ def test_migration_inventory_accepts_executable_regular_blob(tmp_path: Path) -> 
 
 
 @pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("120000", (MS, "history.unavailable")),
+        ("160000", (MS, "history.unavailable")),
+        ("040000", (MIGRATION, "migration.eligibility.cycle")),
+    ],
+)
+def test_migration_inventory_rejects_non_regular_git_entry(
+    tmp_path: Path, mode: str, expected: tuple[str, str]
+) -> None:
+    repo = build_legacy_migration(tmp_path, inventory_mode=mode)
+    before = repository_snapshot(repo.path)
+
+    assert expected in history_codes(repo)
+    assert repository_snapshot(repo.path) == before
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "code"),
+    [
+        ({"split_baseline": True}, "migration.baseline.paths"),
+        ({"line_body_delta": True}, "migration.baseline.policy"),
+    ],
+)
+def test_migration_baseline_requires_same_commit_policy_only_delta(
+    tmp_path: Path, kwargs: dict[str, object], code: str
+) -> None:
+    repo = build_legacy_migration(tmp_path, **kwargs)  # type: ignore[arg-type]
+
+    assert (MIGRATION, code) in history_codes(repo)
+
+
+@pytest.mark.parametrize(
     ("defect", "code"),
     [
         ("wrong-parent", "migration.parent.mismatch"),
@@ -497,13 +612,46 @@ def test_legacy_migration_fail_closed_boundaries(
     assert repository_snapshot(repo.path) == before
 
 
-def test_migration_artifact_is_immutable_and_cannot_be_reapplied(tmp_path: Path) -> None:
+@pytest.mark.parametrize("action", ["mutate", "remove", "reintroduce"])
+def test_migration_artifact_is_immutable_and_cannot_be_reapplied(
+    tmp_path: Path, action: str
+) -> None:
     repo = build_legacy_migration(tmp_path)
     artifact = repo.path / MIGRATION
-    artifact.write_text(artifact.read_text().replace("evidence:", "evidence: # changed"))
-    repo.commit("mutation", "mutate migration authority")
+    original = artifact.read_bytes()
+    if action == "mutate":
+        artifact.write_text(artifact.read_text().replace("evidence:", "evidence: # changed"))
+        repo.commit("mutation", "mutate migration authority")
+    else:
+        artifact.unlink()
+        repo.commit("removal", "remove migration authority")
+        if action == "reintroduce":
+            artifact.write_bytes(original)
+            repo.commit("reintroduction", "reintroduce migration authority")
 
     assert (MIGRATION, "migration.immutable") in history_codes(repo)
+
+
+def test_migration_policy_is_immutable_after_baseline(tmp_path: Path) -> None:
+    repo = build_legacy_migration(tmp_path)
+    repo.write_line("in_progress", policy=None)
+    repo.commit("policy-removal", "remove migrated history policy")
+
+    assert (LINE, "history.line.policy.changed") in history_codes(repo)
+
+
+def test_migration_requires_and_accepts_fresh_post_baseline_recovery_cycle(
+    tmp_path: Path,
+) -> None:
+    repo = build_legacy_migration(tmp_path)
+    baseline = repo.commits["migration"]
+    p2 = repo.start("recovery-start")
+    i2 = repo.product_commit("recovery-implementation")
+    q2 = repo.finish(i2, "recovery-quality")
+    history = git(repo.path, "rev-list", "--first-parent", "--reverse", "HEAD").stdout.splitlines()
+
+    assert history.index(baseline) < history.index(p2) < history.index(i2) < history.index(q2)
+    assert validate_project(repo.path) == []
 
 
 @pytest.mark.parametrize("oid_length", [40, 64])

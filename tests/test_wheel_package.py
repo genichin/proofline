@@ -11,6 +11,7 @@ import pytest
 
 from proofline.identity_ledger import decode_ledger, encode_ledger
 from proofline.line_writer import _render
+from test_implementation_history import build_legacy_migration, repository_snapshot
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -863,3 +864,85 @@ def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workfl
         assert "그 다음 `implementation_history: first_parent`만 추가한 별도 commit `B`" in skill
         script = archive.read(resources["skills/proofline-start-implementation/scripts/create_worktree.py"])
         assert b"approval_commit" in script
+
+
+@pytest.mark.candidate_build_only
+def test_source_and_isolated_wheel_share_real_git_migration_registry(
+    tmp_path: Path,
+) -> None:
+    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
+    if provided:
+        wheel = Path(provided)
+        assert wheel.is_absolute() and wheel.is_file()
+    else:
+        dist = tmp_path / "dist"
+        build = subprocess.run(
+            ["uv", "build", "--wheel", "--out-dir", str(dist)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert build.returncode == 0, build.stderr
+        wheel = next(dist.glob("proofline-0.6.1-*.whl"))
+
+    venv = tmp_path / "migration-wheel-env"
+    create = subprocess.run(
+        ["uv", "venv", "--python", sys.executable, str(venv)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert create.returncode == 0, create.stderr
+    python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    proofline = venv / ("Scripts/proofline.exe" if os.name == "nt" else "bin/proofline")
+    install = subprocess.run(
+        ["uv", "pip", "install", "--python", str(python), str(wheel)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert install.returncode == 0, install.stderr
+
+    source_env = os.environ.copy()
+    source_env["PYTHONPATH"] = str(ROOT / "src")
+    source_command = [
+        sys.executable,
+        "-c",
+        "from proofline.cli import main; raise SystemExit(main())",
+        "validate",
+    ]
+    for object_format, parent in (
+        ("sha1", None),
+        ("sha256", None),
+        ("sha1", "a" * 64),
+        ("sha256", "a" * 40),
+    ):
+        repo = build_legacy_migration(
+            tmp_path / f"scenario-{object_format}-{len(parent or '')}",
+            object_format=object_format,
+            parent=parent,
+        )
+        before = repository_snapshot(repo.path)
+        source = subprocess.run(
+            source_command,
+            cwd=repo.path,
+            env=source_env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert repository_snapshot(repo.path) == before
+        installed = subprocess.run(
+            [str(proofline), "validate"],
+            cwd=repo.path,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert repository_snapshot(repo.path) == before
+        assert (installed.returncode, installed.stdout, installed.stderr) == (
+            source.returncode,
+            source.stdout,
+            source.stderr,
+        )
