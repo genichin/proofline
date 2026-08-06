@@ -1,4 +1,5 @@
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -32,6 +33,39 @@ def _hosted_candidate_wheel() -> Path | None:
         character in "0123456789abcdef" for character in expected
     ), "candidate wheel SHA256 must be lowercase hexadecimal"
     assert hashlib.sha256(wheel.read_bytes()).hexdigest() == expected, "candidate wheel SHA256 mismatch"
+    python = executable.parent / ("python.exe" if os.name == "nt" else "python")
+    assert python.is_absolute() and python.is_file(), (
+        "installed executable has no absolute candidate environment Python"
+    )
+    try:
+        provenance = subprocess.run(
+            (
+                str(python),
+                "-I",
+                "-c",
+                "from importlib.metadata import distribution; "
+                "print(distribution('proofline').read_text('direct_url.json'))",
+            ),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise AssertionError("installed candidate provenance probe failed") from exc
+    assert provenance.returncode == 0, provenance.stderr
+    try:
+        direct_url = json.loads(provenance.stdout)
+    except json.JSONDecodeError as exc:
+        raise AssertionError("installed candidate provenance is malformed") from exc
+    assert isinstance(direct_url, dict), "installed candidate provenance must be an object"
+    archive_info = direct_url.get("archive_info")
+    assert direct_url.get("url") == wheel.resolve().as_uri(), (
+        "installed candidate wheel path mismatch"
+    )
+    assert isinstance(archive_info, dict), "installed candidate archive provenance is missing"
+    assert archive_info.get("hash") == f"sha256={expected}", (
+        "installed candidate wheel digest mismatch"
+    )
     return wheel
 
 

@@ -216,6 +216,31 @@ def test_hosted_wheel_consumers_validate_exact_file_and_bypass_local_build(
     assert "sha256" in helper_source
     assert "hexdigest" in helper_source
 
+    provenance_source = helper_source
+    if path == IMPLEMENTATION_HISTORY_TESTS:
+        provenance_source = ast.unparse(
+            next(
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, ast.FunctionDef) and node.name == "installed_wheel_cli"
+            )
+        )
+        return_statement = "return executable"
+    else:
+        return_statement = "return wheel"
+    for required in (
+        "python.exe",
+        "-I",
+        "distribution('proofline')",
+        "direct_url.json",
+        ".resolve().as_uri()",
+        "archive_info",
+        "sha256=",
+        "returncode == 0",
+    ):
+        assert required in provenance_source
+    assert provenance_source.index("returncode == 0") < provenance_source.index(return_statement)
+
     functions = {
         node.name: node
         for node in ast.walk(tree)
