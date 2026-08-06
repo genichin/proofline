@@ -78,7 +78,7 @@ def test_windows_installer_errors_do_not_exit_the_calling_powershell_host() -> N
 
 def test_readme_documents_repository_candidate_windows_install_without_unpublished_url() -> None:
     text = README.read_text(encoding="utf-8")
-    unpublished = "https://raw.githubusercontent.com/genichin/proofline/v0.5.0/install.ps1"
+    unpublished = "https://raw.githubusercontent.com/genichin/proofline/v0.6.0/install.ps1"
 
     assert unpublished not in text
     assert ".\\install.ps1" in text

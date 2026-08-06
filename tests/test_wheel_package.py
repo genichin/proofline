@@ -389,7 +389,7 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
                 "from pathlib import Path; import proofline; "
                 "p=Path(proofline.__file__).resolve(); "
                 "assert 'site-packages' in p.parts; "
-                "assert version('proofline') == '0.5.0'"
+                "assert version('proofline') == '0.6.0'"
             ),
         ],
         cwd=tmp_path,
@@ -408,7 +408,7 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
         check=False,
     )
     assert installed_version.returncode == 0, installed_version.stderr
-    assert installed_version.stdout == "proofline 0.5.0\n"
+    assert installed_version.stdout == "proofline 0.6.0\n"
 
     isolated_home = tmp_path / "home"
     isolated_home.mkdir()

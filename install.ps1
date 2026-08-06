@@ -6,7 +6,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$VERSION = "0.5.0"
+$VERSION = "0.6.0"
 $REPOSITORY = "genichin/proofline"
 $WHEEL = "proofline-${VERSION}-py3-none-any.whl"
 $BASE_URL = "https://github.com/${REPOSITORY}/releases/download/v${VERSION}"
