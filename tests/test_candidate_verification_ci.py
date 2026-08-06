@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 import json
 import os
@@ -8,6 +9,7 @@ import shutil
 import subprocess
 import sys
 
+import pytest
 import yaml
 
 
@@ -23,6 +25,28 @@ PLAN = ROOT / "skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1
 RUN_DQC_SKILL = ROOT / "skills/proofline-run-dqc/SKILL.md"
 DELIVERY_CONTRACT = ROOT / "docs/contracts/line-delivery.md"
 WHEEL_PACKAGE_TESTS = ROOT / "tests/test_wheel_package.py"
+README = ROOT / "README.md"
+STORAGE_CONTRACT = ROOT / "docs/contracts/storage-and-retention.md"
+ARTIFACT_LAYOUT = ROOT / "docs/artifact-layout.md"
+AGENT_CONTEXT = ROOT / "src/proofline_home/agent-context.md"
+HOSTED_WHEEL_CONSUMERS = {
+    ROOT / "tests/helpers/line_0020_scenario_runner.py": ("execute_cross_artifact_registry",),
+    ROOT / "tests/test_start_implementation_skill.py": ("packaged_worktree_script",),
+    ROOT / "tests/test_implementation_history.py": ("installed_wheel_cli",),
+    ROOT / "tests/test_specification_approval_authority.py": (
+        "test_source_and_built_wheel_extracted_script_have_behavior_and_diagnostic_parity",
+    ),
+    ROOT / "tests/test_criteria_validation.py": (
+        "test_installed_wheel_cli_accepts_committed_update_draft_lifecycle",
+    ),
+    ROOT / "tests/test_line_0021_clean_runner_registry.py": ("_provided_or_fixture_wheel",),
+    ROOT / "tests/test_wheel_package.py": (
+        "test_built_wheel_contains_and_reads_canonical_schema_templates",
+        "test_built_wheel_operations_match_source_inventory_and_payload_bytes",
+        "test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workflow",
+        "test_source_and_isolated_wheel_share_real_git_migration_registry",
+    ),
+}
 JOBS = {"build-candidate", "ubuntu-python311", "windows-python311"}
 
 
@@ -124,6 +148,202 @@ def test_ubuntu_and_windows_independently_verify_same_wheel_and_required_regress
         assert forbidden not in text.lower()
 
 
+def test_operations_bearing_home_topology_and_update_contract_is_documented() -> None:
+    topology = "~/.proofline/operations/"
+    for path in (README, STORAGE_CONTRACT, ARTIFACT_LAYOUT, AGENT_CONTEXT):
+        text = path.read_text(encoding="utf-8")
+        assert topology in text, path
+        assert "docs/operations/*.md" in text, path
+        assert "managed" in text.lower(), path
+        assert "manifest" in text.lower(), path
+        assert "update --check" in text, path
+
+
+def test_each_hosted_job_contains_repository_external_command_state_and_no_mutation_checks() -> None:
+    workflow = _workflow()
+    required = (
+        "PYTHONDONTWRITEBYTECODE",
+        "UV_CACHE_DIR",
+        "UV_PROJECT_ENVIRONMENT",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
+        "status --short --untracked-files=all",
+        "status --short --ignored --untracked-files=all",
+    )
+    for job_name, job in workflow["jobs"].items():
+        runs = "\n".join(step.get("run", "") for step in job["steps"])
+        for marker in required:
+            assert marker in runs, (job_name, marker)
+        assert "RUNNER_TEMP" in runs, job_name
+        tracked = [match.start() for match in re.finditer("status --short --untracked-files=all", runs)]
+        ignored = [
+            match.start()
+            for match in re.finditer("status --short --ignored --untracked-files=all", runs)
+        ]
+        assert len(tracked) >= 2 and len(ignored) >= 2, job_name
+        command = runs.index("uv build --wheel") if job_name == "build-candidate" else runs.index("pytest")
+        assert tracked[0] < command < tracked[-1], job_name
+        assert ignored[0] < command < ignored[-1], job_name
+
+    text = WORKFLOW.read_text(encoding="utf-8")
+    for command in re.findall(r"(?m)^\s*(?:uv run )?pytest\b.*$", text):
+        assert "--basetemp" in command, command
+        assert "-p no:cacheprovider" in command, command
+    for job in workflow["jobs"].values():
+        for step in job["steps"]:
+            run = step.get("run", "")
+            if "python -m compileall" in run:
+                assert run.index("PYTHONPYCACHEPREFIX") < run.index("python -m compileall")
+
+
+def test_verified_absolute_wheel_is_exported_to_each_hosted_consumer_suite() -> None:
+    workflow = _workflow()
+    ubuntu = next(
+        step["run"]
+        for step in workflow["jobs"]["ubuntu-python311"]["steps"]
+        if step.get("name") == "Verify exact wheel and source candidate"
+    )
+    windows_steps = workflow["jobs"]["windows-python311"]["steps"]
+    checksum_index = next(
+        index
+        for index, step in enumerate(windows_steps)
+        if step.get("name") == "Run tracked Windows candidate gate"
+    )
+    consumer_index = next(
+        index
+        for index, step in enumerate(windows_steps)
+        if step.get("name") == "Verify source history and installed wheel regressions"
+    )
+    assert checksum_index < consumer_index
+    windows = windows_steps[consumer_index]["run"]
+
+    assert ubuntu.index("sha256sum --check --strict SHA256SUMS") < ubuntu.index(
+        "WHEEL=$(realpath proofline-*.whl)"
+    ) < ubuntu.index('export PROOFLINE_HOSTED_CANDIDATE_WHEEL="$WHEEL"')
+    assert ubuntu.index('export PROOFLINE_HOSTED_CANDIDATE_WHEEL="$WHEEL"') < ubuntu.index(
+        'uv run pytest -q -m "not candidate_build_only"'
+    )
+    assert windows.index("candidate provenance mismatch") < windows.index(
+        "$env:PROOFLINE_HOSTED_CANDIDATE_WHEEL = $wheel[0].FullName"
+    ) < windows.index("uv run pytest -q tests/test_windows_history_runtime.py")
+
+    controls = (
+        "PROOFLINE_HOSTED_CANDIDATE_MODE",
+        "PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256",
+        "PROOFLINE_HOSTED_CANDIDATE_WHEEL",
+        "PROOFLINE_INSTALLED_EXECUTABLE",
+    )
+    for job in workflow["jobs"].values():
+        for step in job["steps"]:
+            run = step.get("run", "")
+            if "pytest" not in run:
+                continue
+            pytest_index = run.index("pytest")
+            for control in controls:
+                assert control in run[:pytest_index], (step.get("name"), control)
+    assert "digest=${digest,,}" in WORKFLOW.read_text(encoding="utf-8")
+    assert ".ToLowerInvariant()" in WORKFLOW.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("path", HOSTED_WHEEL_CONSUMERS)
+def test_hosted_wheel_consumers_validate_exact_file_and_bypass_local_build(
+    path: Path,
+) -> None:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    helper = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_hosted_candidate_wheel"
+    )
+    helper_source = ast.unparse(helper)
+    for control in (
+        "PROOFLINE_HOSTED_CANDIDATE_MODE",
+        "PROOFLINE_HOSTED_CANDIDATE_WHEEL",
+        "PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256",
+        "PROOFLINE_INSTALLED_EXECUTABLE",
+    ):
+        assert control in helper_source
+    assert "!= '1'" in helper_source
+    assert ".is_absolute()" in helper_source
+    assert helper_source.count(".is_file()") >= 2
+    assert "sha256" in helper_source
+    assert "hexdigest" in helper_source
+
+    provenance_source = helper_source
+    if path == IMPLEMENTATION_HISTORY_TESTS:
+        provenance_source = ast.unparse(
+            next(
+                node
+                for node in ast.walk(tree)
+                if isinstance(node, ast.FunctionDef) and node.name == "installed_wheel_cli"
+            )
+        )
+        return_statement = "return executable"
+    else:
+        return_statement = "return wheel"
+    for required in (
+        "python.exe",
+        "-I",
+        "distribution('proofline')",
+        "direct_url.json",
+        ".resolve().as_uri()",
+        "returncode == 0",
+    ):
+        assert required in provenance_source
+    assert provenance_source.index("returncode == 0") < provenance_source.index(return_statement)
+
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    def contains_uv_build(nodes: list[ast.stmt]) -> bool:
+        return any(
+            {"uv", "build"}.issubset(
+                {
+                    child.value
+                    for child in ast.walk(node)
+                    if isinstance(child, ast.Constant) and isinstance(child.value, str)
+                }
+            )
+            for node in nodes
+        )
+
+    for function_name in HOSTED_WHEEL_CONSUMERS[path]:
+        function = functions[function_name]
+        source = ast.unparse(function)
+        assert "_hosted_candidate_wheel()" in source
+        candidate_branch = next(
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.If)
+            and "_hosted_candidate_wheel" in source
+            and "wheel is not None" in ast.unparse(node.test)
+        )
+        assert not contains_uv_build(candidate_branch.body)
+
+
+def test_installed_executable_precedence_is_bound_to_candidate_install_provenance() -> None:
+    tree = ast.parse(IMPLEMENTATION_HISTORY_TESTS.read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "installed_wheel_cli"
+    )
+    source = ast.unparse(function)
+    helper = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_hosted_candidate_wheel"
+    )
+    helper_source = ast.unparse(helper)
+    assert "_hosted_candidate_wheel()" in source
+    assert "direct_url.json" in source
+    assert "PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256" in helper_source
+
+
 def test_windows_gate_exercises_exact_wheel_and_full_fresh_install_sequence() -> None:
     text = WINDOWS_GATE.read_text(encoding="utf-8")
     for item in (
@@ -143,6 +363,23 @@ def test_windows_gate_exercises_exact_wheel_and_full_fresh_install_sequence() ->
     assert "line-0017" not in text
     assert "Start-Process -Verb RunAs" not in text
     assert "git push" not in text.lower()
+
+
+def test_windows_gate_pins_operations_inventory_bytes_and_manifest_hashes() -> None:
+    text = WINDOWS_GATE.read_text(encoding="utf-8")
+    for marker in (
+        "proofline_home/operations/",
+        "operations/*.md",
+        "managed_files",
+        "SHA256",
+        "operation path set mismatch",
+        "operation bytes mismatch",
+        "operation manifest mismatch",
+    ):
+        assert marker in text
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "verify-windows-candidate.ps1" in workflow
+    assert "operations inventory/bytes/manifest SHA256" in workflow
 
 
 def test_windows_gate_fixture_is_persisted_as_valid_terminal_history(tmp_path: Path) -> None:

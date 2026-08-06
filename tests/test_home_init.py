@@ -49,9 +49,20 @@ def test_fresh_init_creates_user_home_harness_and_preserves_project(
     assert result.status == "created"
     target = home / ".proofline"
     assert (target / "manifest.yaml").is_file()
-    for directory in ("contracts", "templates", "skills"):
+    for directory in ("contracts", "operations", "templates", "skills"):
         assert (target / directory).is_dir()
         assert any((target / directory).rglob("*"))
+    operations_root = Path(__file__).resolve().parents[1] / "docs/operations"
+    expected_operations = {
+        path.name: path.read_bytes()
+        for path in sorted(operations_root.glob("*.md"))
+    }
+    assert expected_operations
+    assert {
+        path.name: path.read_bytes()
+        for path in sorted((target / "operations").glob("*.md"))
+    } == expected_operations
+    assert "~/.proofline/operations/" in result.paths
     assert (target / "agent-context.md").is_file()
     manifest = yaml.safe_load((target / "manifest.yaml").read_text(encoding="utf-8"))
     assert manifest["schema_version"] == 1
@@ -239,6 +250,9 @@ def test_windows_replacement_is_rejected_before_staging_or_mutation(
         {
             "agent-context.md": b"old\n",
             "contracts/a.md": b"old\n",
+            "operations/legacy-nonterminal-history-migration.md": b"old\n",
+            "operations/official-wheel-release.md": b"old\n",
+            "operations/proofline-tool-environment.md": b"old\n",
             "templates/a.md": b"old\n",
             "skills/proofline-a/SKILL.md": b"old\n",
         },
@@ -248,6 +262,9 @@ def test_windows_replacement_is_rejected_before_staging_or_mutation(
         {
             "agent-context.md": b"new\n",
             "contracts/a.md": b"new\n",
+            "operations/legacy-nonterminal-history-migration.md": b"new\n",
+            "operations/official-wheel-release.md": b"new\n",
+            "operations/proofline-tool-environment.md": b"new\n",
             "templates/a.md": b"new\n",
             "skills/proofline-a/SKILL.md": b"new\n",
         },

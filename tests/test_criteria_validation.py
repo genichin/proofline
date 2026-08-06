@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -14,6 +16,52 @@ FIXTURE = Path(__file__).parent / "fixtures" / "valid-minimal"
 ROOT = Path(__file__).resolve().parents[1]
 REQ = ".proofline/lines/line-0001/req-0001.md"
 MS = ".proofline/lines/line-0001/micro-specs/ms-0001-001.md"
+
+
+def _hosted_candidate_wheel() -> Path | None:
+    if os.environ.get("PROOFLINE_HOSTED_CANDIDATE_MODE") != "1":
+        return None
+    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
+    expected = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256")
+    installed = os.environ.get("PROOFLINE_INSTALLED_EXECUTABLE")
+    assert provided and expected and installed, "hosted candidate controls are incomplete"
+    wheel = Path(provided)
+    executable = Path(installed)
+    assert wheel.is_absolute() and wheel.is_file(), "candidate wheel must be an absolute file"
+    assert executable.is_absolute() and executable.is_file(), "installed executable must be an absolute file"
+    assert len(expected) == 64 and expected == expected.lower() and all(
+        character in "0123456789abcdef" for character in expected
+    ), "candidate wheel SHA256 must be lowercase hexadecimal"
+    assert hashlib.sha256(wheel.read_bytes()).hexdigest() == expected, "candidate wheel SHA256 mismatch"
+    python = executable.parent / ("python.exe" if os.name == "nt" else "python")
+    assert python.is_absolute() and python.is_file(), (
+        "installed executable has no absolute candidate environment Python"
+    )
+    try:
+        provenance = subprocess.run(
+            (
+                str(python),
+                "-I",
+                "-c",
+                "from importlib.metadata import distribution; "
+                "print(distribution('proofline').read_text('direct_url.json'))",
+            ),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise AssertionError("installed candidate provenance probe failed") from exc
+    assert provenance.returncode == 0, provenance.stderr
+    try:
+        direct_url = json.loads(provenance.stdout)
+    except json.JSONDecodeError as exc:
+        raise AssertionError("installed candidate provenance is malformed") from exc
+    assert isinstance(direct_url, dict), "installed candidate provenance must be an object"
+    assert direct_url.get("url") == wheel.resolve().as_uri(), (
+        "installed candidate wheel path mismatch"
+    )
+    return wheel
 
 
 def copy_valid_project(tmp_path: Path) -> Path:
@@ -311,10 +359,9 @@ def test_installed_wheel_cli_accepts_committed_update_draft_lifecycle(
     replace(project / ".proofline/criteria/ac-0003.md", "status: active", "status: draft")
     commit_all(project, "begin AC update")
     before = snapshot(project)
-    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
-    if provided:
-        wheel = Path(provided)
-        assert wheel.is_absolute() and wheel.is_file()
+    wheel = _hosted_candidate_wheel()
+    if wheel is not None:
+        pass
     else:
         dist = tmp_path / "dist"
         dist.mkdir()

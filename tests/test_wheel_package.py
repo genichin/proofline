@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -8,8 +10,10 @@ import zipfile
 from pathlib import Path
 
 import pytest
+import yaml
 
 from proofline.identity_ledger import decode_ledger, encode_ledger
+from proofline.home_writer import payload_from_wheel
 from proofline.line_writer import _render
 from test_implementation_history import (
     MIGRATION_SCENARIO_IDS,
@@ -18,6 +22,52 @@ from test_implementation_history import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _hosted_candidate_wheel() -> Path | None:
+    if os.environ.get("PROOFLINE_HOSTED_CANDIDATE_MODE") != "1":
+        return None
+    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
+    expected = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256")
+    installed = os.environ.get("PROOFLINE_INSTALLED_EXECUTABLE")
+    assert provided and expected and installed, "hosted candidate controls are incomplete"
+    wheel = Path(provided)
+    executable = Path(installed)
+    assert wheel.is_absolute() and wheel.is_file(), "candidate wheel must be an absolute file"
+    assert executable.is_absolute() and executable.is_file(), "installed executable must be an absolute file"
+    assert len(expected) == 64 and expected == expected.lower() and all(
+        character in "0123456789abcdef" for character in expected
+    ), "candidate wheel SHA256 must be lowercase hexadecimal"
+    assert hashlib.sha256(wheel.read_bytes()).hexdigest() == expected, "candidate wheel SHA256 mismatch"
+    python = executable.parent / ("python.exe" if os.name == "nt" else "python")
+    assert python.is_absolute() and python.is_file(), (
+        "installed executable has no absolute candidate environment Python"
+    )
+    try:
+        provenance = subprocess.run(
+            (
+                str(python),
+                "-I",
+                "-c",
+                "from importlib.metadata import distribution; "
+                "print(distribution('proofline').read_text('direct_url.json'))",
+            ),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise AssertionError("installed candidate provenance probe failed") from exc
+    assert provenance.returncode == 0, provenance.stderr
+    try:
+        direct_url = json.loads(provenance.stdout)
+    except json.JSONDecodeError as exc:
+        raise AssertionError("installed candidate provenance is malformed") from exc
+    assert isinstance(direct_url, dict), "installed candidate provenance must be an object"
+    assert direct_url.get("url") == wheel.resolve().as_uri(), (
+        "installed candidate wheel path mismatch"
+    )
+    return wheel
 
 
 def test_source_checkout_line_init_fresh_and_legacy_e2e(tmp_path: Path) -> None:
@@ -318,10 +368,9 @@ def test_built_sdist_contains_project_schema_resources(tmp_path: Path) -> None:
 def test_built_wheel_contains_and_reads_canonical_schema_templates(
     tmp_path: Path,
 ) -> None:
-    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
-    if provided:
-        wheel = Path(provided)
-        assert wheel.is_absolute() and wheel.is_file()
+    wheel = _hosted_candidate_wheel()
+    if wheel is not None:
+        pass
     else:
         dist = tmp_path / "dist"
         build = subprocess.run(
@@ -421,7 +470,7 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(
                 "from pathlib import Path; import proofline; "
                 "p=Path(proofline.__file__).resolve(); "
                 "assert 'site-packages' in p.parts; "
-                "assert version('proofline') == '0.6.1'"
+                "assert version('proofline') == '0.6.2'"
             ),
         ],
         cwd=tmp_path,
@@ -439,7 +488,7 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(
         check=False,
     )
     assert installed_version.returncode == 0, installed_version.stderr
-    assert installed_version.stdout == "proofline 0.6.1\n"
+    assert installed_version.stdout == "proofline 0.6.2\n"
 
     isolated_home = tmp_path / "home"
     isolated_home.mkdir()
@@ -865,13 +914,121 @@ print(diagnostic, end='', file=sys.stderr)
     assert not (absent_home / ".proofline").exists()
 
 
+def test_built_wheel_operations_match_source_inventory_and_payload_bytes(
+    tmp_path: Path,
+) -> None:
+    wheel = _hosted_candidate_wheel()
+    if wheel is not None:
+        pass
+    else:
+        dist = tmp_path / "dist"
+        build = subprocess.run(
+            ["uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert build.returncode == 0, build.stderr
+        wheel = next(dist.glob("proofline-*.whl"))
+    expected = {
+        path.name: path.read_bytes()
+        for path in sorted((ROOT / "docs/operations").glob("*.md"))
+    }
+
+    with zipfile.ZipFile(wheel) as archive:
+        names = archive.namelist()
+        assert len(names) == len(set(names))
+        operation_names = sorted(
+            name.removeprefix("proofline_home/operations/")
+            for name in names
+            if name.startswith("proofline_home/operations/") and not name.endswith("/")
+        )
+        assert operation_names == sorted(expected)
+        assert {
+            name: archive.read(f"proofline_home/operations/{name}")
+            for name in operation_names
+        } == expected
+
+    payload = payload_from_wheel(wheel, "0.6.2")
+    assert {
+        relative.removeprefix("operations/"): content
+        for relative, content in payload.items()
+        if relative.startswith("operations/")
+    } == expected
+
+    venv = tmp_path / "operations-wheel-env"
+    created = subprocess.run(
+        ["uv", "venv", "--python", sys.executable, str(venv)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert created.returncode == 0, created.stderr
+    python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    proofline = venv / ("Scripts/proofline.exe" if os.name == "nt" else "bin/proofline")
+    installed = subprocess.run(
+        ["uv", "pip", "install", "--refresh", "--python", str(python), str(wheel)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert installed.returncode == 0, installed.stderr
+    home = tmp_path / "operations-home"
+    home.mkdir()
+    project = tmp_path / "operations-project"
+    project.mkdir()
+    environment = os.environ.copy()
+    environment["HOME"] = str(home)
+    environment["USERPROFILE"] = str(home)
+    environment.pop("PYTHONPATH", None)
+    initialized = subprocess.run(
+        [str(proofline), "init"], cwd=project, env=environment,
+        text=True, capture_output=True, check=False,
+    )
+    assert initialized.returncode == 0, initialized.stderr
+    installed_root = home / ".proofline"
+    assert {
+        path.name: path.read_bytes()
+        for path in sorted((installed_root / "operations").glob("*.md"))
+    } == expected
+    manifest = yaml.safe_load((installed_root / "manifest.yaml").read_text(encoding="utf-8"))
+    operation_records = {
+        record["path"].removeprefix("operations/"): record["sha256"]
+        for record in manifest["managed_files"]
+        if record["path"].startswith("operations/")
+    }
+    assert operation_records == {
+        name: hashlib.sha256(content).hexdigest() for name, content in expected.items()
+    }
+    before = {
+        path.relative_to(home): path.read_bytes()
+        for path in home.rglob("*") if path.is_file()
+    }
+    repeated = subprocess.run(
+        [str(proofline), "init"], cwd=project, env=environment,
+        text=True, capture_output=True, check=False,
+    )
+    assert repeated.returncode == 0, repeated.stderr
+    assert "already-initialized" in repeated.stdout
+    checked = subprocess.run(
+        [str(proofline), "update", "--check", "--version", "0.6.2"],
+        cwd=project, env=environment, text=True, capture_output=True, check=False,
+    )
+    assert checked.returncode == 0, checked.stderr
+    assert "status: already-current" in checked.stdout
+    assert {
+        path.relative_to(home): path.read_bytes()
+        for path in home.rglob("*") if path.is_file()
+    } == before
+
+
 def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workflow(
     tmp_path: Path,
 ) -> None:
-    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
-    if provided:
-        wheel = Path(provided)
-        assert wheel.is_absolute() and wheel.is_file()
+    wheel = _hosted_candidate_wheel()
+    if wheel is not None:
+        pass
     else:
         dist = tmp_path / "dist"
         build = subprocess.run(
@@ -884,6 +1041,7 @@ def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workfl
         assert build.returncode == 0, build.stderr
         wheel = next(dist.glob("proofline-*.whl"))
     resources = {
+        "src/proofline_home/agent-context.md": "proofline_home/agent-context.md",
         "docs/contracts/line-delivery.md": "proofline_home/contracts/line-delivery.md",
         "docs/contracts/micro-spec-and-iqc.md": "proofline_home/contracts/micro-spec-and-iqc.md",
         "docs/contracts/requirements-and-criteria.md": "proofline_home/contracts/requirements-and-criteria.md",
@@ -923,10 +1081,9 @@ def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workfl
 def test_source_and_isolated_wheel_share_real_git_migration_registry(
     tmp_path: Path,
 ) -> None:
-    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
-    if provided:
-        wheel = Path(provided)
-        assert wheel.is_absolute() and wheel.is_file()
+    wheel = _hosted_candidate_wheel()
+    if wheel is not None:
+        pass
     else:
         dist = tmp_path / "dist"
         build = subprocess.run(
@@ -937,7 +1094,7 @@ def test_source_and_isolated_wheel_share_real_git_migration_registry(
             check=False,
         )
         assert build.returncode == 0, build.stderr
-        wheel = next(dist.glob("proofline-0.6.1-*.whl"))
+        wheel = next(dist.glob("proofline-0.6.2-*.whl"))
 
     venv = tmp_path / "migration-wheel-env"
     create = subprocess.run(

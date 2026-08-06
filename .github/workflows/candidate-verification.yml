@@ -38,6 +38,14 @@ jobs:
       - name: Build exact candidate wheel
         shell: bash
         run: |
+          CONTAINMENT="$RUNNER_TEMP/proofline-build-state"
+          mkdir -p "$CONTAINMENT/cache" "$CONTAINMENT/env" "$CONTAINMENT/tmp" "$CONTAINMENT/basetemp"
+          export PYTHONDONTWRITEBYTECODE=1
+          export UV_CACHE_DIR="$CONTAINMENT/cache"
+          export UV_PROJECT_ENVIRONMENT="$CONTAINMENT/env"
+          export TMPDIR="$CONTAINMENT/tmp" TEMP="$CONTAINMENT/tmp" TMP="$CONTAINMENT/tmp"
+          git status --short --untracked-files=all > "$CONTAINMENT/tracked-before"
+          git status --short --ignored --untracked-files=all > "$CONTAINMENT/ignored-before"
           mkdir -p "$RUNNER_TEMP/proofline-candidate"
           uv build --wheel --out-dir "$RUNNER_TEMP/proofline-candidate"
           cd "$RUNNER_TEMP/proofline-candidate"
@@ -45,6 +53,7 @@ jobs:
           test "$(printf '%s\n' "$wheel" | sed '/^$/d' | wc -l)" -eq 1
           wheel_name=${wheel#./}
           digest=$(sha256sum "$wheel_name" | cut -d ' ' -f1)
+          digest=${digest,,}
           printf '%s  %s\n' "$digest" "$wheel_name" > SHA256SUMS
           python - <<'PY'
           import json, os
@@ -60,8 +69,28 @@ jobs:
               'artifact_name': artifact, 'wheel_filename': wheel.name,
               'wheel_sha256': digest}, sort_keys=True) + '\n')
           PY
+          sha256sum --check --strict SHA256SUMS
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          wheel = next(Path('.').glob('proofline-*.whl')).resolve()
+          provenance = json.loads(Path('CANDIDATE_PROVENANCE.json').read_text())
+          assert provenance['wheel_filename'] == wheel.name
+          assert provenance['wheel_sha256'] == hashlib.sha256(wheel.read_bytes()).hexdigest()
+          PY
+          WHEEL=$(realpath "$wheel_name")
+          uv venv --python 3.11 "$RUNNER_TEMP/proofline-wheel-env"
+          uv pip install --python "$RUNNER_TEMP/proofline-wheel-env/bin/python" "$WHEEL"
           cd "$GITHUB_WORKSPACE"
-          PROOFLINE_HOSTED_CANDIDATE_WHEEL="$RUNNER_TEMP/proofline-candidate/$wheel_name" uv run pytest -q -m candidate_build_only
+          export PROOFLINE_HOSTED_CANDIDATE_MODE=1
+          export PROOFLINE_HOSTED_CANDIDATE_WHEEL="$WHEEL"
+          export PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256="$digest"
+          export PROOFLINE_INSTALLED_EXECUTABLE="$RUNNER_TEMP/proofline-wheel-env/bin/proofline"
+          uv run pytest -q -m candidate_build_only --basetemp "$CONTAINMENT/basetemp" -p no:cacheprovider
+          git status --short --untracked-files=all > "$CONTAINMENT/tracked-after"
+          git status --short --ignored --untracked-files=all > "$CONTAINMENT/ignored-after"
+          cmp "$CONTAINMENT/tracked-before" "$CONTAINMENT/tracked-after"
+          cmp "$CONTAINMENT/ignored-before" "$CONTAINMENT/ignored-after"
       - uses: actions/upload-artifact@v4
         with:
           name: proofline-candidate-${{ github.run_id }}-${{ github.run_attempt }}
@@ -92,6 +121,14 @@ jobs:
       - name: Verify exact wheel and source candidate
         shell: bash
         run: |
+          CONTAINMENT="$RUNNER_TEMP/proofline-ubuntu-state"
+          mkdir -p "$CONTAINMENT/cache" "$CONTAINMENT/env" "$CONTAINMENT/tmp" "$CONTAINMENT/basetemp" "$CONTAINMENT/pycache"
+          export PYTHONDONTWRITEBYTECODE=1
+          export UV_CACHE_DIR="$CONTAINMENT/cache"
+          export UV_PROJECT_ENVIRONMENT="$CONTAINMENT/env"
+          export TMPDIR="$CONTAINMENT/tmp" TEMP="$CONTAINMENT/tmp" TMP="$CONTAINMENT/tmp"
+          git status --short --untracked-files=all > "$CONTAINMENT/tracked-before"
+          git status --short --ignored --untracked-files=all > "$CONTAINMENT/ignored-before"
           cd "$RUNNER_TEMP/proofline-candidate"
           sha256sum --check --strict SHA256SUMS
           python - <<'PY'
@@ -113,13 +150,22 @@ jobs:
           uv venv --python 3.11 "$RUNNER_TEMP/proofline-wheel-env"
           uv pip install --python "$RUNNER_TEMP/proofline-wheel-env/bin/python" proofline-*.whl
           WHEEL=$(realpath proofline-*.whl)
+          digest=$(sha256sum "$WHEEL" | cut -d ' ' -f1)
+          digest=${digest,,}
           cd "$GITHUB_WORKSPACE"
+          export PROOFLINE_HOSTED_CANDIDATE_MODE=1
           export PROOFLINE_INSTALLED_EXECUTABLE="$RUNNER_TEMP/proofline-wheel-env/bin/proofline"
           export PROOFLINE_HOSTED_CANDIDATE_WHEEL="$WHEEL"
+          export PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256="$digest"
           PYTHONPATH=src uv run proofline validate
           "$PROOFLINE_INSTALLED_EXECUTABLE" validate
+          export PYTHONPYCACHEPREFIX="$CONTAINMENT/pycache"
           python -m compileall -q src tests
-          uv run pytest -q -m "not candidate_build_only"
+          uv run pytest -q -m "not candidate_build_only" --basetemp "$CONTAINMENT/basetemp" -p no:cacheprovider
+          git status --short --untracked-files=all > "$CONTAINMENT/tracked-after"
+          git status --short --ignored --untracked-files=all > "$CONTAINMENT/ignored-after"
+          cmp "$CONTAINMENT/tracked-before" "$CONTAINMENT/tracked-after"
+          cmp "$CONTAINMENT/ignored-before" "$CONTAINMENT/ignored-after"
 
   windows-python311:
     runs-on: windows-latest
@@ -148,6 +194,17 @@ jobs:
       - name: Run tracked Windows candidate gate
         shell: powershell
         run: |
+          # Contract: operations inventory/bytes/manifest SHA256 is verified by the tracked gate.
+          $Containment = Join-Path $env:RUNNER_TEMP "proofline-windows-gate-state"
+          $env:PYTHONDONTWRITEBYTECODE = "1"
+          $env:UV_CACHE_DIR = Join-Path $Containment "cache"
+          $env:UV_PROJECT_ENVIRONMENT = Join-Path $Containment "env"
+          $env:TMPDIR = Join-Path $Containment "tmp"
+          $env:TEMP = $env:TMPDIR
+          $env:TMP = $env:TMPDIR
+          New-Item -ItemType Directory -Force -Path $env:UV_CACHE_DIR,$env:UV_PROJECT_ENVIRONMENT,$env:TMPDIR | Out-Null
+          $TrackedBefore = (& git status --short --untracked-files=all | Out-String)
+          $IgnoredBefore = (& git status --short --ignored --untracked-files=all | Out-String)
           $wheel = Get-ChildItem -LiteralPath "${{ runner.temp }}\proofline-candidate" -Filter "proofline-*.whl" -File
           if ($wheel.Count -ne 1) { throw "expected exactly one candidate wheel" }
           $checksum = "${{ runner.temp }}\proofline-candidate\SHA256SUMS"
@@ -155,9 +212,22 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($wheelHash)) { throw 'candidate wheel digest unavailable' }
           & .github/scripts/verify-windows-candidate.ps1 -WheelPath $wheel[0].FullName -ChecksumPath $checksum
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((& git status --short --untracked-files=all | Out-String) -cne $TrackedBefore) { throw "tracked repository mutation" }
+          if ((& git status --short --ignored --untracked-files=all | Out-String) -cne $IgnoredBefore) { throw "ignored repository mutation" }
       - name: Verify source history and installed wheel regressions
         shell: pwsh
         run: |
+          $Containment = Join-Path $env:RUNNER_TEMP "proofline-windows-regression-state"
+          $env:PYTHONDONTWRITEBYTECODE = "1"
+          $env:UV_CACHE_DIR = Join-Path $Containment "cache"
+          $env:UV_PROJECT_ENVIRONMENT = Join-Path $Containment "env"
+          $env:TMPDIR = Join-Path $Containment "tmp"
+          $env:TEMP = $env:TMPDIR
+          $env:TMP = $env:TMPDIR
+          $env:PYTHONPYCACHEPREFIX = Join-Path $Containment "pycache"
+          New-Item -ItemType Directory -Force -Path $env:UV_CACHE_DIR,$env:UV_PROJECT_ENVIRONMENT,$env:TMPDIR,$env:PYTHONPYCACHEPREFIX | Out-Null
+          $TrackedBefore = (& git status --short --untracked-files=all | Out-String)
+          $IgnoredBefore = (& git status --short --ignored --untracked-files=all | Out-String)
           $artifact = "$env:RUNNER_TEMP\proofline-candidate"
           $wheel = @(Get-ChildItem -LiteralPath $artifact -Filter "proofline-*.whl" -File)
           if ($wheel.Count -ne 1) { throw "expected exactly one candidate wheel" }
@@ -174,7 +244,11 @@ jobs:
               $provenance.wheel_sha256 -cne $digest) { throw "candidate provenance mismatch" }
           uv venv --python 3.11 "$env:RUNNER_TEMP\proofline-wheel-env"
           uv pip install --python "$env:RUNNER_TEMP\proofline-wheel-env\Scripts\python.exe" $wheel[0].FullName
+          $env:PROOFLINE_HOSTED_CANDIDATE_MODE = "1"
           $env:PROOFLINE_INSTALLED_EXECUTABLE = "$env:RUNNER_TEMP\proofline-wheel-env\Scripts\proofline.exe"
           $env:PROOFLINE_HOSTED_CANDIDATE_WHEEL = $wheel[0].FullName
-          uv run pytest -q tests/test_windows_history_runtime.py tests/test_start_implementation_windows_runtime.py tests/test_implementation_history.py
+          $env:PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256 = $digest.ToLowerInvariant()
+          uv run pytest -q tests/test_windows_history_runtime.py tests/test_start_implementation_windows_runtime.py tests/test_implementation_history.py --basetemp (Join-Path $Containment "basetemp") -p no:cacheprovider
           python -m compileall -q src tests
+          if ((& git status --short --untracked-files=all | Out-String) -cne $TrackedBefore) { throw "tracked repository mutation" }
+          if ((& git status --short --ignored --untracked-files=all | Out-String) -cne $IgnoredBefore) { throw "ignored repository mutation" }

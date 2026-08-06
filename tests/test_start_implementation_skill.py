@@ -1,5 +1,7 @@
 from pathlib import Path
+import hashlib
 import importlib.util
+import json
 import os
 import shlex
 import subprocess
@@ -16,6 +18,52 @@ SKILL = ROOT / "skills/proofline-start-implementation/SKILL.md"
 CONTRACT = ROOT / "docs/contracts/line-delivery.md"
 GITIGNORE = ROOT / ".gitignore"
 SCRIPT = ROOT / "skills/proofline-start-implementation/scripts/create_worktree.py"
+
+
+def _hosted_candidate_wheel() -> Path | None:
+    if os.environ.get("PROOFLINE_HOSTED_CANDIDATE_MODE") != "1":
+        return None
+    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
+    expected = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256")
+    installed = os.environ.get("PROOFLINE_INSTALLED_EXECUTABLE")
+    assert provided and expected and installed, "hosted candidate controls are incomplete"
+    wheel = Path(provided)
+    executable = Path(installed)
+    assert wheel.is_absolute() and wheel.is_file(), "candidate wheel must be an absolute file"
+    assert executable.is_absolute() and executable.is_file(), "installed executable must be an absolute file"
+    assert len(expected) == 64 and expected == expected.lower() and all(
+        character in "0123456789abcdef" for character in expected
+    ), "candidate wheel SHA256 must be lowercase hexadecimal"
+    assert hashlib.sha256(wheel.read_bytes()).hexdigest() == expected, "candidate wheel SHA256 mismatch"
+    python = executable.parent / ("python.exe" if os.name == "nt" else "python")
+    assert python.is_absolute() and python.is_file(), (
+        "installed executable has no absolute candidate environment Python"
+    )
+    try:
+        provenance = subprocess.run(
+            (
+                str(python),
+                "-I",
+                "-c",
+                "from importlib.metadata import distribution; "
+                "print(distribution('proofline').read_text('direct_url.json'))",
+            ),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise AssertionError("installed candidate provenance probe failed") from exc
+    assert provenance.returncode == 0, provenance.stderr
+    try:
+        direct_url = json.loads(provenance.stdout)
+    except json.JSONDecodeError as exc:
+        raise AssertionError("installed candidate provenance is malformed") from exc
+    assert isinstance(direct_url, dict), "installed candidate provenance must be an object"
+    assert direct_url.get("url") == wheel.resolve().as_uri(), (
+        "installed candidate wheel path mismatch"
+    )
+    return wheel
 
 
 def load_worktree_script():
@@ -1090,16 +1138,20 @@ def test_worktree_script_rejects_dirty_exact_h_idempotent_retry_without_mutation
 @pytest.fixture(scope="module")
 def packaged_worktree_script(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("packaged-start-implementation")
-    dist = root / "dist"
-    build = subprocess.run(
-        ("uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)),
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert build.returncode == 0, build.stderr
-    wheel = next(dist.glob("proofline-*.whl"))
+    wheel = _hosted_candidate_wheel()
+    if wheel is not None:
+        pass
+    else:
+        dist = root / "dist"
+        build = subprocess.run(
+            ("uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)),
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert build.returncode == 0, build.stderr
+        wheel = next(dist.glob("proofline-*.whl"))
     target = root / "create_worktree.py"
     with zipfile.ZipFile(wheel) as archive:
         target.write_bytes(

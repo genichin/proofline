@@ -29,6 +29,7 @@ def test_native_windows_installer_exists_and_matches_release_identity() -> None:
     assert _constant(windows, "VERSION", powershell=True) == _constant(
         posix, "VERSION", powershell=False
     )
+    assert _constant(windows, "VERSION", powershell=True) == "0.6.2"
     assert _constant(windows, "REPOSITORY", powershell=True) == _constant(
         posix, "REPOSITORY", powershell=False
     )
@@ -81,7 +82,7 @@ def test_windows_installer_errors_do_not_exit_the_calling_powershell_host() -> N
 
 def test_readme_documents_immutable_tagged_windows_install_from_a_temporary_file() -> None:
     text = README.read_text(encoding="utf-8")
-    installer_url = "https://raw.githubusercontent.com/genichin/proofline/v0.6.1/install.ps1"
+    installer_url = "https://raw.githubusercontent.com/genichin/proofline/v0.6.2/install.ps1"
 
     assert text.count(installer_url) == 2
     assert "Invoke-WebRequest" in text

@@ -11,18 +11,18 @@ ProofLine은 프로젝트의 Discovery, Requirement, Acceptance Criterion, Micro
 
 ## 설치
 
-ProofLine은 PyPI가 아니라 [GitHub Releases](https://github.com/genichin/proofline/releases)에서 공식 wheel을 배포합니다. 이 source의 release candidate는 `v0.6.1`이며, 아래 exact-tag 설치는 해당 tag와 Release가 게시된 뒤 사용합니다.
+ProofLine은 PyPI가 아니라 [GitHub Releases](https://github.com/genichin/proofline/releases)에서 공식 wheel을 배포합니다. 이 source의 release candidate는 `v0.6.2`이며, 아래 exact-tag 설치는 해당 tag와 Release가 게시된 뒤 사용합니다.
 
 다음 한 줄로 설치합니다. Versioned installer가 임시 디렉터리에서 wheel과 `SHA256SUMS`를 내려받아 strict 검증한 뒤 user-level `uv tool` environment에 설치합니다.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.6.1/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.6.2/install.sh | sh
 ```
 
-기존 ProofLine installation을 verified v0.6.1 wheel로 명시적으로 교체하려면 `--force`를 전달합니다.
+기존 ProofLine installation을 verified v0.6.2 wheel로 명시적으로 교체하려면 `--force`를 전달합니다.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.6.1/install.sh | sh -s -- --force
+curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.6.2/install.sh | sh -s -- --force
 ```
 
 Windows 11에서는 exact-tag installer를 native PowerShell의 temporary file로 내려받아 실행합니다.
@@ -30,7 +30,7 @@ Windows 11에서는 exact-tag installer를 native PowerShell의 temporary file�
 ```powershell
 $InstallerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("proofline-install-" + [guid]::NewGuid().ToString("N") + ".ps1")
 try {
-    Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/genichin/proofline/v0.6.1/install.ps1" -OutFile $InstallerPath
+    Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/genichin/proofline/v0.6.2/install.ps1" -OutFile $InstallerPath
     & $InstallerPath
 } finally {
     if (Test-Path -LiteralPath $InstallerPath) {
@@ -44,7 +44,7 @@ try {
 ```powershell
 $InstallerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("proofline-install-" + [guid]::NewGuid().ToString("N") + ".ps1")
 try {
-    Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/genichin/proofline/v0.6.1/install.ps1" -OutFile $InstallerPath
+    Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/genichin/proofline/v0.6.2/install.ps1" -OutFile $InstallerPath
     & $InstallerPath -Force
 } finally {
     if (Test-Path -LiteralPath $InstallerPath) {
@@ -70,7 +70,7 @@ Installer는 application project의 `.venv`, `pyproject.toml`, lockfile, Git sta
 Installer를 사용하지 않으려면 동일한 검증·설치를 직접 수행할 수 있습니다.
 
 ```bash
-RELEASE_VERSION="0.6.1"
+RELEASE_VERSION="0.6.2"
 RELEASE_DIR="$(mktemp -d)"
 BASE_URL="https://github.com/genichin/proofline/releases/download/v${RELEASE_VERSION}"
 
@@ -91,7 +91,7 @@ uv tool install \
   "${RELEASE_DIR}/proofline-${RELEASE_VERSION}-py3-none-any.whl"
 ```
 
-기존 ProofLine tool installation이 있으면 `uv tool install`이 자동으로 덮어쓰지 않습니다. 기존 version에서 `v0.6.1`로 전환하려면 checksum 검증이 성공한 뒤 마지막 명령에 `--force --no-config`를 명시합니다.
+기존 ProofLine tool installation이 있으면 `uv tool install`이 자동으로 덮어쓰지 않습니다. 기존 version에서 `v0.6.2`로 전환하려면 checksum 검증이 성공한 뒤 마지막 명령에 `--force --no-config`를 명시합니다.
 
 ```bash
 uv tool install --force --no-config \
@@ -113,7 +113,7 @@ proofline validate
 `proofline --version`은 설치 identity를 확인하는 선택 단계입니다. `proofline update --check`는 user harness를 초기화한 뒤 실행합니다.
 
 ```text
-proofline 0.6.1
+proofline 0.6.2
 ```
 
 `proofline` 명령을 찾지 못하면 `uv tool dir --bin`으로 executable 경로를 확인하고 해당 경로가 `PATH`에 포함됐는지 확인하세요.
@@ -127,11 +127,12 @@ ProofLine 0.3.0 이상에서는 위 설치 확인 순서의 `proofline init --dr
 ├── manifest.yaml
 ├── agent-context.md
 ├── contracts/
+├── operations/
 ├── templates/
 └── skills/
 ```
 
-Project의 `.proofline/`은 Lines와 criteria 같은 canonical artifact 전용이며 harness resource를 저장하지 않습니다.
+`docs/operations/*.md` 전체는 public managed operation inventory로 wheel의 `proofline_home/operations/`, HOME의 `~/.proofline/operations/`에 exact bytes로 설치되고 `manifest.yaml` SHA-256 record로 관리됩니다. Exact `proofline init` 재실행과 initialized `proofline update --check`는 이 tree를 읽기만 하며 변경하지 않습니다. Project의 `.proofline/`은 Lines와 criteria 같은 canonical artifact 전용이며 harness resource를 저장하지 않습니다.
 
 ## 업데이트
 
@@ -142,7 +143,7 @@ v0.3.0 updater에서 v0.4.0 이상으로 처음 전환할 때는 기존 updater�
 ```bash
 proofline update --check
 proofline update
-proofline update --version 0.6.1
+proofline update --version 0.6.2
 ```
 
 Source checkout 기반 설치는 자동으로 official wheel로 바뀌지 않습니다. 명시적으로 전환하려는 경우에만 다음을 실행합니다.

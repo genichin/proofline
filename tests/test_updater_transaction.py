@@ -7,6 +7,7 @@ import subprocess
 import zipfile
 
 import pytest
+import yaml
 
 import proofline.home_writer as home_writer
 import proofline.updater as updater
@@ -14,13 +15,41 @@ from proofline.home_writer import build_home_payload
 from proofline.updater import Release, UpdateError
 
 
-def resources(marker: str) -> dict[str, bytes]:
-    return {
+OPERATIONS_ROOT = Path(__file__).resolve().parents[1] / "docs" / "operations"
+
+
+def resources(marker: str, *, include_operations: bool = False) -> dict[str, bytes]:
+    payload = {
         "agent-context.md": f"agent-{marker}\n".encode(),
         "contracts/storage.md": f"contract-{marker}\n".encode(),
         "templates/schema-v1/artifacts/line.md": f"template-{marker}\n".encode(),
         "skills/proofline-start-line/SKILL.md": f"skill-{marker}\n".encode(),
     }
+    if include_operations:
+        payload.update(
+            {
+                f"operations/{path.name}": path.read_bytes()
+                for path in sorted(OPERATIONS_ROOT.glob("*.md"))
+            }
+        )
+    return payload
+
+
+def build_legacy_home_payload(version: str, resources_payload: dict[str, bytes]) -> dict[str, bytes]:
+    payload = dict(resources_payload)
+    manifest = {
+        "schema_version": 1,
+        "proofline_version": version,
+        "source": {"type": "packaged-resource"},
+        "managed_files": [
+            {"path": path, "sha256": hashlib.sha256(content).hexdigest()}
+            for path, content in sorted(payload.items())
+        ],
+    }
+    payload["manifest.yaml"] = yaml.safe_dump(
+        manifest, sort_keys=False, allow_unicode=True
+    ).encode("utf-8")
+    return payload
 
 
 def write_payload(root: Path, payload: dict[str, bytes]) -> None:
@@ -30,11 +59,15 @@ def write_payload(root: Path, payload: dict[str, bytes]) -> None:
         path.write_bytes(content)
 
 
-def make_wheel(root: Path, version: str, marker: str) -> tuple[Path, Path]:
+def make_wheel(
+    root: Path, version: str, marker: str, *, include_operations: bool = False
+) -> tuple[Path, Path]:
     wheel = root / f"proofline-{version}-py3-none-any.whl"
     with zipfile.ZipFile(wheel, "w") as archive:
         archive.writestr("proofline_home/__init__.py", b"")
-        for relative, content in resources(marker).items():
+        for relative, content in resources(
+            marker, include_operations=include_operations
+        ).items():
             archive.writestr(f"proofline_home/{relative}", content)
     checksum = root / f"SHA256SUMS-{version}"
     checksum.write_text(f"{hashlib.sha256(wheel.read_bytes()).hexdigest()}  {wheel.name}\n")
@@ -51,21 +84,25 @@ def configure_update(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    current: str = "0.3.0",
-    target: str = "0.4.0",
+    current: str = "0.6.0",
+    target: str = "0.6.2",
     home_present: bool = True,
 ) -> tuple[Path, dict[str, bytes], dict[str, bytes], list[str]]:
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
-    old_payload = build_home_payload(current, resources("old"))
-    new_payload = build_home_payload(target, resources("new"))
+    old_payload = build_legacy_home_payload(current, resources("old"))
+    new_payload = build_home_payload(
+        target, resources("new", include_operations=True)
+    )
     if home_present:
         write_payload(home / ".proofline", old_payload)
     assets = tmp_path / "assets"
     assets.mkdir()
     old_wheel, old_sum = make_wheel(assets, current, "old")
-    new_wheel, new_sum = make_wheel(assets, target, "new")
+    new_wheel, new_sum = make_wheel(
+        assets, target, "new", include_operations=True
+    )
     releases = {
         current: Release(current, old_wheel.name, f"asset:{old_wheel}", f"asset:{old_sum}"),
         target: Release(target, new_wheel.name, f"asset:{new_wheel}", f"asset:{new_sum}"),
@@ -112,7 +149,10 @@ def test_update_converges_package_and_existing_harness(tmp_path: Path, monkeypat
     result = updater.run_update()
 
     assert result.status == "updated"
-    assert installs == ["0.4.0"]
+    assert installs == ["0.6.2"]
+    assert {
+        relative for relative in new_payload if relative.startswith("operations/")
+    } == {f"operations/{path.name}" for path in OPERATIONS_ROOT.glob("*.md")}
     for relative, content in new_payload.items():
         assert (home / ".proofline" / relative).read_bytes() == content
     assert not list(home.glob(".proofline-update-*"))
@@ -155,7 +195,7 @@ def test_home_commit_failure_rolls_back_package_and_harness(tmp_path: Path, monk
     with pytest.raises(UpdateError, match="injected commit failure"):
         updater.run_update()
 
-    assert installs == ["0.4.0", "0.3.0"]
+    assert installs == ["0.6.2", "0.6.0"]
     for relative, content in old_payload.items():
         assert (home / ".proofline" / relative).read_bytes() == content
 
@@ -172,7 +212,7 @@ def test_finalize_cleanup_failure_keeps_target_package_and_harness(
     with pytest.raises(UpdateError, match="committed but old harness cleanup failed"):
         updater.run_update()
 
-    assert installs == ["0.4.0"]
+    assert installs == ["0.6.2"]
     for relative, content in new_payload.items():
         assert (home / ".proofline" / relative).read_bytes() == content
 
@@ -195,7 +235,7 @@ def test_home_rollback_failure_does_not_downgrade_target_package(
     with pytest.raises(UpdateError, match="home rollback failed"):
         updater.run_update()
 
-    assert installs == ["0.4.0"]
+    assert installs == ["0.6.2"]
     for relative, content in new_payload.items():
         assert (home / ".proofline" / relative).read_bytes() == content
 
@@ -229,4 +269,49 @@ def test_target_install_failure_removes_stage_and_preserves_old_harness(
     assert installs == []
     for relative, content in old_payload.items():
         assert (home / ".proofline" / relative).read_bytes() == content
+    assert not list(home.glob(".proofline-update-*"))
+
+
+def test_target_package_post_verification_failure_rolls_back_package_and_harness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home, old_payload, _, installs = configure_update(tmp_path, monkeypatch)
+    original = updater._verify_install
+
+    def fail_target(
+        version: str, expected_env: Path, executable: Path, *, cwd: Path
+    ) -> None:
+        if version == "0.6.2":
+            raise UpdateError("target package verification failed")
+        original(version, expected_env, executable, cwd=cwd)
+
+    monkeypatch.setattr(updater, "_verify_install", fail_target)
+
+    with pytest.raises(UpdateError, match="target package verification failed"):
+        updater.run_update()
+
+    assert installs == ["0.6.2", "0.6.0"]
+    for relative, content in old_payload.items():
+        assert (home / ".proofline" / relative).read_bytes() == content
+    assert not (home / ".proofline/operations").exists()
+    assert not list(home.glob(".proofline-update-*"))
+
+
+def test_home_post_verification_failure_restores_old_package_and_harness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home, old_payload, _, installs = configure_update(tmp_path, monkeypatch)
+
+    def fail_verify(payload: dict[str, bytes], *, home: Path | None = None) -> None:
+        raise home_writer.HomeInitError("home post-verification failed")
+
+    monkeypatch.setattr(home_writer, "verify_home", fail_verify)
+
+    with pytest.raises(UpdateError, match="home post-verification failed"):
+        updater.run_update()
+
+    assert installs == ["0.6.2", "0.6.0"]
+    for relative, content in old_payload.items():
+        assert (home / ".proofline" / relative).read_bytes() == content
+    assert not (home / ".proofline/operations").exists()
     assert not list(home.glob(".proofline-update-*"))

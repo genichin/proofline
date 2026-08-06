@@ -17,6 +17,52 @@ class ScenarioRegistryError(ValueError):
     pass
 
 
+def _hosted_candidate_wheel() -> Path | None:
+    if os.environ.get("PROOFLINE_HOSTED_CANDIDATE_MODE") != "1":
+        return None
+    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
+    expected = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256")
+    installed = os.environ.get("PROOFLINE_INSTALLED_EXECUTABLE")
+    assert provided and expected and installed, "hosted candidate controls are incomplete"
+    wheel = Path(provided)
+    executable = Path(installed)
+    assert wheel.is_absolute() and wheel.is_file(), "candidate wheel must be an absolute file"
+    assert executable.is_absolute() and executable.is_file(), "installed executable must be an absolute file"
+    assert len(expected) == 64 and expected == expected.lower() and all(
+        character in "0123456789abcdef" for character in expected
+    ), "candidate wheel SHA256 must be lowercase hexadecimal"
+    assert hashlib.sha256(wheel.read_bytes()).hexdigest() == expected, "candidate wheel SHA256 mismatch"
+    python = executable.parent / ("python.exe" if os.name == "nt" else "python")
+    assert python.is_absolute() and python.is_file(), (
+        "installed executable has no absolute candidate environment Python"
+    )
+    try:
+        provenance = subprocess.run(
+            (
+                str(python),
+                "-I",
+                "-c",
+                "from importlib.metadata import distribution; "
+                "print(distribution('proofline').read_text('direct_url.json'))",
+            ),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as exc:
+        raise AssertionError("installed candidate provenance probe failed") from exc
+    assert provenance.returncode == 0, provenance.stderr
+    try:
+        direct_url = json.loads(provenance.stdout)
+    except json.JSONDecodeError as exc:
+        raise AssertionError("installed candidate provenance is malformed") from exc
+    assert isinstance(direct_url, dict), "installed candidate provenance must be an object"
+    assert direct_url.get("url") == wheel.resolve().as_uri(), (
+        "installed candidate wheel path mismatch"
+    )
+    return wheel
+
+
 @dataclass(frozen=True)
 class ExpectedResult:
     passed: bool
@@ -196,18 +242,22 @@ def _repo_git_snapshot(repo: Path) -> dict[str, Any]:
 def execute_cross_artifact_registry(root: Path, registry_path: Path, temp_root: Path) -> CrossArtifactEvidence:
     registry = load_registry(registry_path)
     before = _repo_git_snapshot(root)
-    dist = temp_root / "candidate-dist"
-    dist.mkdir()
-    built = subprocess.run(
-        ("uv", "build", "--offline", "--wheel", "--out-dir", str(dist)),
-        cwd=root,
-        env=_sanitized_env(),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert built.returncode == 0, built.stderr
-    wheel = next(dist.glob("proofline-*.whl"))
+    wheel = _hosted_candidate_wheel()
+    if wheel is not None:
+        pass
+    else:
+        dist = temp_root / "candidate-dist"
+        dist.mkdir()
+        built = subprocess.run(
+            ("uv", "build", "--offline", "--wheel", "--out-dir", str(dist)),
+            cwd=root,
+            env=_sanitized_env(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert built.returncode == 0, built.stderr
+        wheel = next(dist.glob("proofline-*.whl"))
     wheel_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
 
     venv = temp_root / "candidate-venv"
