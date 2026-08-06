@@ -183,14 +183,16 @@ def payload_from_wheel(wheel: Path, version: str) -> dict[str, bytes]:
                 if info.filename in seen:
                     raise HomeInitError(f"duplicate wheel entry: {info.filename}")
                 seen.add(info.filename)
-                if not info.filename.startswith(prefix) or info.is_dir():
+                if not info.filename.startswith(prefix):
                     continue
                 relative = info.filename[len(prefix):]
-                if relative == "__init__.py":
-                    continue
                 mode = info.external_attr >> 16
                 if stat.S_ISLNK(mode):
                     raise HomeInitError(f"wheel resource symlink: {relative}")
+                if info.is_dir():
+                    continue
+                if relative == "__init__.py":
+                    continue
                 resources_payload[relative] = archive.read(info)
     except (OSError, zipfile.BadZipFile) as exc:
         raise HomeInitError(f"invalid wheel: {exc}") from exc

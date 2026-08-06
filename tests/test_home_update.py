@@ -112,6 +112,20 @@ def test_target_wheel_rejects_resource_symlink(tmp_path: Path) -> None:
         payload_from_wheel(wheel, "0.4.0")
 
 
+def test_target_wheel_rejects_symlink_mode_directory_entry(tmp_path: Path) -> None:
+    wheel = tmp_path / "proofline-0.4.0-py3-none-any.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for relative, content in resource_files("new").items():
+            archive.writestr(f"proofline_home/{relative}", content)
+        link = zipfile.ZipInfo("proofline_home/operations/")
+        link.create_system = 3
+        link.external_attr = 0o120777 << 16
+        archive.writestr(link, b"")
+
+    with pytest.raises(HomeInitError, match="symlink"):
+        payload_from_wheel(wheel, "0.4.0")
+
+
 def test_target_wheel_rejects_duplicate_resource_name(tmp_path: Path) -> None:
     wheel = tmp_path / "proofline-0.4.0-py3-none-any.whl"
     with zipfile.ZipFile(wheel, "w") as archive:
@@ -343,6 +357,57 @@ def test_version_compatibility_bridge_reconciles_existing_manifest(tmp_path: Pat
     monkeypatch.setattr("proofline.home_writer._payload", lambda: new)
 
     assert reconcile_existing_home() == "updated"
+    assert (target / "manifest.yaml").read_bytes() == new["manifest.yaml"]
+
+
+def test_version_compatibility_bridge_adds_operations_to_pre_operations_home(
+    tmp_path: Path, monkeypatch
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    target = home / ".proofline"
+    old_resources = {
+        relative: content
+        for relative, content in resource_files("old").items()
+        if not relative.startswith("operations/")
+    }
+    old_manifest = {
+        "schema_version": 1,
+        "proofline_version": "0.6.0",
+        "source": {"type": "packaged-resource"},
+        "managed_files": [
+            {
+                "path": relative,
+                "sha256": hashlib.sha256(old_resources[relative]).hexdigest(),
+            }
+            for relative in sorted(old_resources)
+        ],
+    }
+    old = {
+        **old_resources,
+        "manifest.yaml": yaml.safe_dump(
+            old_manifest, sort_keys=False, allow_unicode=True
+        ).encode("utf-8"),
+    }
+    assert not any(
+        record["path"].startswith("operations/")
+        for record in old_manifest["managed_files"]
+    )
+    new_resources = resource_files("new")
+    new = build_home_payload("0.7.0", new_resources)
+    write_payload(target, old)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr("proofline.home_writer._payload", lambda: new)
+
+    assert reconcile_existing_home() == "updated"
+    assert {
+        path.relative_to(target).as_posix(): path.read_bytes()
+        for path in sorted((target / "operations").iterdir())
+    } == {
+        relative: content
+        for relative, content in new_resources.items()
+        if relative.startswith("operations/")
+    }
     assert (target / "manifest.yaml").read_bytes() == new["manifest.yaml"]
 
 
