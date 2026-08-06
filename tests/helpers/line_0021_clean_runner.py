@@ -152,7 +152,8 @@ def _make_fake_uv(path: Path, *, behavior: str, mutation_target: Path) -> None:
         target = pathlib.Path(sys.argv[-1])
         python = target / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
         python.parent.mkdir(parents=True, exist_ok=True)
-        python.write_text("fixture python\\n", encoding="utf-8")
+        python.write_text("#!{sys.executable}\\n", encoding="utf-8")
+        python.chmod(python.stat().st_mode | {stat.S_IXUSR})
     if behavior == "network_trap" and "--offline" in sys.argv:
         print("clean_preflight.network.forbidden", file=sys.stderr)
         raise SystemExit(86)
@@ -161,7 +162,7 @@ def _make_fake_uv(path: Path, *, behavior: str, mutation_target: Path) -> None:
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
 
-def _make_case(base: Path, plan_bytes: bytes, axis: str) -> dict[str, Any]:
+def _make_case(base: Path, plan_bytes: bytes, wheel_bytes: bytes, axis: str) -> dict[str, Any]:
     if base.exists():
         shutil.rmtree(base)
     base.mkdir(parents=True)
@@ -179,7 +180,7 @@ def _make_case(base: Path, plan_bytes: bytes, axis: str) -> dict[str, Any]:
     artifacts = base / "artifacts"
     artifacts.mkdir()
     wheel = artifacts / "proofline-0.6.1-py3-none-any.whl"
-    wheel.write_bytes(b"exact candidate wheel\n")
+    wheel.write_bytes(wheel_bytes)
     provenance = artifacts / "provenance.json"
     provenance_value = {
         "schema_version": 1,
@@ -286,8 +287,15 @@ def _load_helper(path: Path, tag: str):
     return module
 
 
-def _execute(helper_path: Path, case: dict[str, Any], expected: list[Any], tag: str) -> dict[str, Any]:
+def _execute(
+    helper_path: Path,
+    case: dict[str, Any],
+    expected: list[Any],
+    tag: str,
+    source_root: Path,
+) -> dict[str, Any]:
     helper = _load_helper(helper_path, tag)
+    setattr(helper, "_repository_source_root", lambda: source_root)
     helper.os.defpath = str(case["fake_bin"])
     original_budget = helper.ExecutionBudget
     if case["axis"] == "timeout":
@@ -297,9 +305,13 @@ def _execute(helper_path: Path, case: dict[str, Any], expected: list[Any], tag: 
     old_cache = os.environ.get("UV_CACHE_DIR")
     old_home = os.environ.get("HOME")
     old_userprofile = os.environ.get("USERPROFILE")
+    old_path = os.environ.get("PATH")
     os.environ["UV_CACHE_DIR"] = str(case["ambient_cache"])
     os.environ["HOME"] = str(case["ambient_home"])
     os.environ["USERPROFILE"] = str(case["ambient_home"])
+    os.environ["PATH"] = os.pathsep.join(
+        part for part in (str(case["fake_bin"]), old_path) if part
+    )
     argv = [
         "--repo", str(case["repo"].resolve()),
         "--candidate", case["candidate"],
@@ -321,6 +333,7 @@ def _execute(helper_path: Path, case: dict[str, Any], expected: list[Any], tag: 
             ("UV_CACHE_DIR", old_cache),
             ("HOME", old_home),
             ("USERPROFILE", old_userprofile),
+            ("PATH", old_path),
         ):
             if old_value is None:
                 os.environ.pop(key, None)
@@ -374,12 +387,13 @@ def _validate_registry(path: Path) -> dict[str, Any]:
 def run_registry(*, root: Path, registry_path: Path, wheel: Path, workspace: Path) -> dict[str, Any]:
     root = root.resolve()
     wheel = wheel.resolve()
+    wheel_bytes = wheel.read_bytes()
     registry = _validate_registry(registry_path)
     source_helper = root / SOURCE_HELPER
     source_plan = root / SOURCE_PLAN
     extracted = workspace.resolve() / "extracted-wheel"
     extracted.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(wheel) as archive:
+    with zipfile.ZipFile(io.BytesIO(wheel_bytes)) as archive:
         helper_bytes = archive.read(HELPER_MEMBER)
         plan_bytes = archive.read(PLAN_MEMBER)
     wheel_helper = extracted / HELPER_MEMBER
@@ -399,11 +413,19 @@ def run_registry(*, root: Path, registry_path: Path, wheel: Path, workspace: Pat
     no_unexpected_mutation = True
     for index, scenario in enumerate(registry["scenarios"]):
         scenario_root = workspace.resolve() / f"{index:02d}-{scenario['id']}"
-        source_case = _make_case(scenario_root, source_plan.read_bytes(), scenario["axis"])
-        source = _execute(source_helper, source_case, scenario["expect"], f"source-{index}")
+        source_case = _make_case(
+            scenario_root, source_plan.read_bytes(), wheel_bytes, scenario["axis"]
+        )
+        source = _execute(
+            source_helper, source_case, scenario["expect"], f"source-{index}", root
+        )
         shutil.rmtree(scenario_root)
-        wheel_case = _make_case(scenario_root, wheel_plan.read_bytes(), scenario["axis"])
-        installed = _execute(wheel_helper, wheel_case, scenario["expect"], f"wheel-{index}")
+        wheel_case = _make_case(
+            scenario_root, wheel_plan.read_bytes(), wheel_bytes, scenario["axis"]
+        )
+        installed = _execute(
+            wheel_helper, wheel_case, scenario["expect"], f"wheel-{index}", root
+        )
         source_tuple = (source["returncode"], source["stdout"], source["stderr"])
         wheel_tuple = (installed["returncode"], installed["stdout"], installed["stderr"])
         if source_tuple != wheel_tuple:
@@ -426,7 +448,7 @@ def run_registry(*, root: Path, registry_path: Path, wheel: Path, workspace: Pat
         "byte_parity": byte_parity,
         "no_unexpected_mutation": no_unexpected_mutation,
         "wheel": str(wheel),
-        "wheel_sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
+        "wheel_sha256": hashlib.sha256(wheel_bytes).hexdigest(),
         "helper_member": HELPER_MEMBER,
         "plan_member": PLAN_MEMBER,
         "results": results,

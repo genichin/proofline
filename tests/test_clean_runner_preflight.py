@@ -10,6 +10,7 @@ import subprocess
 import sys
 import textwrap
 import time
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -63,7 +64,15 @@ def valid_case(tmp_path: Path):
     artifacts = tmp_path / "artifacts"
     artifacts.mkdir()
     wheel = artifacts / "proofline-0.6.1-py3-none-any.whl"
-    wheel.write_bytes(b"exact candidate wheel\n")
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr(
+            "proofline_home/skills/proofline-run-dqc/scripts/preflight_clean_runner.py",
+            HELPER.read_bytes(),
+        )
+        archive.writestr(
+            "proofline_home/skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json",
+            PLAN.read_bytes(),
+        )
     provenance = artifacts / "provenance.json"
     provenance_value = {
         "schema_version": 1,
@@ -324,7 +333,8 @@ def fake_uv(tmp_path: Path) -> tuple[Path, Path]:
                 environment = pathlib.Path(sys.argv[-1])
                 python = environment / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
                 python.parent.mkdir(parents=True, exist_ok=True)
-                python.write_text("fixture python\\n", encoding="utf-8")
+                python.write_text("#!/usr/bin/env python3\\n", encoding="utf-8")
+                python.chmod(0o700)
             elif "--offline" in sys.argv and (executable.parent / "network-attempt").exists():
                 print("clean_preflight.network.forbidden", file=sys.stderr)
                 raise SystemExit(86)
@@ -416,7 +426,9 @@ def test_disposable_provisioning_uses_exact_local_wheel_and_isolated_state(
     assert len(records) == 3
     create, candidate_install, harness_install = records
     assert create["argv"][:3] == ["venv", "--python", "3.11"]
-    assert candidate_install["argv"][-1] == str(valid_case["wheel"])
+    assert Path(candidate_install["argv"][-1]).name == valid_case["wheel"].name
+    assert Path(candidate_install["argv"][-1]).parent.name == "candidate"
+    assert not Path(candidate_install["argv"][-1]).exists()
     assert "--no-deps" in candidate_install["argv"]
     assert "--no-index" in candidate_install["argv"]
     assert all("build" not in record["argv"] for record in records)
@@ -728,5 +740,197 @@ def test_nonzero_precedes_mutation_diagnostic(helper, valid_case, fake_uv):
             repo=valid_case["repo"], candidate=valid_case["candidate"], wheel=valid_case["wheel"],
             provenance_path=valid_case["provenance"], plan_path=PLAN, network_mode="online",
             wheelhouse=None, uv_executable=str(executable),
+        ),
+    )
+
+
+def test_default_uv_is_resolved_from_inherited_real_style_path(valid_case, fake_uv, tmp_path):
+    bin_dir = tmp_path / "user-bin"
+    bin_dir.mkdir()
+    uv = bin_dir / "uv"
+    uv.write_bytes(fake_uv[0].read_bytes())
+    uv.chmod(0o700)
+    completed = subprocess.run(
+        [
+            sys.executable, str(HELPER), "--repo", str(valid_case["repo"]),
+            "--candidate", valid_case["candidate"], "--wheel", str(valid_case["wheel"]),
+            "--provenance", str(valid_case["provenance"]), "--network-mode", "online",
+        ],
+        cwd=tmp_path,
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout)["diagnostic_code"] == "clean_preflight.pass"
+
+
+@pytest.mark.parametrize("kind", ["symlink", "nonexec", "relative"])
+def test_uv_resolution_rejects_ambiguous_noncanonical_executables(
+    helper, tmp_path, monkeypatch, kind
+):
+    real = tmp_path / "real-uv"
+    real.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    real.chmod(0o700)
+    if kind == "symlink":
+        selected = tmp_path / "uv"
+        selected.symlink_to(real)
+    elif kind == "nonexec":
+        selected = tmp_path / "uv"
+        selected.write_bytes(real.read_bytes())
+        selected.chmod(0o600)
+    else:
+        selected = Path("./uv")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    _assert_code(
+        helper, "clean_preflight.provision.failed",
+        lambda: helper._resolve_uv_executable(str(selected)),
+    )
+
+
+def _parity_root(tmp_path: Path) -> Path:
+    root = tmp_path / "source"
+    for relative in (
+        ".github/workflows/candidate-verification.yml",
+        ".github/scripts/verify-windows-candidate.ps1",
+        "skills/proofline-run-dqc/scripts/preflight_clean_runner.py",
+        "skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json",
+    ):
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((ROOT / relative).read_bytes())
+    return root
+
+
+def test_standalone_rejects_workflow_contract_drift(
+    helper, valid_case, fake_uv, monkeypatch, tmp_path
+):
+    root = _parity_root(tmp_path)
+    workflow = root / ".github/workflows/candidate-verification.yml"
+    workflow.write_text(
+        workflow.read_text(encoding="utf-8").replace(
+            "PROOFLINE_CLEAN_RUNNER_STEP_ORDER: verify-wheel,verify-checksum,",
+            "PROOFLINE_CLEAN_RUNNER_STEP_ORDER: verify-wheel,",
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(helper, "_repository_source_root", lambda: root)
+    _assert_code(
+        helper, "clean_preflight.parity.workflow",
+        lambda: helper.run_clean_preflight(
+            repo=valid_case["repo"], candidate=valid_case["candidate"],
+            wheel=valid_case["wheel"], provenance_path=valid_case["provenance"],
+            plan_path=root / "skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json",
+            network_mode="online", wheelhouse=None, uv_executable=str(fake_uv[0]),
+        ),
+    )
+
+
+def test_standalone_rejects_packaged_helper_or_plan_drift(
+    helper, valid_case, fake_uv, tmp_path
+):
+    replacement = valid_case["wheel"].with_name(valid_case["wheel"].name + ".new")
+    with zipfile.ZipFile(replacement, "w") as archive:
+        archive.writestr(
+            "proofline_home/skills/proofline-run-dqc/scripts/preflight_clean_runner.py", b"drift\n"
+        )
+        archive.writestr(
+            "proofline_home/skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json",
+            PLAN.read_bytes(),
+        )
+    replacement.replace(valid_case["wheel"])
+    payload = dict(valid_case["provenance_value"])
+    payload["wheel_sha256"] = hashlib.sha256(valid_case["wheel"].read_bytes()).hexdigest()
+    valid_case["provenance"].write_text(json.dumps(payload), encoding="utf-8")
+    _assert_code(
+        helper, "clean_preflight.parity.packaged",
+        lambda: helper.run_clean_preflight(
+            repo=valid_case["repo"], candidate=valid_case["candidate"],
+            wheel=valid_case["wheel"], provenance_path=valid_case["provenance"],
+            plan_path=PLAN, network_mode="online", wheelhouse=None,
+            uv_executable=str(fake_uv[0]),
+        ),
+    )
+
+
+def test_repository_root_symlink_is_rejected(helper, valid_case, tmp_path):
+    alias = tmp_path / "repo-alias"
+    alias.symlink_to(valid_case["repo"], target_is_directory=True)
+    valid_case["repo"] = alias
+    _assert_code(
+        helper, "clean_preflight.candidate.mismatch", lambda: _validate(helper, valid_case)
+    )
+
+
+def test_linked_worktree_common_ref_mutation_is_detected(helper, valid_case, fake_uv, tmp_path):
+    linked = tmp_path / "linked"
+    _git(valid_case["repo"], "worktree", "add", "-qb", "linked-test", str(linked))
+    valid_case["repo"] = linked
+    valid_case["candidate"] = _git(linked, "rev-parse", "HEAD")
+    payload = dict(valid_case["provenance_value"])
+    payload["candidate_commit"] = valid_case["candidate"]
+    valid_case["provenance"].write_text(json.dumps(payload), encoding="utf-8")
+    executable = fake_uv[0]
+    executable.write_text(
+        executable.read_text(encoding="utf-8").replace(
+            "record = {",
+            f"import subprocess\nsubprocess.run(['git','-C',{str(linked)!r},'update-ref','refs/heads/hidden-mutation','HEAD'], check=True)\nrecord = {{",
+        ),
+        encoding="utf-8",
+    )
+    _assert_code(
+        helper, "clean_preflight.mutation",
+        lambda: helper.run_clean_preflight(
+            repo=linked, candidate=valid_case["candidate"], wheel=valid_case["wheel"],
+            provenance_path=valid_case["provenance"], plan_path=PLAN,
+            network_mode="online", wheelhouse=None, uv_executable=str(executable),
+        ),
+    )
+
+
+def test_wheel_replacement_after_validation_fails_closed_and_uses_exact_fd_name(
+    helper, valid_case, fake_uv, monkeypatch
+):
+    original_parity = helper._verify_packaged_parity
+
+    def replace_after_parity(*args, **kwargs):
+        result = original_parity(*args, **kwargs)
+        replacement = valid_case["wheel"].with_name("replacement")
+        replacement.write_bytes(b"replacement bytes")
+        replacement.replace(valid_case["wheel"])
+        return result
+
+    monkeypatch.setattr(helper, "_verify_packaged_parity", replace_after_parity)
+    _assert_code(
+        helper, "clean_preflight.mutation",
+        lambda: helper.run_clean_preflight(
+            repo=valid_case["repo"], candidate=valid_case["candidate"],
+            wheel=valid_case["wheel"], provenance_path=valid_case["provenance"],
+            plan_path=PLAN, network_mode="online", wheelhouse=None,
+            uv_executable=str(fake_uv[0]),
+        ),
+    )
+    records = [json.loads(line) for line in fake_uv[1].read_text(encoding="utf-8").splitlines()]
+    install_path = Path(next(r for r in records if "--no-deps" in r["argv"])["argv"][-1])
+    assert install_path.name == valid_case["provenance_value"]["wheel_filename"]
+
+
+def test_wheel_replacement_during_install_fails_closed(helper, valid_case, fake_uv):
+    executable = fake_uv[0]
+    executable.write_text(
+        executable.read_text(encoding="utf-8").replace(
+            'elif "--offline" in sys.argv',
+            f"elif '--no-deps' in sys.argv:\n    replacement = pathlib.Path({str(valid_case['wheel'])!r} + '.replacement')\n    replacement.write_bytes(b'replaced during install')\n    replacement.replace(pathlib.Path({str(valid_case['wheel'])!r}))\nelif \"--offline\" in sys.argv",
+        ),
+        encoding="utf-8",
+    )
+    _assert_code(
+        helper, "clean_preflight.mutation",
+        lambda: helper.run_clean_preflight(
+            repo=valid_case["repo"], candidate=valid_case["candidate"],
+            wheel=valid_case["wheel"], provenance_path=valid_case["provenance"],
+            plan_path=PLAN, network_mode="online", wheelhouse=None,
+            uv_executable=str(executable),
         ),
     )
