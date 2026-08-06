@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Strict identity/provenance/plan core for clean-runner preflight.
-
-Provisioning and process execution intentionally belong to later bounded slices.
-"""
+"""Strict identity, provenance, plan, and disposable provisioning preflight."""
 
 from __future__ import annotations
 
@@ -13,6 +10,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -328,6 +326,199 @@ def validate_preflight_core(
     }
 
 
+def _plan_dependencies(plan_path: Path) -> list[tuple[str, str]]:
+    plan = _strict_json(plan_path, "clean_preflight.plan.invalid")
+    _validate_plan(plan)
+    return [
+        (record["name"], record["version"])
+        for record in plan["harness_dependencies"]
+    ]
+
+
+def _offline_inventory(
+    wheelhouse: Path | None, dependencies: list[tuple[str, str]]
+) -> Path:
+    if wheelhouse is None or not wheelhouse.is_absolute() or not wheelhouse.is_dir():
+        _fail(
+            "clean_preflight.dependency.missing_offline",
+            "offline mode requires an absolute wheelhouse directory",
+        )
+    assert wheelhouse is not None
+    available: set[tuple[str, str]] = set()
+    for path in wheelhouse.iterdir():
+        if not path.is_file() or path.is_symlink():
+            continue
+        match = WHEEL_FILENAME.fullmatch(path.name)
+        if match is not None:
+            available.add(
+                (
+                    _dependency_name(match.group("distribution")),
+                    match.group("version").replace("_", "-"),
+                )
+            )
+    missing = [
+        f"{name}=={version}"
+        for name, version in dependencies
+        if (name, version) not in available
+    ]
+    if missing:
+        _fail(
+            "clean_preflight.dependency.missing_offline",
+            f"offline wheelhouse is missing {missing[0]}",
+        )
+    return wheelhouse
+
+
+def _clean_environment(cache: Path, home: Path, temp: Path) -> dict[str, str]:
+    environment: dict[str, str] = {
+        "PATH": os.defpath,
+        "HOME": str(home),
+        "USERPROFILE": str(home),
+        "TMPDIR": str(temp),
+        "TEMP": str(temp),
+        "TMP": str(temp),
+        "UV_CACHE_DIR": str(cache),
+        "UV_NO_CONFIG": "1",
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PIP_CONFIG_FILE": os.devnull,
+        "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+        "PIP_NO_INPUT": "1",
+        "LC_ALL": "C",
+    }
+    for key in ("SYSTEMROOT", "COMSPEC", "PATHEXT", "WINDIR"):
+        value = os.environ.get(key)
+        if value is not None:
+            environment[key] = value
+    return environment
+
+
+def _run_provision(argv: list[str], *, cwd: Path, environment: dict[str, str]) -> None:
+    try:
+        completed = subprocess.run(
+            argv,
+            cwd=cwd,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValidationError(
+            "clean_preflight.provision.failed", "provisioning command could not complete"
+        ) from exc
+    if completed.returncode != 0:
+        if "clean_preflight.network.forbidden" in completed.stderr:
+            _fail("clean_preflight.network.forbidden", "offline subprocess attempted network access")
+        _fail("clean_preflight.provision.failed", "provisioning command returned nonzero")
+
+
+def _provision_clean_environment(
+    *,
+    wheel: Path,
+    dependencies: list[tuple[str, str]],
+    network_mode: str,
+    wheelhouse: Path | None,
+    uv_executable: str,
+) -> None:
+    exact_wheelhouse = (
+        _offline_inventory(wheelhouse, dependencies)
+        if network_mode == "offline"
+        else None
+    )
+    with tempfile.TemporaryDirectory(prefix="proofline-clean-runner-") as temporary:
+        root = Path(temporary).resolve()
+        cache = root / "uv-cache"
+        environment_path = root / "environment"
+        home = root / "home"
+        work = root / "work"
+        temp = root / "temp"
+        for directory in (cache, home, work, temp):
+            directory.mkdir()
+        environment = _clean_environment(cache, home, temp)
+        if network_mode == "offline":
+            environment.update(
+                {
+                    "UV_OFFLINE": "1",
+                    "HTTP_PROXY": "http://127.0.0.1:9",
+                    "HTTPS_PROXY": "http://127.0.0.1:9",
+                    "ALL_PROXY": "http://127.0.0.1:9",
+                    "NO_PROXY": "",
+                }
+            )
+        python = environment_path / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        _run_provision(
+            [uv_executable, "venv", "--python", "3.11", str(environment_path)],
+            cwd=work,
+            environment=environment,
+        )
+        _run_provision(
+            [
+                uv_executable,
+                "pip",
+                "install",
+                "--python",
+                str(python),
+                "--no-deps",
+                "--no-index",
+                str(wheel),
+            ],
+            cwd=work,
+            environment=environment,
+        )
+        requirements = [f"{name}=={version}" for name, version in dependencies]
+        harness_argv = [
+            uv_executable,
+            "pip",
+            "install",
+            "--python",
+            str(python),
+        ]
+        if network_mode == "online":
+            harness_argv.extend(["--index-url", "https://pypi.org/simple"])
+        else:
+            assert exact_wheelhouse is not None
+            harness_argv.extend(
+                ["--offline", "--no-index", "--find-links", str(exact_wheelhouse)]
+            )
+        harness_argv.extend(requirements)
+        _run_provision(harness_argv, cwd=work, environment=environment)
+
+
+def run_clean_preflight(
+    *,
+    repo: Path,
+    candidate: str,
+    wheel: Path,
+    provenance_path: Path,
+    plan_path: Path,
+    network_mode: str,
+    wheelhouse: Path | None,
+    uv_executable: str = "uv",
+) -> dict[str, str]:
+    identity = validate_preflight_core(
+        repo=repo,
+        candidate=candidate,
+        wheel=wheel,
+        provenance_path=provenance_path,
+        plan_path=plan_path,
+    )
+    if network_mode not in {"online", "offline"}:
+        _fail("clean_preflight.plan.invalid", "network mode is invalid")
+    dependencies = _plan_dependencies(plan_path)
+    _provision_clean_environment(
+        wheel=wheel,
+        dependencies=dependencies,
+        network_mode=network_mode,
+        wheelhouse=wheelhouse,
+        uv_executable=uv_executable,
+    )
+    return {**identity, "network_mode": network_mode}
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", required=True, type=Path)
@@ -348,12 +539,14 @@ def _parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
-        identity = validate_preflight_core(
+        identity = run_clean_preflight(
             repo=args.repo,
             candidate=args.candidate,
             wheel=args.wheel,
             provenance_path=args.provenance,
             plan_path=args.plan,
+            network_mode=args.network_mode,
+            wheelhouse=args.wheelhouse,
         )
     except ValidationError as exc:
         print(

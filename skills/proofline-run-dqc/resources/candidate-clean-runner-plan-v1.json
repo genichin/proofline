@@ -3,6 +3,41 @@
   "plan_id": "candidate-clean-runner-v1",
   "harness_dependencies": [
     {
+      "name": "colorama",
+      "version": "0.4.6",
+      "version_source": "uv.lock",
+      "online_endpoint": "https://pypi.org/simple",
+      "offline_wheelhouse_required": true
+    },
+    {
+      "name": "iniconfig",
+      "version": "2.3.0",
+      "version_source": "uv.lock",
+      "online_endpoint": "https://pypi.org/simple",
+      "offline_wheelhouse_required": true
+    },
+    {
+      "name": "packaging",
+      "version": "26.2",
+      "version_source": "uv.lock",
+      "online_endpoint": "https://pypi.org/simple",
+      "offline_wheelhouse_required": true
+    },
+    {
+      "name": "pluggy",
+      "version": "1.6.0",
+      "version_source": "uv.lock",
+      "online_endpoint": "https://pypi.org/simple",
+      "offline_wheelhouse_required": true
+    },
+    {
+      "name": "pygments",
+      "version": "2.20.0",
+      "version_source": "uv.lock",
+      "online_endpoint": "https://pypi.org/simple",
+      "offline_wheelhouse_required": true
+    },
+    {
       "name": "pytest",
       "version": "9.1.1",
       "version_source": "uv.lock",
@@ -39,7 +74,7 @@
         },
         {
           "step_id": "provision-harness",
-          "argv": ["uv", "pip", "install", "--python", "{python}", "--index-url", "https://pypi.org/simple", "pytest==9.1.1"],
+          "argv": ["uv", "pip", "install", "--python", "{python}", "--index-url", "https://pypi.org/simple", "colorama==0.4.6", "iniconfig==2.3.0", "packaging==26.2", "pluggy==1.6.0", "pygments==2.20.0", "pytest==9.1.1"],
           "endpoint": "https://pypi.org/simple",
           "version_source": "uv.lock",
           "network_mode": "online-offline",
@@ -83,7 +118,7 @@
         },
         {
           "step_id": "provision-harness",
-          "argv": ["uv", "pip", "install", "--python", "{python}", "--index-url", "https://pypi.org/simple", "pytest==9.1.1"],
+          "argv": ["uv", "pip", "install", "--python", "{python}", "--index-url", "https://pypi.org/simple", "colorama==0.4.6", "iniconfig==2.3.0", "packaging==26.2", "pluggy==1.6.0", "pygments==2.20.0", "pytest==9.1.1"],
           "endpoint": "https://pypi.org/simple",
           "version_source": "uv.lock",
           "network_mode": "online-offline",
