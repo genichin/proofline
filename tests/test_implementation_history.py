@@ -76,6 +76,7 @@ class HistoryRepo:
             repo.write_ms(number, "not_started")
         repo.commit("approval", "approve specification")
         return repo
+
     def commit(self, name: str, message: str) -> str:
         git(self.path, "add", "-A")
         git(self.path, "commit", "-qm", message)
@@ -84,7 +85,9 @@ class HistoryRepo:
         return commit
 
     def write_line(self, status: str, *, policy: str | None) -> None:
-        policy_line = f"implementation_history: {policy}\n" if policy is not None else ""
+        policy_line = (
+            f"implementation_history: {policy}\n" if policy is not None else ""
+        )
         (self.path / LINE).write_text(
             f'---\nid: "line-0001"\nexecution_status: {status}\n{policy_line}---\n',
             encoding="utf-8",
@@ -100,7 +103,9 @@ class HistoryRepo:
         )
 
     def write_requirement(self, specs: int) -> None:
-        criteria = "\n".join(f'    - "ac-{number:04d}"' for number in range(1, specs + 1))
+        criteria = "\n".join(
+            f'    - "ac-{number:04d}"' for number in range(1, specs + 1)
+        )
         path = self.path / ".proofline/lines/line-0001/req-0001.md"
         path.write_text(
             '---\nid: "req-0001"\nstatus: approved\ndiscovery: "dcy-0001"\n'
@@ -138,7 +143,10 @@ class HistoryRepo:
         spec_status: str = "approved",
         criteria_numbers: tuple[int, ...] | None = None,
     ) -> None:
-        path = self.path / f".proofline/lines/line-0001/micro-specs/ms-0001-{number:03d}.md"
+        path = (
+            self.path
+            / f".proofline/lines/line-0001/micro-specs/ms-0001-{number:03d}.md"
+        )
         if malformed:
             path.write_text("---\nid: [\n---\n", encoding="utf-8")
             return
@@ -148,7 +156,7 @@ class HistoryRepo:
         )
         path.write_text(
             f'---\nid: "ms-0001-{number:03d}"\nparent_req: "req-0001"\ncriteria:\n'
-            f'{criteria}spec_status: {spec_status}\nimplementation_status: {status}\n---\n\n'
+            f"{criteria}spec_status: {spec_status}\nimplementation_status: {status}\n---\n\n"
             f"# Micro-SPEC {number}\n\n## Scope\n\n범위이다.\n\n## Implementation\n\n구현한다."
             "\n\n## Verification\n\n검증한다.\n",
             encoding="utf-8",
@@ -161,7 +169,10 @@ class HistoryRepo:
         *,
         micro_spec_commit: str | None = None,
     ) -> None:
-        path = self.path / f".proofline/lines/line-0001/micro-specs/iqc-0001-{number:03d}.md"
+        path = (
+            self.path
+            / f".proofline/lines/line-0001/micro-specs/iqc-0001-{number:03d}.md"
+        )
         path.write_text(
             f'---\nid: "iqc-0001-{number:03d}"\nmicro_spec: "ms-0001-{number:03d}"\n'
             f'micro_spec_commit: "{micro_spec_commit or self.commits["approval"]}"\n'
@@ -184,7 +195,9 @@ class HistoryRepo:
     def adopt(self, name: str = "baseline") -> str:
         current = (self.path / LINE).read_text(encoding="utf-8")
         status_line = next(
-            line for line in current.splitlines() if line.startswith("execution_status:")
+            line
+            for line in current.splitlines()
+            if line.startswith("execution_status:")
         )
         (self.path / LINE).write_text(
             current.replace(
@@ -229,7 +242,9 @@ class HistoryRepo:
 def test_history_repo_disables_background_git_maintenance(tmp_path: Path) -> None:
     repo = HistoryRepo.create(tmp_path)
     assert git(repo.path, "config", "--get", "gc.auto").stdout.strip() == "0"
-    assert git(repo.path, "config", "--get", "maintenance.auto").stdout.strip() == "false"
+    assert (
+        git(repo.path, "config", "--get", "maintenance.auto").stdout.strip() == "false"
+    )
 
 
 def build_valid_cycle(tmp_path: Path, *, order: str = "baseline-first") -> HistoryRepo:
@@ -256,12 +271,14 @@ def build_legacy_migration(
     activate_before_cycle: bool = False,
     incomplete: str | None = None,
     dqc_defect: str | None = None,
+    include_dqc: bool = False,
     target_state: str = "in_progress",
     policy_before: str | None = None,
     inventory_defect: str | None = None,
     inventory_mode: str | None = None,
     object_format: str = "sha1",
     iqc_binding_defect: str | None = None,
+    iqc_binding_field: str = "micro_spec_commit",
     line_body_delta: bool = False,
     split_baseline: bool = False,
 ) -> HistoryRepo:
@@ -272,7 +289,7 @@ def build_legacy_migration(
         line2.mkdir()
         (line2 / "line-0002.md").write_text(
             '---\nid: "line-0002"\nexecution_status: not_started\n'
-            'implementation_history: first_parent\n---\n',
+            "implementation_history: first_parent\n---\n",
             encoding="utf-8",
         )
         repo.commit("activation", "activate history policy")
@@ -289,16 +306,47 @@ def build_legacy_migration(
             implementation = repo.product_commit()
             if incomplete not in {"no-finish", "i-without-q"}:
                 repo.finish(implementation)
-    if dqc_defect is not None:
-        candidate = repo.commits.get("quality", repo.commits["approval"])
+    if include_dqc or dqc_defect is not None:
+        quality = repo.commits.get("quality", repo.commits["approval"])
+        git(repo.path, "switch", "-qc", "legacy-integration-line")
+        repo.start("legacy-integration-start")
+        integration_implementation = repo.product_commit(
+            "legacy-integration-implementation"
+        )
+        repo.write_line("verifying", policy=None)
+        line_head = repo.finish(
+            integration_implementation, "legacy-integration-quality"
+        )
+        git(repo.path, "switch", "-q", "main")
+        (repo.path / "legacy-main.txt").write_text("main\n", encoding="utf-8")
+        main_parent = repo.commit("legacy-main", "advance legacy main")
+        merged = git(
+            repo.path,
+            "merge",
+            "--no-ff",
+            "--no-commit",
+            "legacy-integration-line",
+            check=False,
+        )
+        assert merged.returncode == 0, merged.stderr
+        integration = repo.path / ".proofline/lines/line-0001/integration-0001.md"
+        manifest_main = quality if dqc_defect == "manifest-parent" else main_parent
+        integration.write_text(
+            "---\n"
+            'id: "integration-0001"\nline_id: "line-0001"\n'
+            f'main_parent: "{manifest_main}"\nline_head: "{line_head}"\n'
+            "---\n",
+            encoding="utf-8",
+        )
+        candidate = repo.commit("legacy-candidate", "integrate legacy Line")
         values = {
             "id": "dqc-wrong" if dqc_defect == "wrong-identity" else "dqc-0001",
             "line": "line-9999" if dqc_defect == "wrong-line" else "line-0001",
             "candidate": (
                 "0" * len(candidate)
                 if dqc_defect == "stale"
-                else repo.commits["approval"]
-                if dqc_defect == "mismatched"
+                else quality
+                if dqc_defect in {"mismatched", "no-applicable-candidate"}
                 else candidate
             ),
             "result": "invalid" if dqc_defect == "wrong-result" else "passed",
@@ -311,25 +359,37 @@ def build_legacy_migration(
                 "---\n"
                 f'id: "{values["id"]}"\nline: "{values["line"]}"\n'
                 f'candidate_commit: "{values["candidate"]}"\nresult: {values["result"]}\n'
-                "---\n",
+                "---\n\n# DQC\n\n## Target\n\n대상.\n\n## IQC Results\n\n통과.\n\n"
+                "## Checks\n\n통과.\n\n## Criteria Results\n\n통과.\n\n## Result\n\n통과.\n",
                 encoding="utf-8",
             )
         repo.commit("legacy-dqc", "persist legacy DQC")
-    if target_state != "in_progress" or policy_before is not None:
+        if target_state == "in_progress":
+            repo.start("legacy-post-dqc-rework")
+    current_line = (repo.path / LINE).read_text(encoding="utf-8")
+    if (
+        f"execution_status: {target_state}" not in current_line
+        or policy_before is not None
+    ):
         repo.write_line(target_state, policy=policy_before)
         repo.commit("legacy-target", "set migration target state")
     if iqc_binding_defect is not None:
         iqc_path = repo.path / IQC
         text = iqc_path.read_text(encoding="utf-8")
-        native_length = len(repo.commits["approval"])
+        native_value = (
+            repo.commits["approval"]
+            if iqc_binding_field == "micro_spec_commit"
+            else repo.commits["implementation"]
+        )
+        native_length = len(native_value)
         replacement = {
             "opposite": "a" * (64 if native_length == 40 else 40),
-            "uppercase": repo.commits["approval"].upper(),
+            "uppercase": native_value.upper(),
             "nonhex": "g" * native_length,
             "wrong-length": "a" * (native_length - 1),
         }[iqc_binding_defect]
         iqc_path.write_text(
-            text.replace(repo.commits["approval"], replacement, 1), encoding="utf-8"
+            text.replace(native_value, replacement, 1), encoding="utf-8"
         )
         repo.commit("bad-iqc-binding", "persist invalid native IQC binding")
     if inventory_mode is not None:
@@ -342,17 +402,30 @@ def build_legacy_migration(
             ).stdout.strip()
         else:
             object_oid = ms_oid
-        git(repo.path, "update-index", "--add", "--cacheinfo", f"{inventory_mode},{object_oid},{MS}")
+        git(
+            repo.path,
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            f"{inventory_mode},{object_oid},{MS}",
+        )
         git(repo.path, "commit", "-qm", f"persist {inventory_mode} migration evidence")
     pre_migration_parent = git(repo.path, "rev-parse", "HEAD").stdout.strip()
     inventory_paths = [
         path
         for path in (DQC, IQC, MS)
-        if git(repo.path, "cat-file", "-e", f"{pre_migration_parent}:{path}", check=False).returncode
+        if git(
+            repo.path, "cat-file", "-e", f"{pre_migration_parent}:{path}", check=False
+        ).returncode
         == 0
     ]
     inventory = evidence or [
-        (path, git(repo.path, "rev-parse", f"{pre_migration_parent}:{path}").stdout.strip())
+        (
+            path,
+            git(
+                repo.path, "rev-parse", f"{pre_migration_parent}:{path}"
+            ).stdout.strip(),
+        )
         for path in inventory_paths
     ]
     if inventory_defect == "missing":
@@ -361,7 +434,9 @@ def build_legacy_migration(
         inventory.append(
             (
                 "product.py",
-                git(repo.path, "rev-parse", f"{pre_migration_parent}:product.py").stdout.strip(),
+                git(
+                    repo.path, "rev-parse", f"{pre_migration_parent}:product.py"
+                ).stdout.strip(),
             )
         )
     elif inventory_defect == "duplicate":
@@ -380,7 +455,9 @@ def build_legacy_migration(
     current = (repo.path / LINE).read_text(encoding="utf-8")
     if "implementation_history:" not in current:
         status_line = next(
-            line for line in current.splitlines() if line.startswith("execution_status:")
+            line
+            for line in current.splitlines()
+            if line.startswith("execution_status:")
         )
         (repo.path / LINE).write_text(
             current.replace(
@@ -396,7 +473,9 @@ def build_legacy_migration(
             encoding="utf-8",
         )
     if extra_change:
-        (repo.path / "product.py").write_text("MIGRATION_CHANGED = True\n", encoding="utf-8")
+        (repo.path / "product.py").write_text(
+            "MIGRATION_CHANGED = True\n", encoding="utf-8"
+        )
     if inventory_mode is None:
         repo.commit("migration", "migrate legacy line")
     else:
@@ -406,7 +485,72 @@ def build_legacy_migration(
     return repo
 
 
-@pytest.mark.parametrize(("object_format", "oid_length"), [("sha1", 40), ("sha256", 64)])
+MIGRATION_SCENARIO_IDS = (
+    "sha1-positive",
+    "sha256-positive",
+    "sha1-parent-opposite",
+    "sha256-parent-opposite",
+    "sha1-iqc-micro-uppercase",
+    "sha256-iqc-implementation-nonhex",
+    "incomplete-no-finish",
+    "inventory-missing",
+    "nonregular-symlink",
+    "split-baseline",
+    "post-activation-cycle",
+    "dqc-stale",
+    "artifact-mutation",
+    "policy-mutation",
+    "fresh-recovery",
+)
+
+
+def build_migration_scenario(tmp_path: Path, scenario_id: str) -> HistoryRepo:
+    assert scenario_id in MIGRATION_SCENARIO_IDS
+    kwargs: dict[str, object] = {}
+    if scenario_id == "sha256-positive":
+        kwargs["object_format"] = "sha256"
+    elif scenario_id == "sha1-parent-opposite":
+        kwargs["parent"] = "a" * 64
+    elif scenario_id == "sha256-parent-opposite":
+        kwargs.update(object_format="sha256", parent="a" * 40)
+    elif scenario_id == "sha1-iqc-micro-uppercase":
+        kwargs["iqc_binding_defect"] = "uppercase"
+    elif scenario_id == "sha256-iqc-implementation-nonhex":
+        kwargs.update(
+            object_format="sha256",
+            iqc_binding_defect="nonhex",
+            iqc_binding_field="implementation_commit",
+        )
+    elif scenario_id == "incomplete-no-finish":
+        kwargs["incomplete"] = "no-finish"
+    elif scenario_id == "inventory-missing":
+        kwargs["inventory_defect"] = "missing"
+    elif scenario_id == "nonregular-symlink":
+        kwargs["inventory_mode"] = "120000"
+    elif scenario_id == "split-baseline":
+        kwargs["split_baseline"] = True
+    elif scenario_id == "post-activation-cycle":
+        kwargs["activate_before_cycle"] = True
+    elif scenario_id == "dqc-stale":
+        kwargs["dqc_defect"] = "stale"
+    repo = build_legacy_migration(tmp_path, **kwargs)  # type: ignore[arg-type]
+    if scenario_id == "artifact-mutation":
+        artifact = repo.path / MIGRATION
+        artifact.write_text(artifact.read_text() + "mutated\n", encoding="utf-8")
+        repo.commit("artifact-mutation", "mutate migration authority")
+    elif scenario_id == "policy-mutation":
+        repo.write_line("in_progress", policy=None)
+        repo.commit("policy-mutation", "remove migration policy")
+    elif scenario_id == "fresh-recovery":
+        repo.start("registry-recovery-start")
+        implementation = repo.product_commit("registry-recovery-implementation")
+        repo.finish(implementation, "registry-recovery-quality")
+    return repo
+
+
+@pytest.mark.parametrize(
+    ("object_format", "oid_length"), [("sha1", 40), ("sha256", 64)]
+)
 def test_eligible_legacy_nonterminal_migration_passes_in_native_repository_without_mutation(
     tmp_path: Path, object_format: str, oid_length: int
 ) -> None:
@@ -422,13 +566,17 @@ def test_eligible_legacy_nonterminal_migration_passes_in_native_repository_witho
 
 @pytest.mark.parametrize("object_format", ["sha1", "sha256"])
 @pytest.mark.parametrize(
-    "defect", ["opposite", "uppercase", "nonhex", "wrong-length"]
+    "binding_field", ["micro_spec_commit", "implementation_commit"]
 )
+@pytest.mark.parametrize("defect", ["opposite", "uppercase", "nonhex", "wrong-length"])
 def test_real_git_migration_rejects_non_native_iqc_commit_binding(
-    tmp_path: Path, object_format: str, defect: str
+    tmp_path: Path, object_format: str, binding_field: str, defect: str
 ) -> None:
     repo = build_legacy_migration(
-        tmp_path, object_format=object_format, iqc_binding_defect=defect
+        tmp_path,
+        object_format=object_format,
+        iqc_binding_defect=defect,
+        iqc_binding_field=binding_field,
     )
     before = repository_snapshot(repo.path)
 
@@ -437,9 +585,7 @@ def test_real_git_migration_rejects_non_native_iqc_commit_binding(
 
 
 @pytest.mark.parametrize("object_format", ["sha1", "sha256"])
-@pytest.mark.parametrize(
-    "defect", ["opposite", "uppercase", "nonhex", "wrong-length"]
-)
+@pytest.mark.parametrize("defect", ["opposite", "uppercase", "nonhex", "wrong-length"])
 def test_real_git_migration_rejects_non_native_parent_oid(
     tmp_path: Path, object_format: str, defect: str
 ) -> None:
@@ -483,6 +629,34 @@ def test_migration_requires_a_complete_valid_pre_activation_cycle(
     assert repository_snapshot(repo.path) == before
 
 
+def inventory_dqc_result(repo: HistoryRepo) -> bool:
+    commits = git(
+        repo.path, "rev-list", "--first-parent", "--reverse", "HEAD"
+    ).stdout.splitlines()
+    session = implementation_history._GitSession(repo.path)
+    trees = [implementation_history._tree_paths(session, commit) for commit in commits]
+    baseline = commits.index(repo.commits["migration"])
+    content = git(repo.path, "show", f"{commits[baseline - 1]}:{DQC}").stdout.encode()
+    return implementation_history._valid_inventory_dqc(
+        session,
+        DQC,
+        content,
+        commits,
+        trees,
+        baseline,
+    )
+
+
+def test_migration_inventory_accepts_applicable_integration_bound_dqc(
+    tmp_path: Path,
+) -> None:
+    repo = build_legacy_migration(tmp_path, include_dqc=True)
+    before = repository_snapshot(repo.path)
+
+    assert inventory_dqc_result(repo)
+    assert repository_snapshot(repo.path) == before
+
+
 @pytest.mark.parametrize(
     "defect",
     [
@@ -493,6 +667,7 @@ def test_migration_requires_a_complete_valid_pre_activation_cycle(
         "stale",
         "mismatched",
         "no-applicable-candidate",
+        "manifest-parent",
     ],
 )
 def test_migration_inventory_rejects_unprovable_existing_dqc(
@@ -501,7 +676,7 @@ def test_migration_inventory_rejects_unprovable_existing_dqc(
     repo = build_legacy_migration(tmp_path, dqc_defect=defect)
     before = repository_snapshot(repo.path)
 
-    assert (MIGRATION, "migration.inventory.dqc") in history_codes(repo)
+    assert not inventory_dqc_result(repo)
     assert repository_snapshot(repo.path) == before
 
 
@@ -620,7 +795,9 @@ def test_migration_artifact_is_immutable_and_cannot_be_reapplied(
     artifact = repo.path / MIGRATION
     original = artifact.read_bytes()
     if action == "mutate":
-        artifact.write_text(artifact.read_text().replace("evidence:", "evidence: # changed"))
+        artifact.write_text(
+            artifact.read_text().replace("evidence:", "evidence: # changed")
+        )
         repo.commit("mutation", "mutate migration authority")
     else:
         artifact.unlink()
@@ -648,9 +825,16 @@ def test_migration_requires_and_accepts_fresh_post_baseline_recovery_cycle(
     p2 = repo.start("recovery-start")
     i2 = repo.product_commit("recovery-implementation")
     q2 = repo.finish(i2, "recovery-quality")
-    history = git(repo.path, "rev-list", "--first-parent", "--reverse", "HEAD").stdout.splitlines()
+    history = git(
+        repo.path, "rev-list", "--first-parent", "--reverse", "HEAD"
+    ).stdout.splitlines()
 
-    assert history.index(baseline) < history.index(p2) < history.index(i2) < history.index(q2)
+    assert (
+        history.index(baseline)
+        < history.index(p2)
+        < history.index(i2)
+        < history.index(q2)
+    )
     assert validate_project(repo.path) == []
 
 
@@ -662,8 +846,16 @@ def test_repository_native_commit_parser_accepts_only_exact_lowercase_oid(
     positions = {oid: 7}
 
     assert implementation_history._resolved_commit(oid, positions, oid_length) == 7
-    assert implementation_history._resolved_commit(oid.upper(), positions, oid_length) is None
-    assert implementation_history._resolved_commit("a" * (104 - oid_length), positions, oid_length) is None
+    assert (
+        implementation_history._resolved_commit(oid.upper(), positions, oid_length)
+        is None
+    )
+    assert (
+        implementation_history._resolved_commit(
+            "a" * (104 - oid_length), positions, oid_length
+        )
+        is None
+    )
 
 
 def history_codes(repo: HistoryRepo | Path) -> set[tuple[str, str]]:
@@ -720,7 +912,9 @@ def parity_tree_canonical_artifact(tmp_path: Path, path: str = LINE) -> HistoryR
     return repo
 
 
-def replace_frontmatter_status(repo: HistoryRepo, path: str, field: str, value: str) -> None:
+def replace_frontmatter_status(
+    repo: HistoryRepo, path: str, field: str, value: str
+) -> None:
     artifact = repo.path / path
     text = artifact.read_text(encoding="utf-8")
     current = next(line for line in text.splitlines() if line.startswith(f"{field}:"))
@@ -740,41 +934,78 @@ def chronology_repo(
         repo.write_ac(number)
     repo.write_requirement_admissions()
     repo.write_ac(22)
-    replace_frontmatter_status(repo, ".proofline/criteria/ac-0022.md", "status", "draft")
-    replace_frontmatter_status(repo, ".proofline/criteria/ac-0001.md", "status", "draft")
-    replace_frontmatter_status(repo, ".proofline/criteria/ac-0002.md", "status", "draft")
+    replace_frontmatter_status(
+        repo, ".proofline/criteria/ac-0022.md", "status", "draft"
+    )
+    replace_frontmatter_status(
+        repo, ".proofline/criteria/ac-0001.md", "status", "draft"
+    )
+    replace_frontmatter_status(
+        repo, ".proofline/criteria/ac-0002.md", "status", "draft"
+    )
     if defect == "a-create-wrong-old-status":
-        replace_frontmatter_status(repo, ".proofline/criteria/ac-0001.md", "status", "active")
+        replace_frontmatter_status(
+            repo, ".proofline/criteria/ac-0001.md", "status", "active"
+        )
     if defect == "a-update-wrong-old-status":
-        replace_frontmatter_status(repo, ".proofline/criteria/ac-0002.md", "status", "active")
+        replace_frontmatter_status(
+            repo, ".proofline/criteria/ac-0002.md", "status", "active"
+        )
     if defect == "a-retire-wrong-old-status":
-        replace_frontmatter_status(repo, ".proofline/criteria/ac-0003.md", "status", "draft")
+        replace_frontmatter_status(
+            repo, ".proofline/criteria/ac-0003.md", "status", "draft"
+        )
     repo.write_ms(1, "not_started", spec_status="draft", criteria_numbers=(1, 2, 3, 4))
     repo.write_line("not_started", policy="first_parent")
     repo.commit("prospective", "record draft chronology policy")
 
-    replace_frontmatter_status(repo, ".proofline/criteria/ac-0022.md", "status", "active")
+    replace_frontmatter_status(
+        repo, ".proofline/criteria/ac-0022.md", "status", "active"
+    )
     repo.commit("policy-A", "activate prospective chronology")
 
-    replace_frontmatter_status(repo, ".proofline/lines/line-0001/req-0001.md", "status", "approved")
-    replace_frontmatter_status(repo, ".proofline/criteria/ac-0001.md", "status", "active")
-    replace_frontmatter_status(repo, ".proofline/criteria/ac-0002.md", "status", "active")
-    replace_frontmatter_status(repo, ".proofline/criteria/ac-0003.md", "status", "retired")
+    replace_frontmatter_status(
+        repo, ".proofline/lines/line-0001/req-0001.md", "status", "approved"
+    )
+    replace_frontmatter_status(
+        repo, ".proofline/criteria/ac-0001.md", "status", "active"
+    )
+    replace_frontmatter_status(
+        repo, ".proofline/criteria/ac-0002.md", "status", "active"
+    )
+    replace_frontmatter_status(
+        repo, ".proofline/criteria/ac-0003.md", "status", "retired"
+    )
     if defect in {"a-create-body", "a-update-body", "a-retire-body", "a-satisfy-body"}:
-        number = {"a-create-body": 1, "a-update-body": 2, "a-retire-body": 3, "a-satisfy-body": 4}[defect]
+        number = {
+            "a-create-body": 1,
+            "a-update-body": 2,
+            "a-retire-body": 3,
+            "a-satisfy-body": 4,
+        }[defect]
         ac = repo.path / f".proofline/criteria/ac-{number:04d}.md"
         ac.write_text(
-            ac.read_text(encoding="utf-8").replace("조건이다.", "승인에서 바꾼 조건이다."),
+            ac.read_text(encoding="utf-8").replace(
+                "조건이다.", "승인에서 바꾼 조건이다."
+            ),
             encoding="utf-8",
         )
     if defect == "a-create-wrong-new-status":
-        replace_frontmatter_status(repo, ".proofline/criteria/ac-0001.md", "status", "retired")
+        replace_frontmatter_status(
+            repo, ".proofline/criteria/ac-0001.md", "status", "retired"
+        )
     if defect == "a-update-wrong-new-status":
-        replace_frontmatter_status(repo, ".proofline/criteria/ac-0002.md", "status", "retired")
+        replace_frontmatter_status(
+            repo, ".proofline/criteria/ac-0002.md", "status", "retired"
+        )
     if defect == "a-retire-wrong-new-status":
-        replace_frontmatter_status(repo, ".proofline/criteria/ac-0003.md", "status", "active")
+        replace_frontmatter_status(
+            repo, ".proofline/criteria/ac-0003.md", "status", "active"
+        )
     if defect == "a-satisfy-status":
-        replace_frontmatter_status(repo, ".proofline/criteria/ac-0004.md", "status", "retired")
+        replace_frontmatter_status(
+            repo, ".proofline/criteria/ac-0004.md", "status", "retired"
+        )
     if defect == "a-missing-target":
         (repo.path / ".proofline/criteria/ac-0004.md").unlink()
     if defect == "a-path-id-mismatch":
@@ -789,20 +1020,28 @@ def chronology_repo(
     if defect == "a-req-body":
         req = repo.path / ".proofline/lines/line-0001/req-0001.md"
         req.write_text(
-            req.read_text(encoding="utf-8").replace("목표이다.", "승인에서 바꾼 목표이다."),
+            req.read_text(encoding="utf-8").replace(
+                "목표이다.", "승인에서 바꾼 목표이다."
+            ),
             encoding="utf-8",
         )
     if bootstrap and defect != "a-not-combined":
-        repo.write_ms(1, "not_started", spec_status="approved", criteria_numbers=(1, 2, 3, 4))
+        repo.write_ms(
+            1, "not_started", spec_status="approved", criteria_numbers=(1, 2, 3, 4)
+        )
         if defect == "a-ms-body":
             ms = repo.path / MS
             ms.write_text(
-                ms.read_text(encoding="utf-8").replace("범위이다.", "승인에서 바꾼 범위이다."),
+                ms.read_text(encoding="utf-8").replace(
+                    "범위이다.", "승인에서 바꾼 범위이다."
+                ),
                 encoding="utf-8",
             )
     repo.commit("A", "approve REQ and AC baseline")
     if bootstrap and defect == "a-not-combined":
-        repo.write_ms(1, "not_started", spec_status="approved", criteria_numbers=(1, 2, 3, 4))
+        repo.write_ms(
+            1, "not_started", spec_status="approved", criteria_numbers=(1, 2, 3, 4)
+        )
         repo.commit("late-bootstrap-spec", "approve bootstrap spec separately")
 
     if defect == "p-before-h":
@@ -811,18 +1050,22 @@ def chronology_repo(
 
     if defect != "h-missing":
         if defect == "h-non-direct":
-            (repo.path / "handoff-note.txt").write_text("intervening\n", encoding="utf-8")
+            (repo.path / "handoff-note.txt").write_text(
+                "intervening\n", encoding="utf-8"
+            )
             repo.commit("between-A-H", "intervene between approval and handoff")
         repo.write_line("in_progress", policy="first_parent")
         if defect == "h-body":
             (repo.path / LINE).write_text(
-                (repo.path / LINE).read_text(encoding="utf-8").replace(
-                    'id: "line-0001"', "id: line-0001"
-                ),
+                (repo.path / LINE)
+                .read_text(encoding="utf-8")
+                .replace('id: "line-0001"', "id: line-0001"),
                 encoding="utf-8",
             )
         if defect == "h-multi-file":
-            (repo.path / "handoff-extra.txt").write_text("not status-only\n", encoding="utf-8")
+            (repo.path / "handoff-extra.txt").write_text(
+                "not status-only\n", encoding="utf-8"
+            )
         repo.commit("H", "handoff Line")
 
     if bootstrap:
@@ -839,17 +1082,23 @@ def chronology_repo(
         if defect not in {"missing-s0-s", "p-before-s"}:
             ms = repo.path / MS
             ms.write_text(
-                ms.read_text(encoding="utf-8").replace("범위이다.", "후속 Line 범위이다."),
+                ms.read_text(encoding="utf-8").replace(
+                    "범위이다.", "후속 Line 범위이다."
+                ),
                 encoding="utf-8",
             )
             repo.commit("S0", "persist clean draft")
             if defect == "s-not-direct":
-                (repo.path / ".proofline/review-note.md").write_text("stale review\n", encoding="utf-8")
+                (repo.path / ".proofline/review-note.md").write_text(
+                    "stale review\n", encoding="utf-8"
+                )
                 repo.commit("between-S0-S", "mutate after reviewed draft")
             replace_frontmatter_status(repo, MS, "spec_status", "approved")
             if defect == "s-body":
                 ms.write_text(
-                    ms.read_text(encoding="utf-8").replace("후속 Line 범위이다.", "승인 때 바꾼 범위이다."),
+                    ms.read_text(encoding="utf-8").replace(
+                        "후속 Line 범위이다.", "승인 때 바꾼 범위이다."
+                    ),
                     encoding="utf-8",
                 )
             repo.commit("S", "record user-approved specification")
@@ -859,7 +1108,10 @@ def chronology_repo(
                 )
                 repo.commit("second-S0", "second draft")
                 repo.write_ms(
-                    1, "not_started", spec_status="approved", criteria_numbers=(1, 2, 3, 4)
+                    1,
+                    "not_started",
+                    spec_status="approved",
+                    criteria_numbers=(1, 2, 3, 4),
                 )
                 repo.commit("second-S", "duplicate approval")
         elif defect == "p-before-s":
@@ -911,9 +1163,10 @@ def test_bootstrap_a_h_p_i_q_chronology_passes(tmp_path: Path) -> None:
             before, after, "status", old, new, {"draft", "active", "retired"}
         )
     satisfy = ".proofline/criteria/ac-0004.md"
-    assert git(repo.path, "show", f"{parent}:{satisfy}").stdout == git(
-        repo.path, "show", f"{repo.commits['A']}:{satisfy}"
-    ).stdout
+    assert (
+        git(repo.path, "show", f"{parent}:{satisfy}").stdout
+        == git(repo.path, "show", f"{repo.commits['A']}:{satisfy}").stdout
+    )
 
 
 @pytest.mark.parametrize(
@@ -955,7 +1208,9 @@ def test_bootstrap_chronology_fails_closed(tmp_path: Path, defect: str) -> None:
         "a-ms-body",
     ],
 )
-def test_bootstrap_admission_transition_fails_closed(tmp_path: Path, defect: str) -> None:
+def test_bootstrap_admission_transition_fails_closed(
+    tmp_path: Path, defect: str
+) -> None:
     repo = chronology_repo(tmp_path, bootstrap=True, defect=defect, complete=False)
 
     assert (MS, "history.spec.chronology") in history_codes(repo)
@@ -1006,7 +1261,9 @@ def test_future_specification_handoff_fails_closed(tmp_path: Path, defect: str) 
     assert (MS, "history.spec.chronology") in history_codes(repo)
 
 
-def test_current_line_0020_bootstrap_history_remains_valid_at_in_progress_head() -> None:
+def test_current_line_0020_bootstrap_history_remains_valid_at_in_progress_head() -> (
+    None
+):
     assert validate_project(ROOT) == []
 
 
@@ -1130,7 +1387,7 @@ def test_history_frontmatter_rejects_duplicate_top_level_keys(payload: bytes) ->
 def test_spec_revision_bytes_rejects_duplicate_status_key() -> None:
     payload = (
         b'---\nid: "ms-0001-001"\nspec_status: approved\n'
-        b'implementation_status: in_progress\nimplementation_status: implemented\n---\n'
+        b"implementation_status: in_progress\nimplementation_status: implemented\n---\n"
     )
 
     with pytest.raises(implementation_history.HistoryUnavailable):
@@ -1206,9 +1463,7 @@ def test_current_iqc_must_equal_exact_head_bytes(tmp_path: Path, mode: str) -> N
         repo.finish(implementation, "rework-quality")
         iqc.write_bytes(old_iqc)
     elif mode == "edit":
-        iqc.write_bytes(
-            old_iqc.replace("통과했다.".encode(), "변경했다.".encode())
-        )
+        iqc.write_bytes(old_iqc.replace("통과했다.".encode(), "변경했다.".encode()))
     elif mode == "missing":
         iqc.unlink()
     else:
@@ -1249,7 +1504,10 @@ def test_approved_bytes_change_without_status_transition_rejects_stale_binding(
     repo.write_ms(1, "in_progress")
     repo.commit("start", "start")
     ms = repo.path / MS
-    ms.write_text(ms.read_text(encoding="utf-8").replace("범위이다.", "변경된 승인 범위이다."), encoding="utf-8")
+    ms.write_text(
+        ms.read_text(encoding="utf-8").replace("범위이다.", "변경된 승인 범위이다."),
+        encoding="utf-8",
+    )
     repo.commit("approved-bytes-change", "edit approved spec")
     implementation = repo.product_commit()
     repo.finish(implementation, micro_spec_commit=repo.commits["start"])
@@ -1269,7 +1527,9 @@ def test_body_implementation_status_line_is_not_lifecycle_normalization(
     ms.write_bytes(ms.read_bytes().replace(b"body-v1", b"body-v2"))
     repo.commit("body-change", "change body marker")
     implementation = repo.product_commit()
-    repo.finish(implementation, micro_spec_commit=repo.commits["start-with-body-marker"])
+    repo.finish(
+        implementation, micro_spec_commit=repo.commits["start-with-body-marker"]
+    )
 
     assert_history_error(repo, MS, "history.ms.order")
 
@@ -1351,7 +1611,9 @@ def test_second_parent_only_policy_marker_fails_closed(
     git(repo.path, "switch", "-q", "main")
     repo.write_line("in_progress", policy=None)
     repo.commit("main-change", "main change")
-    git(repo.path, "merge", "-q", "-s", "ours", "policy-side", "-m", "merge policy side")
+    git(
+        repo.path, "merge", "-q", "-s", "ours", "policy-side", "-m", "merge policy side"
+    )
     repo.write_line(status, policy="first_parent")
 
     assert_history_error(repo, LINE, "history.unavailable")
@@ -1426,7 +1688,9 @@ def test_git_eof_before_exit_waits_with_remaining_deadline(
     assert waits and waits[-1] is not None and waits[-1] > 0
 
 
-def test_git_spawn_failure_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_git_spawn_failure_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo = HistoryRepo.create(tmp_path)
 
     def fail(*args: object, **kwargs: object) -> None:
@@ -1456,8 +1720,10 @@ def test_git_session_cache_uses_command_key_and_stdout_only(
 
     assert first == second
     assert spawned == 1
-    assert all(isinstance(key, tuple) and all(isinstance(part, str) for part in key)
-               for key in session.cache)
+    assert all(
+        isinstance(key, tuple) and all(isinstance(part, str) for part in key)
+        for key in session.cache
+    )
     assert not any(hasattr(key, "fileno") for key in session.cache)
 
 
@@ -1467,7 +1733,10 @@ def test_git_command_output_limit_is_aggregate_across_streams(
     repo = HistoryRepo.create(tmp_path)
     original_popen = subprocess.Popen
     chunk = b"x" * (implementation_history.GIT_OUTPUT_LIMIT // 2 + 1)
-    code = "import sys; data = b'x' * %d; sys.stdout.buffer.write(data); sys.stderr.buffer.write(data)" % len(chunk)
+    code = (
+        "import sys; data = b'x' * %d; sys.stdout.buffer.write(data); sys.stderr.buffer.write(data)"
+        % len(chunk)
+    )
 
     def noisy_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
         del args
@@ -1518,7 +1787,9 @@ def test_git_cleanup_does_not_wait_forever_after_output_failure(
             implementation_history._GitSession(repo.path), "status"
         )
     assert waits and all(value is not None and value >= 0 for value in waits[:2])
-    assert any(owner is not None for owner in implementation_history._REAPER_REGISTRY.values())
+    assert any(
+        owner is not None for owner in implementation_history._REAPER_REGISTRY.values()
+    )
     release_reaper.set()
     assert reaped.wait(timeout=1)
     assert not implementation_history._REAPER_REGISTRY
@@ -1555,7 +1826,9 @@ def test_git_cleanup_transfers_unreaped_child_to_eventual_reaper(
     process = NeverReapsUntilReleased()
     implementation_history._cleanup_process(process, deadline=0.0, grace=0.001)  # type: ignore[arg-type]
     assert wait_called.wait(timeout=1)
-    assert any(owner is process for owner in implementation_history._REAPER_REGISTRY.values())
+    assert any(
+        owner is process for owner in implementation_history._REAPER_REGISTRY.values()
+    )
     release_wait.set()
     assert reaped.wait(timeout=1)
     assert not implementation_history._REAPER_REGISTRY
@@ -1563,14 +1836,17 @@ def test_git_cleanup_transfers_unreaped_child_to_eventual_reaper(
 
 @pytest.mark.parametrize(
     "key",
-    ["implementation_status:", "implementation_status :", "'implementation_status':", '"implementation_status":'],
+    [
+        "implementation_status:",
+        "implementation_status :",
+        "'implementation_status':",
+        '"implementation_status":',
+    ],
 )
-def test_spec_revision_normalizes_all_supported_top_level_key_spellings(key: str) -> None:
-    content = (
-        b"---\n"
-        + key.encode()
-        + b" in_progress\nother: keep\n---\n\nbody\n"
-    )
+def test_spec_revision_normalizes_all_supported_top_level_key_spellings(
+    key: str,
+) -> None:
+    content = b"---\n" + key.encode() + b" in_progress\nother: keep\n---\n\nbody\n"
     normalized = implementation_history._spec_revision_bytes(content)
     assert normalized == b"---\nother: keep\n---\n\nbody\n"
 
@@ -1608,7 +1884,8 @@ def test_expired_deadline_cleanup_kills_and_reaps_with_bounded_budget() -> None:
 
     process = KillNeedsWait()
     implementation_history._cleanup_process(
-        process, deadline=implementation_history.time.monotonic() - 1  # type: ignore[arg-type]
+        process,
+        deadline=implementation_history.time.monotonic() - 1,  # type: ignore[arg-type]
     )
 
     assert process.killed
@@ -1680,19 +1957,21 @@ def test_second_parent_only_fieldless_terminal_is_not_provable(
     repo.commit("side-terminal", f"side {terminal_status}")
     git(repo.path, "switch", "-q", "main")
     git(repo.path, "merge", "-q", "-s", "ours", "terminal-side", "-m", "ignore side")
-    repo.write_line(terminal_status, policy=None)  # unpersisted bytes are not T evidence
+    repo.write_line(
+        terminal_status, policy=None
+    )  # unpersisted bytes are not T evidence
 
     assert_history_error(repo, LINE, "history.line.legacy.invalid")
 
 
 @pytest.mark.parametrize("change", ["remove", "change"])
-def test_adopted_policy_cannot_be_removed_or_changed(tmp_path: Path, change: str) -> None:
+def test_adopted_policy_cannot_be_removed_or_changed(
+    tmp_path: Path, change: str
+) -> None:
     repo = HistoryRepo.create(tmp_path)
     repo.adopt()
     repo.start()
-    repo.write_line(
-        "in_progress", policy=None if change == "remove" else "all_parents"
-    )
+    repo.write_line("in_progress", policy=None if change == "remove" else "all_parents")
     repo.commit("policy-change", change)
 
     assert_history_error(repo, LINE, "history.line.policy.changed")
@@ -1996,9 +2275,7 @@ def test_malformed_historical_micro_spec_fails_closed(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize("mode", ["deleted", "normalized"])
-def test_malformed_historical_line_is_not_laundered(
-    tmp_path: Path, mode: str
-) -> None:
+def test_malformed_historical_line_is_not_laundered(tmp_path: Path, mode: str) -> None:
     repo = build_valid_cycle(tmp_path)
     line = repo.path / LINE
     line.write_bytes(b"---\nid: [\n---\n")
@@ -2011,9 +2288,11 @@ def test_malformed_historical_line_is_not_laundered(
 
     errors = validate_project(repo.path)
 
-    assert [(error.path, error.code) for error in errors if error.code.startswith("history.")] == [
-        (LINE, "history.unavailable")
-    ]
+    assert [
+        (error.path, error.code)
+        for error in errors
+        if error.code.startswith("history.")
+    ] == [(LINE, "history.unavailable")]
 
 
 def test_malformed_historical_unselected_iqc_is_not_laundered(
@@ -2033,8 +2312,15 @@ def test_malformed_historical_unselected_iqc_is_not_laundered(
 
     errors = validate_project(repo.path)
 
-    assert [(error.path, error.code) for error in errors if error.code.startswith("history.")] == [
-        (".proofline/lines/line-0001/micro-specs/iqc-0001-002.md", "history.unavailable")
+    assert [
+        (error.path, error.code)
+        for error in errors
+        if error.code.startswith("history.")
+    ] == [
+        (
+            ".proofline/lines/line-0001/micro-specs/iqc-0001-002.md",
+            "history.unavailable",
+        )
     ]
 
 
@@ -2060,7 +2346,9 @@ def test_deleted_historical_micro_spec_is_still_checked(
 
 def test_missing_git_object_fails_closed(tmp_path: Path) -> None:
     repo = build_valid_cycle(tmp_path)
-    blob = git(repo.path, "rev-parse", f'{repo.commits["baseline"]}:{LINE}').stdout.strip()
+    blob = git(
+        repo.path, "rev-parse", f"{repo.commits['baseline']}:{LINE}"
+    ).stdout.strip()
     object_path = repo.path / ".git/objects" / blob[:2] / blob[2:]
     assert object_path.is_file()
     unlink_git_object(object_path)
@@ -2098,9 +2386,9 @@ def test_historical_symlink_mode_canonical_artifact_fails_closed_without_mutatio
     repo = parity_symlink_canonical_artifact(tmp_path, canonical_path)
     assert git(repo.path, "config", "--get", "core.symlinks").stdout.strip() == "false"
     symlink_commit = git(repo.path, "rev-parse", "HEAD^").stdout.strip()
-    assert git(repo.path, "ls-tree", symlink_commit, "--", canonical_path).stdout.startswith(
-        "120000 blob "
-    )
+    assert git(
+        repo.path, "ls-tree", symlink_commit, "--", canonical_path
+    ).stdout.startswith("120000 blob ")
     assert (repo.path / canonical_path).is_file()
     before = repository_snapshot(repo.path)
 
@@ -2145,9 +2433,15 @@ def test_tree_cache_retains_exact_mode_type_oid_and_reuses_blob_read(
     paths = implementation_history._tree_paths(session, commit)
 
     assert session.tree_entries[commit][LINE] == (regular_mode, "blob", oid)
-    assert implementation_history._file(session, commit, LINE, paths) == (repo.path / LINE).read_bytes()
+    assert (
+        implementation_history._file(session, commit, LINE, paths)
+        == (repo.path / LINE).read_bytes()
+    )
     commands_after_first_read = session.commands
-    assert implementation_history._file(session, commit, LINE, paths) == (repo.path / LINE).read_bytes()
+    assert (
+        implementation_history._file(session, commit, LINE, paths)
+        == (repo.path / LINE).read_bytes()
+    )
     assert session.commands == commands_after_first_read
 
 
@@ -2155,8 +2449,16 @@ def test_tree_cache_retains_exact_mode_type_oid_and_reuses_blob_read(
     "tree_output",
     [
         b"0100644 blob " + b"a" * 40 + b"\t" + LINE.encode() + b"\0",
-        b"100644 blob " + b"a" * 40 + b"\t" + LINE.encode() + b"\0"
-        + b"100755 blob " + b"b" * 40 + b"\t" + LINE.encode() + b"\0",
+        b"100644 blob "
+        + b"a" * 40
+        + b"\t"
+        + LINE.encode()
+        + b"\0"
+        + b"100755 blob "
+        + b"b" * 40
+        + b"\t"
+        + LINE.encode()
+        + b"\0",
     ],
     ids=["non-six-character-mode", "duplicate-path"],
 )
@@ -2165,7 +2467,9 @@ def test_tree_cache_rejects_non_exact_mode_and_duplicate_path(
 ) -> None:
     repo = HistoryRepo.create(tmp_path)
     session = implementation_history._GitSession(repo.path)
-    monkeypatch.setattr(implementation_history, "_git", lambda *args, **kwargs: tree_output)
+    monkeypatch.setattr(
+        implementation_history, "_git", lambda *args, **kwargs: tree_output
+    )
 
     with pytest.raises(implementation_history.HistoryUnavailable):
         implementation_history._tree_paths(session, "a" * 40)
@@ -2285,7 +2589,9 @@ def installed_wheel_cli(tmp_path_factory: pytest.TempPathFactory) -> Path:
     provided = os.environ.get("PROOFLINE_INSTALLED_EXECUTABLE")
     if provided:
         executable = Path(provided)
-        assert executable.is_absolute(), "provided installed executable must be absolute"
+        assert executable.is_absolute(), (
+            "provided installed executable must be absolute"
+        )
         assert executable.is_file(), "provided installed executable must exist"
         return executable
 
@@ -2311,7 +2617,9 @@ def installed_wheel_cli(tmp_path_factory: pytest.TempPathFactory) -> Path:
     )
     assert created.returncode == 0, created.stderr
     python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    executable = venv / ("Scripts/proofline.exe" if os.name == "nt" else "bin/proofline")
+    executable = venv / (
+        "Scripts/proofline.exe" if os.name == "nt" else "bin/proofline"
+    )
     installed = subprocess.run(
         ("uv", "pip", "install", "--refresh", "--python", str(python), str(wheel)),
         cwd=root,
@@ -2542,7 +2850,15 @@ def parity_lifecycle_only_merge(tmp_path: Path) -> HistoryRepo:
     repo.write_line("verifying", policy="first_parent")
     repo.commit("side-reverted-product", "remove product and add lifecycle marker")
     git(repo.path, "switch", "-q", "main")
-    git(repo.path, "merge", "-q", "--no-ff", "product-side", "-m", "lifecycle-only merge")
+    git(
+        repo.path,
+        "merge",
+        "-q",
+        "--no-ff",
+        "product-side",
+        "-m",
+        "lifecycle-only merge",
+    )
     merge = git(repo.path, "rev-parse", "HEAD").stdout.strip()
     repo.finish(merge, "quality")
     return repo
@@ -2698,7 +3014,9 @@ def parity_second_parent_marker(tmp_path: Path) -> HistoryRepo:
     git(repo.path, "switch", "-q", "main")
     repo.write_line("in_progress", policy=None)
     repo.commit("main-change", "main change")
-    git(repo.path, "merge", "-q", "-s", "ours", "policy-side", "-m", "merge policy side")
+    git(
+        repo.path, "merge", "-q", "-s", "ours", "policy-side", "-m", "merge policy side"
+    )
     repo.write_line("not_started", policy="first_parent")
     return repo
 
@@ -2982,7 +3300,16 @@ def parity_second_parent_implementation(tmp_path: Path) -> HistoryRepo:
     git(repo.path, "switch", "-q", "main")
     (repo.path / "main.txt").write_text("main\n", encoding="utf-8")
     repo.commit("main-change", "main change")
-    git(repo.path, "merge", "-q", "-s", "ours", "implementation-side", "-m", "ignore implementation side")
+    git(
+        repo.path,
+        "merge",
+        "-q",
+        "-s",
+        "ours",
+        "implementation-side",
+        "-m",
+        "ignore implementation side",
+    )
     repo.finish(implementation)
     return repo
 
@@ -3008,7 +3335,9 @@ def parity_malformed_history(tmp_path: Path) -> HistoryRepo:
 
 def parity_missing_object(tmp_path: Path) -> HistoryRepo:
     repo = build_valid_cycle(tmp_path)
-    blob = git(repo.path, "rev-parse", f"{repo.commits['baseline']}:{LINE}").stdout.strip()
+    blob = git(
+        repo.path, "rev-parse", f"{repo.commits['baseline']}:{LINE}"
+    ).stdout.strip()
     object_path = repo.path / ".git/objects" / blob[:2] / blob[2:]
     assert object_path.is_file()
     unlink_git_object(object_path)
@@ -3020,7 +3349,9 @@ def parity_shallow_history(tmp_path: Path) -> HistoryRepo:
     clone = tmp_path / "shallow"
     cloned = subprocess.run(
         ("git", "clone", "-q", "--depth", "1", f"file://{source.path}", str(clone)),
-        text=True, capture_output=True, check=False,
+        text=True,
+        capture_output=True,
+        check=False,
     )
     assert cloned.returncode == 0, cloned.stderr
     return HistoryRepo(clone)
@@ -3069,14 +3400,22 @@ def test_historical_duplicate_laundering_has_one_stable_path_bound_diagnostic(
         (error.path, error.code)
         for error in validate_project(repo.path)
         if error.code.startswith("history.")
-    ] == [
-        (expected_path, "history.unavailable")
-    ]
+    ] == [(expected_path, "history.unavailable")]
 
 
 PARITY_SCENARIOS = [
-    pytest.param(HistoryParityScenario("p-before-b-valid", lambda p: build_valid_cycle(p, order="start-first")), id="p-before-b-valid"),
-    pytest.param(HistoryParityScenario("b-before-p-valid", lambda p: build_valid_cycle(p, order="baseline-first")), id="b-before-p-valid"),
+    pytest.param(
+        HistoryParityScenario(
+            "p-before-b-valid", lambda p: build_valid_cycle(p, order="start-first")
+        ),
+        id="p-before-b-valid",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "b-before-p-valid", lambda p: build_valid_cycle(p, order="baseline-first")
+        ),
+        id="b-before-p-valid",
+    ),
     pytest.param(
         HistoryParityScenario("initial-valid", parity_valid_initial), id="initial-valid"
     ),
@@ -3262,37 +3601,246 @@ PARITY_SCENARIOS = [
         ),
         id="terminal-t-equal-a",
     ),
-    pytest.param(HistoryParityScenario("terminal-t-after-a-delivered", lambda p: parity_terminal_after_activation(p, "delivered"), "history.line.legacy.invalid"), id="terminal-t-after-a-delivered"),
-    pytest.param(HistoryParityScenario("terminal-t-after-a-cancelled", lambda p: parity_terminal_after_activation(p, "cancelled"), "history.line.legacy.invalid"), id="terminal-t-after-a-cancelled"),
-    pytest.param(HistoryParityScenario("terminal-t-after-a", lambda p: parity_terminal_after_activation(p, "delivered"), "history.line.legacy.invalid"), id="terminal-t-after-a"),
-    pytest.param(HistoryParityScenario("fieldless-non-terminal", lambda p: HistoryRepo.create(p), "history.line.policy.missing"), id="fieldless-non-terminal"),
-    pytest.param(HistoryParityScenario("second-parent-terminal-delivered", lambda p: parity_second_parent_terminal(p, "delivered"), "history.line.legacy.invalid"), id="second-parent-terminal-delivered"),
-    pytest.param(HistoryParityScenario("second-parent-terminal-cancelled", lambda p: parity_second_parent_terminal(p, "cancelled"), "history.line.legacy.invalid"), id="second-parent-terminal-cancelled"),
-    pytest.param(HistoryParityScenario("policy-removal", lambda p: parity_policy_change(p, "remove"), "history.line.policy.changed"), id="policy-removal"),
-    pytest.param(HistoryParityScenario("policy-change", lambda p: parity_policy_change(p, "change"), "history.line.policy.changed"), id="policy-change"),
-    pytest.param(HistoryParityScenario("policy-delete-restore", parity_policy_delete_restore, "history.line.policy.changed"), id="policy-delete-restore"),
-    pytest.param(HistoryParityScenario("line-artifact-delete", parity_line_delete, "history.line.policy.changed"), id="line-artifact-delete"),
-    pytest.param(HistoryParityScenario("line-artifact-delete-restore", parity_line_delete_restore, "history.line.policy.changed"), id="line-artifact-delete-restore"),
-    pytest.param(HistoryParityScenario("historical-line-duplicate-policy", lambda p: parity_historical_line_duplicate(p, "implementation_history"), "history.unavailable"), id="historical-line-duplicate-policy"),
-    pytest.param(HistoryParityScenario("historical-line-duplicate-execution", lambda p: parity_historical_line_duplicate(p, "execution_status"), "history.unavailable"), id="historical-line-duplicate-execution"),
-    pytest.param(HistoryParityScenario("malformed-historical-line-deleted", lambda p: parity_malformed_historical_line(p, "deleted"), "history.unavailable"), id="malformed-historical-line-deleted"),
-    pytest.param(HistoryParityScenario("malformed-historical-line-normalized", lambda p: parity_malformed_historical_line(p, "normalized"), "history.unavailable"), id="malformed-historical-line-normalized"),
-    pytest.param(HistoryParityScenario("historical-ms-duplicate-status-normalized", parity_historical_ms_duplicate_normalized, "history.unavailable"), id="historical-ms-duplicate-status-normalized"),
-    pytest.param(HistoryParityScenario("historical-ms-duplicate-spec-deleted", parity_historical_ms_duplicate_deleted, "history.unavailable"), id="historical-ms-duplicate-spec-deleted"),
-    pytest.param(HistoryParityScenario("historical-iqc-duplicate-implementation-reworked", parity_historical_iqc_duplicate_reworked, "history.unavailable"), id="historical-iqc-duplicate-implementation-reworked"),
-    pytest.param(HistoryParityScenario("malformed-historical-unselected-iqc", parity_malformed_historical_unselected_iqc, "history.unavailable"), id="malformed-historical-unselected-iqc"),
-    pytest.param(HistoryParityScenario("implementation-before-baseline", parity_implementation_before_baseline, "history.ms.order"), id="implementation-before-baseline"),
-    pytest.param(HistoryParityScenario("start-before-approved-spec", parity_start_before_approved_spec, "history.ms.order"), id="start-before-approved-spec"),
-    pytest.param(HistoryParityScenario("rework-missing-in-progress", parity_rework_missing_start, "history.ms.transition"), id="rework-missing-in-progress"),
-    pytest.param(HistoryParityScenario("invalid-reset", parity_invalid_reset, "history.ms.transition"), id="invalid-reset"),
-    pytest.param(HistoryParityScenario("second-parent-start", parity_second_parent_start, "history.ms.transition"), id="second-parent-start"),
-    pytest.param(HistoryParityScenario("second-parent-implementation", parity_second_parent_implementation, "history.ms.binding"), id="second-parent-implementation"),
-    pytest.param(HistoryParityScenario("current-terminal-uncommitted-restoration-delivered", lambda p: parity_current_terminal_restoration(p, "delivered"), "history.line.legacy.invalid"), id="current-terminal-uncommitted-restoration-delivered"),
-    pytest.param(HistoryParityScenario("current-terminal-uncommitted-restoration-cancelled", lambda p: parity_current_terminal_restoration(p, "cancelled"), "history.line.legacy.invalid"), id="current-terminal-uncommitted-restoration-cancelled"),
-    pytest.param(HistoryParityScenario("reapproval-and-start-same-commit", parity_reapproval_and_start, "history.ms.order"), id="reapproval-and-start-same-commit"),
-    pytest.param(HistoryParityScenario("stale-approved-bytes-binding", parity_stale_approved_bytes, "history.ms.order"), id="stale-approved-bytes-binding"),
-    pytest.param(HistoryParityScenario("current-draft-active", parity_current_draft_active, "history.ms.order"), id="current-draft-active"),
-    pytest.param(HistoryParityScenario("current-withdrawn-active", parity_current_withdrawn_active, "history.ms.order"), id="current-withdrawn-active"),
+    pytest.param(
+        HistoryParityScenario(
+            "terminal-t-after-a-delivered",
+            lambda p: parity_terminal_after_activation(p, "delivered"),
+            "history.line.legacy.invalid",
+        ),
+        id="terminal-t-after-a-delivered",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "terminal-t-after-a-cancelled",
+            lambda p: parity_terminal_after_activation(p, "cancelled"),
+            "history.line.legacy.invalid",
+        ),
+        id="terminal-t-after-a-cancelled",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "terminal-t-after-a",
+            lambda p: parity_terminal_after_activation(p, "delivered"),
+            "history.line.legacy.invalid",
+        ),
+        id="terminal-t-after-a",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "fieldless-non-terminal",
+            lambda p: HistoryRepo.create(p),
+            "history.line.policy.missing",
+        ),
+        id="fieldless-non-terminal",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "second-parent-terminal-delivered",
+            lambda p: parity_second_parent_terminal(p, "delivered"),
+            "history.line.legacy.invalid",
+        ),
+        id="second-parent-terminal-delivered",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "second-parent-terminal-cancelled",
+            lambda p: parity_second_parent_terminal(p, "cancelled"),
+            "history.line.legacy.invalid",
+        ),
+        id="second-parent-terminal-cancelled",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "policy-removal",
+            lambda p: parity_policy_change(p, "remove"),
+            "history.line.policy.changed",
+        ),
+        id="policy-removal",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "policy-change",
+            lambda p: parity_policy_change(p, "change"),
+            "history.line.policy.changed",
+        ),
+        id="policy-change",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "policy-delete-restore",
+            parity_policy_delete_restore,
+            "history.line.policy.changed",
+        ),
+        id="policy-delete-restore",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "line-artifact-delete", parity_line_delete, "history.line.policy.changed"
+        ),
+        id="line-artifact-delete",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "line-artifact-delete-restore",
+            parity_line_delete_restore,
+            "history.line.policy.changed",
+        ),
+        id="line-artifact-delete-restore",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "historical-line-duplicate-policy",
+            lambda p: parity_historical_line_duplicate(p, "implementation_history"),
+            "history.unavailable",
+        ),
+        id="historical-line-duplicate-policy",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "historical-line-duplicate-execution",
+            lambda p: parity_historical_line_duplicate(p, "execution_status"),
+            "history.unavailable",
+        ),
+        id="historical-line-duplicate-execution",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "malformed-historical-line-deleted",
+            lambda p: parity_malformed_historical_line(p, "deleted"),
+            "history.unavailable",
+        ),
+        id="malformed-historical-line-deleted",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "malformed-historical-line-normalized",
+            lambda p: parity_malformed_historical_line(p, "normalized"),
+            "history.unavailable",
+        ),
+        id="malformed-historical-line-normalized",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "historical-ms-duplicate-status-normalized",
+            parity_historical_ms_duplicate_normalized,
+            "history.unavailable",
+        ),
+        id="historical-ms-duplicate-status-normalized",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "historical-ms-duplicate-spec-deleted",
+            parity_historical_ms_duplicate_deleted,
+            "history.unavailable",
+        ),
+        id="historical-ms-duplicate-spec-deleted",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "historical-iqc-duplicate-implementation-reworked",
+            parity_historical_iqc_duplicate_reworked,
+            "history.unavailable",
+        ),
+        id="historical-iqc-duplicate-implementation-reworked",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "malformed-historical-unselected-iqc",
+            parity_malformed_historical_unselected_iqc,
+            "history.unavailable",
+        ),
+        id="malformed-historical-unselected-iqc",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "implementation-before-baseline",
+            parity_implementation_before_baseline,
+            "history.ms.order",
+        ),
+        id="implementation-before-baseline",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "start-before-approved-spec",
+            parity_start_before_approved_spec,
+            "history.ms.order",
+        ),
+        id="start-before-approved-spec",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "rework-missing-in-progress",
+            parity_rework_missing_start,
+            "history.ms.transition",
+        ),
+        id="rework-missing-in-progress",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "invalid-reset", parity_invalid_reset, "history.ms.transition"
+        ),
+        id="invalid-reset",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "second-parent-start", parity_second_parent_start, "history.ms.transition"
+        ),
+        id="second-parent-start",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "second-parent-implementation",
+            parity_second_parent_implementation,
+            "history.ms.binding",
+        ),
+        id="second-parent-implementation",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "current-terminal-uncommitted-restoration-delivered",
+            lambda p: parity_current_terminal_restoration(p, "delivered"),
+            "history.line.legacy.invalid",
+        ),
+        id="current-terminal-uncommitted-restoration-delivered",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "current-terminal-uncommitted-restoration-cancelled",
+            lambda p: parity_current_terminal_restoration(p, "cancelled"),
+            "history.line.legacy.invalid",
+        ),
+        id="current-terminal-uncommitted-restoration-cancelled",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "reapproval-and-start-same-commit",
+            parity_reapproval_and_start,
+            "history.ms.order",
+        ),
+        id="reapproval-and-start-same-commit",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "stale-approved-bytes-binding",
+            parity_stale_approved_bytes,
+            "history.ms.order",
+        ),
+        id="stale-approved-bytes-binding",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "current-draft-active", parity_current_draft_active, "history.ms.order"
+        ),
+        id="current-draft-active",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "current-withdrawn-active",
+            parity_current_withdrawn_active,
+            "history.ms.order",
+        ),
+        id="current-withdrawn-active",
+    ),
     pytest.param(
         HistoryParityScenario(
             "direct-not-started-to-implemented",
@@ -3361,11 +3909,44 @@ PARITY_SCENARIOS = [
         ),
         id="same-commit-i-equals-q",
     ),
-    pytest.param(HistoryParityScenario("unresolved-implementation-commit", parity_unresolved_implementation, "history.ms.binding"), id="unresolved-implementation-commit"),
-    pytest.param(HistoryParityScenario("malformed-historical-artifact", parity_malformed_history, "history.unavailable"), id="malformed-historical-artifact"),
-    pytest.param(HistoryParityScenario("missing-object-history-object-unavailable", parity_missing_object, "history.unavailable"), id="missing-object-history-object-unavailable"),
-    pytest.param(HistoryParityScenario("shallow-history", parity_shallow_history, "history.unavailable"), id="shallow-history"),
-    pytest.param(HistoryParityScenario("multi-ms-single-violation", parity_multi_ms_violation, "history.ms.transition"), id="multi-ms-single-violation"),
+    pytest.param(
+        HistoryParityScenario(
+            "unresolved-implementation-commit",
+            parity_unresolved_implementation,
+            "history.ms.binding",
+        ),
+        id="unresolved-implementation-commit",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "malformed-historical-artifact",
+            parity_malformed_history,
+            "history.unavailable",
+        ),
+        id="malformed-historical-artifact",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "missing-object-history-object-unavailable",
+            parity_missing_object,
+            "history.unavailable",
+        ),
+        id="missing-object-history-object-unavailable",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "shallow-history", parity_shallow_history, "history.unavailable"
+        ),
+        id="shallow-history",
+    ),
+    pytest.param(
+        HistoryParityScenario(
+            "multi-ms-single-violation",
+            parity_multi_ms_violation,
+            "history.ms.transition",
+        ),
+        id="multi-ms-single-violation",
+    ),
     pytest.param(
         HistoryParityScenario(
             "second-parent-only-marker",
@@ -3404,40 +3985,87 @@ PARITY_SCENARIOS = [
 
 
 def test_installed_wheel_parity_matrix_is_expanded() -> None:
-    expected = frozenset({
-        "p-before-b-valid", "b-before-p-valid", "initial-valid", "rework-valid",
-        "multiple-implementations-bind-final", "multiple-implementations-bind-first",
-        "product-in-progress-transition", "dirty-policy-line",
-        "persisted-fresh-rework-in-progress", "dirty-reset-in-progress",
-        "dirty-reset-not-started", "dirty-edit-same-status",
-        "missing-current-micro-spec", "malformed-current-micro-spec",
-        "deleted-historical-micro-spec", "deleted-malformed-historical-micro-spec",
-        "dirty-iqc-rollback", "dirty-iqc-edit", "missing-current-iqc",
-        "malformed-current-iqc",
-        "stale-iqc-rework", "lifecycle-only-merge", "empty-implementation",
-        "legacy-delivered", "legacy-cancelled", "terminal-t-equal-a",
-        "fieldless-terminal-before-later-activation-delivered",
-        "fieldless-terminal-before-later-activation-cancelled",
-        "terminal-t-after-a-delivered", "terminal-t-after-a-cancelled", "terminal-t-after-a",
-        "fieldless-non-terminal", "second-parent-terminal-delivered", "second-parent-terminal-cancelled",
-        "policy-removal", "policy-change", "policy-delete-restore", "implementation-before-baseline",
-        "line-artifact-delete", "line-artifact-delete-restore",
-        "historical-line-duplicate-policy", "historical-line-duplicate-execution",
-        "malformed-historical-line-deleted", "malformed-historical-line-normalized",
-        "historical-ms-duplicate-status-normalized", "historical-ms-duplicate-spec-deleted",
-        "historical-iqc-duplicate-implementation-reworked", "malformed-historical-unselected-iqc",
-        "start-before-approved-spec", "rework-missing-in-progress", "invalid-reset", "second-parent-start",
-        "second-parent-implementation", "current-terminal-uncommitted-restoration-delivered",
-        "current-terminal-uncommitted-restoration-cancelled", "reapproval-and-start-same-commit",
-        "stale-approved-bytes-binding", "current-draft-active", "current-withdrawn-active",
-        "direct-not-started-to-implemented", "historical-direct-then-valid-cycle",
-        "historical-invalid-rework-then-valid", "historical-missing-iqc-then-valid",
-        "historical-malformed-iqc-then-valid", "historical-reused-iqc-then-valid",
-        "two-valid-cycles", "same-commit-p-equals-i", "same-commit-i-equals-q",
-        "unresolved-implementation-commit", "malformed-historical-artifact",
-        "missing-object-history-object-unavailable", "shallow-history", "multi-ms-single-violation",
-        "second-parent-only-marker", "later-lifecycle-only-binding", "git-unavailable", "git-spawn-failure",
-    })
+    expected = frozenset(
+        {
+            "p-before-b-valid",
+            "b-before-p-valid",
+            "initial-valid",
+            "rework-valid",
+            "multiple-implementations-bind-final",
+            "multiple-implementations-bind-first",
+            "product-in-progress-transition",
+            "dirty-policy-line",
+            "persisted-fresh-rework-in-progress",
+            "dirty-reset-in-progress",
+            "dirty-reset-not-started",
+            "dirty-edit-same-status",
+            "missing-current-micro-spec",
+            "malformed-current-micro-spec",
+            "deleted-historical-micro-spec",
+            "deleted-malformed-historical-micro-spec",
+            "dirty-iqc-rollback",
+            "dirty-iqc-edit",
+            "missing-current-iqc",
+            "malformed-current-iqc",
+            "stale-iqc-rework",
+            "lifecycle-only-merge",
+            "empty-implementation",
+            "legacy-delivered",
+            "legacy-cancelled",
+            "terminal-t-equal-a",
+            "fieldless-terminal-before-later-activation-delivered",
+            "fieldless-terminal-before-later-activation-cancelled",
+            "terminal-t-after-a-delivered",
+            "terminal-t-after-a-cancelled",
+            "terminal-t-after-a",
+            "fieldless-non-terminal",
+            "second-parent-terminal-delivered",
+            "second-parent-terminal-cancelled",
+            "policy-removal",
+            "policy-change",
+            "policy-delete-restore",
+            "implementation-before-baseline",
+            "line-artifact-delete",
+            "line-artifact-delete-restore",
+            "historical-line-duplicate-policy",
+            "historical-line-duplicate-execution",
+            "malformed-historical-line-deleted",
+            "malformed-historical-line-normalized",
+            "historical-ms-duplicate-status-normalized",
+            "historical-ms-duplicate-spec-deleted",
+            "historical-iqc-duplicate-implementation-reworked",
+            "malformed-historical-unselected-iqc",
+            "start-before-approved-spec",
+            "rework-missing-in-progress",
+            "invalid-reset",
+            "second-parent-start",
+            "second-parent-implementation",
+            "current-terminal-uncommitted-restoration-delivered",
+            "current-terminal-uncommitted-restoration-cancelled",
+            "reapproval-and-start-same-commit",
+            "stale-approved-bytes-binding",
+            "current-draft-active",
+            "current-withdrawn-active",
+            "direct-not-started-to-implemented",
+            "historical-direct-then-valid-cycle",
+            "historical-invalid-rework-then-valid",
+            "historical-missing-iqc-then-valid",
+            "historical-malformed-iqc-then-valid",
+            "historical-reused-iqc-then-valid",
+            "two-valid-cycles",
+            "same-commit-p-equals-i",
+            "same-commit-i-equals-q",
+            "unresolved-implementation-commit",
+            "malformed-historical-artifact",
+            "missing-object-history-object-unavailable",
+            "shallow-history",
+            "multi-ms-single-violation",
+            "second-parent-only-marker",
+            "later-lifecycle-only-binding",
+            "git-unavailable",
+            "git-spawn-failure",
+        }
+    )
     ids = [scenario.values[0].id for scenario in PARITY_SCENARIOS]
     assert len(ids) == len(set(ids))
     assert set(ids) == expected
@@ -3452,9 +4080,7 @@ def test_installed_wheel_cli_matches_source_history_diagnostics(
     repo = scenario.build(tmp_path / scenario.id)
     before = read_only_snapshot(repo.path)
     extra_env = (
-        {"PATH": str(tmp_path / "missing-git")}
-        if scenario.unavailable_git
-        else None
+        {"PATH": str(tmp_path / "missing-git")} if scenario.unavailable_git else None
     )
     source = run_source_with_env(repo.path, extra_env=extra_env)
     assert read_only_snapshot(repo.path) == before
