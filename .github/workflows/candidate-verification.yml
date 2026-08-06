@@ -13,7 +13,7 @@ env:
   PROOFLINE_CLEAN_RUNNER_PLAN_ID: candidate-clean-runner-v1
   PROOFLINE_CLEAN_RUNNER_PLAN_RESOURCE: skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json
   PROOFLINE_CLEAN_RUNNER_PACKAGED_PLAN_RESOURCE: proofline_home/skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json
-  PROOFLINE_CLEAN_RUNNER_STEP_ORDER: verify-wheel,verify-checksum,create-environment,provision-harness,contract-probe
+  PROOFLINE_CLEAN_RUNNER_STEP_ORDER: verify-wheel,verify-checksum,create-environment,install-candidate,provision-harness,contract-probe
   PROOFLINE_CLEAN_RUNNER_ENDPOINT: https://pypi.org/simple
   PROOFLINE_CLEAN_RUNNER_VERSION_SOURCE: uv.lock
   PROOFLINE_CLEAN_RUNNER_NETWORK_MODE: online-offline

@@ -215,6 +215,84 @@ def _plan_variant(tmp_path: Path, mutator) -> Path:
     return path
 
 
+CANONICAL_STEP_ARGV = {
+    "ubuntu-python311": {
+        "verify-wheel": ["proofline-clean-runner-internal", "verify-wheel", "{wheel}"],
+        "verify-checksum": [
+            "proofline-clean-runner-internal", "verify-checksum", "{wheel}", "{wheel_sha256}"
+        ],
+        "create-environment": ["uv", "venv", "--python", "3.11", "{environment}"],
+        "install-candidate": [
+            "uv", "pip", "install", "--python", "{python}",
+            "--no-deps", "--no-index", "{wheel}",
+        ],
+        "provision-harness": [
+            "uv", "pip", "install", "--python", "{python}",
+            "--index-url", "https://pypi.org/simple",
+            "colorama==0.4.6", "iniconfig==2.3.0", "packaging==26.2",
+            "pluggy==1.6.0", "pygments==2.20.0", "pytest==9.1.1",
+        ],
+        "contract-probe": [
+            "{python}", "-m", "pytest", "-p", "no:cacheprovider", "{contract_probe}"
+        ],
+    },
+    "windows-python311": {
+        "verify-wheel": ["proofline-clean-runner-internal", "verify-wheel", "{wheel}"],
+        "verify-checksum": [
+            "proofline-clean-runner-internal", "verify-checksum", "{wheel}", "{wheel_sha256}"
+        ],
+        "create-environment": ["uv", "venv", "--python", "3.11", "{environment}"],
+        "install-candidate": [
+            "uv", "pip", "install", "--python", "{python}",
+            "--no-deps", "--no-index", "{wheel}",
+        ],
+        "provision-harness": [
+            "uv", "pip", "install", "--python", "{python}",
+            "--index-url", "https://pypi.org/simple",
+            "colorama==0.4.6", "iniconfig==2.3.0", "packaging==26.2",
+            "pluggy==1.6.0", "pygments==2.20.0", "pytest==9.1.1",
+        ],
+        "contract-probe": [
+            "{python}", "-m", "pytest", "-p", "no:cacheprovider", "{contract_probe}"
+        ],
+    },
+}
+
+
+def test_canonical_plan_owns_every_exact_platform_step_argv():
+    value = json.loads(PLAN.read_text(encoding="utf-8"))
+    actual = {
+        platform: {step["step_id"]: step["argv"] for step in record["steps"]}
+        for platform, record in value["platforms"].items()
+    }
+    assert actual == CANONICAL_STEP_ARGV
+
+
+@pytest.mark.parametrize(
+    ("platform", "step_id"),
+    [
+        (platform, step_id)
+        for platform, steps in CANONICAL_STEP_ARGV.items()
+        for step_id in steps
+    ],
+)
+def test_plan_rejects_bounded_but_wrong_argv_for_every_platform_step(
+    helper, valid_case, tmp_path, platform, step_id
+):
+    def mutate(value):
+        step = next(
+            record
+            for record in value["platforms"][platform]["steps"]
+            if record["step_id"] == step_id
+        )
+        step["argv"] = ["python", "--version"]
+
+    path = _plan_variant(tmp_path, mutate)
+    _assert_code(
+        helper, "clean_preflight.plan.invalid", lambda: _validate(helper, valid_case, plan=path)
+    )
+
+
 @pytest.mark.parametrize("kind", ["missing", "unknown", "type", "duplicate"])
 def test_plan_rejects_non_exact_strict_schema(helper, valid_case, tmp_path, kind):
     if kind == "duplicate":
@@ -858,6 +936,26 @@ def test_repository_root_symlink_is_rejected(helper, valid_case, tmp_path):
     alias = tmp_path / "repo-alias"
     alias.symlink_to(valid_case["repo"], target_is_directory=True)
     valid_case["repo"] = alias
+    _assert_code(
+        helper, "clean_preflight.candidate.mismatch", lambda: _validate(helper, valid_case)
+    )
+
+
+def test_repository_ancestor_symlink_is_rejected(helper, valid_case, tmp_path):
+    alias_parent = tmp_path / "parent-alias"
+    alias_parent.symlink_to(tmp_path, target_is_directory=True)
+    valid_case["repo"] = alias_parent / valid_case["repo"].name
+    assert not valid_case["repo"].is_symlink()
+    _assert_code(
+        helper, "clean_preflight.candidate.mismatch", lambda: _validate(helper, valid_case)
+    )
+
+
+def test_repository_lexical_dotdot_is_rejected(helper, valid_case, tmp_path):
+    lexical_parent = tmp_path / "unused"
+    lexical_parent.mkdir()
+    valid_case["repo"] = lexical_parent / ".." / valid_case["repo"].name
+    assert valid_case["repo"].is_absolute()
     _assert_code(
         helper, "clean_preflight.candidate.mismatch", lambda: _validate(helper, valid_case)
     )

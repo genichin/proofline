@@ -143,6 +143,7 @@ def test_windows_candidate_gate_declares_contract_only_shared_plan() -> None:
         "verify-wheel",
         "verify-checksum",
         "create-environment",
+        "install-candidate",
         "provision-harness",
         "contract-probe",
     ]

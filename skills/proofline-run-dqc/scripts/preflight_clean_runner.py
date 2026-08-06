@@ -50,9 +50,45 @@ STEP_ORDER = [
     "verify-wheel",
     "verify-checksum",
     "create-environment",
+    "install-candidate",
     "provision-harness",
     "contract-probe",
 ]
+_HARNESS_REQUIREMENTS = (
+    "colorama==0.4.6",
+    "iniconfig==2.3.0",
+    "packaging==26.2",
+    "pluggy==1.6.0",
+    "pygments==2.20.0",
+    "pytest==9.1.1",
+)
+_CANONICAL_STEP_ARGV = {
+    platform: {
+        "verify-wheel": (
+            "proofline-clean-runner-internal", "verify-wheel", "{wheel}",
+        ),
+        "verify-checksum": (
+            "proofline-clean-runner-internal", "verify-checksum", "{wheel}",
+            "{wheel_sha256}",
+        ),
+        "create-environment": (
+            "uv", "venv", "--python", "3.11", "{environment}",
+        ),
+        "install-candidate": (
+            "uv", "pip", "install", "--python", "{python}", "--no-deps",
+            "--no-index", "{wheel}",
+        ),
+        "provision-harness": (
+            "uv", "pip", "install", "--python", "{python}", "--index-url",
+            "https://pypi.org/simple", *_HARNESS_REQUIREMENTS,
+        ),
+        "contract-probe": (
+            "{python}", "-m", "pytest", "-p", "no:cacheprovider",
+            "{contract_probe}",
+        ),
+    }
+    for platform in PLATFORMS
+}
 LOWER_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 NORMALIZED_NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*\Z")
 IMMUTABLE_VERSION = re.compile(r"[0-9]+(?:\.[0-9]+)*(?:[a-z]+[0-9]*)?\Z")
@@ -173,8 +209,20 @@ def _run_git(repo: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 
 def _candidate_identity(repo: Path, candidate: str, provenance_commit: str) -> str:
-    if not repo.is_absolute() or not repo.is_dir() or repo.is_symlink():
+    if not repo.is_absolute():
         _fail("clean_preflight.candidate.mismatch", "repository must be an absolute directory")
+    try:
+        resolved_repo = repo.resolve(strict=True)
+    except OSError as exc:
+        raise ValidationError(
+            "clean_preflight.candidate.mismatch",
+            "repository must resolve as an absolute canonical directory",
+        ) from exc
+    if resolved_repo != repo or not repo.is_dir():
+        _fail(
+            "clean_preflight.candidate.mismatch",
+            "repository must be an absolute canonical directory",
+        )
     object_format = _run_git(repo, "rev-parse", "--show-object-format")
     if object_format.returncode != 0:
         _fail("clean_preflight.candidate.mismatch", "repository object format is unavailable")
@@ -472,6 +520,8 @@ def _validate_plan(value: dict[str, Any]) -> str:
                         "clean_preflight.dependency.undeclared",
                         "argv dependency is not exactly declared",
                     )
+            if tuple(argv) != _CANONICAL_STEP_ARGV[platform_name].get(step["step_id"]):
+                _fail(code, "step argv differs from canonical platform template")
         if step_ids != STEP_ORDER:
             _fail(code, "platform step order is invalid")
     return value["plan_id"]
@@ -533,6 +583,29 @@ def _offline_inventory(
             f"offline wheelhouse is missing {missing[0]}",
         )
     return wheelhouse
+
+
+def _derive_offline_provision_argv(
+    validated_online_argv: tuple[str, ...],
+) -> tuple[str, ...]:
+    expected = _CANONICAL_STEP_ARGV["ubuntu-python311"]["provision-harness"]
+    if validated_online_argv != expected:
+        _fail(
+            "clean_preflight.plan.invalid",
+            "offline provision argv must derive from the canonical online template",
+        )
+    marker = ("--index-url", "https://pypi.org/simple")
+    index = validated_online_argv.index(marker[0])
+    if validated_online_argv[index : index + len(marker)] != marker:
+        _fail("clean_preflight.plan.invalid", "canonical online endpoint marker drifted")
+    return (
+        *validated_online_argv[:index],
+        "--offline",
+        "--no-index",
+        "--find-links",
+        "{wheelhouse}",
+        *validated_online_argv[index + len(marker) :],
+    )
 
 
 def _clean_environment(cache: Path, home: Path, temp: Path) -> dict[str, str]:
@@ -846,49 +919,50 @@ def _provision_clean_environment(
                 }
             )
         python = environment_path / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-        substitutions = {
+        substitutions: dict[str, str] = {
             "{wheel}": str(pinned_wheel),
             "{wheel_sha256}": wheel_sha256,
             "{environment}": str(environment_path),
             "{python}": str(python),
             "{contract_probe}": str(contract_probe),
         }
+        if exact_wheelhouse is not None:
+            substitutions["{wheelhouse}"] = str(exact_wheelhouse)
         steps = plan["platforms"]["ubuntu-python311"]["steps"]
         for step in steps:
-            step_id = step["step_id"]
-            argv = [substitutions.get(token, token) for token in step["argv"]]
+            step_id: str = step["step_id"]
+            template: tuple[str, ...] = tuple(step["argv"])
+            if template != _CANONICAL_STEP_ARGV["ubuntu-python311"].get(step_id):
+                _fail(
+                    "clean_preflight.plan.invalid",
+                    "execution step argv differs from validated canonical template",
+                )
+            if step_id == "provision-harness" and network_mode == "offline":
+                template = _derive_offline_provision_argv(template)
+            argv = [substitutions.get(token, token) for token in template]
             if argv[0] == "uv":
                 argv[0] = uv_executable
             if step_id == "verify-wheel":
+                if argv[:2] != ["proofline-clean-runner-internal", "verify-wheel"]:
+                    _fail("clean_preflight.plan.invalid", "verify-wheel handler argv drifted")
                 if pinned_wheel.name != wheel_filename or not pinned_wheel.is_symlink():
                     _fail("clean_preflight.wheel.filename", "pinned wheel name drifted")
                 continue
             if step_id == "verify-checksum":
+                if argv[:2] != ["proofline-clean-runner-internal", "verify-checksum"]:
+                    _fail("clean_preflight.plan.invalid", "verify-checksum handler argv drifted")
                 if _digest_fd(wheel_fd) != wheel_sha256:
                     _fail("clean_preflight.wheel.digest", "pinned wheel bytes drifted")
                 continue
-            if step_id == "create-environment":
+            if step_id == "install-candidate":
                 _run_provision(
-                    argv, cwd=work, environment=environment, budget=budget
-                )
-                _run_provision(
-                    [
-                        uv_executable, "pip", "install", "--python", str(python),
-                        "--no-deps", "--no-index", str(pinned_wheel),
-                    ],
+                    argv,
                     cwd=work,
                     environment=environment,
                     budget=budget,
                     pass_fds=(wheel_fd,),
                 )
                 continue
-            if step_id == "provision-harness" and network_mode == "offline":
-                assert exact_wheelhouse is not None
-                index = argv.index("--index-url")
-                del argv[index : index + 2]
-                argv[index:index] = [
-                    "--offline", "--no-index", "--find-links", str(exact_wheelhouse)
-                ]
             _run_provision(argv, cwd=work, environment=environment, budget=budget)
 
 

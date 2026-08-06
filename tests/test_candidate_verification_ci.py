@@ -217,7 +217,7 @@ def test_hosted_workflow_declares_shared_clean_runner_plan_contract() -> None:
         ),
         "PROOFLINE_CLEAN_RUNNER_STEP_ORDER": (
             "verify-wheel,verify-checksum,create-environment,"
-            "provision-harness,contract-probe"
+            "install-candidate,provision-harness,contract-probe"
         ),
         "PROOFLINE_CLEAN_RUNNER_ENDPOINT": "https://pypi.org/simple",
         "PROOFLINE_CLEAN_RUNNER_VERSION_SOURCE": "uv.lock",

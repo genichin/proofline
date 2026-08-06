@@ -22,6 +22,7 @@ $CleanRunnerStepOrder = @(
     "verify-wheel",
     "verify-checksum",
     "create-environment",
+    "install-candidate",
     "provision-harness",
     "contract-probe"
 )
