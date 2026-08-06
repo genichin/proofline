@@ -221,7 +221,9 @@ CANONICAL_STEP_ARGV = {
         "verify-checksum": [
             "proofline-clean-runner-internal", "verify-checksum", "{wheel}", "{wheel_sha256}"
         ],
-        "create-environment": ["uv", "venv", "--python", "3.11", "{environment}"],
+        "create-environment": [
+            "uv", "venv", "--python", "{python_interpreter}", "{environment}"
+        ],
         "install-candidate": [
             "uv", "pip", "install", "--python", "{python}",
             "--no-deps", "--no-index", "{wheel}",
@@ -241,7 +243,9 @@ CANONICAL_STEP_ARGV = {
         "verify-checksum": [
             "proofline-clean-runner-internal", "verify-checksum", "{wheel}", "{wheel_sha256}"
         ],
-        "create-environment": ["uv", "venv", "--python", "3.11", "{environment}"],
+        "create-environment": [
+            "uv", "venv", "--python", "{python_interpreter}", "{environment}"
+        ],
         "install-candidate": [
             "uv", "pip", "install", "--python", "{python}",
             "--no-deps", "--no-index", "{wheel}",
@@ -379,7 +383,13 @@ def _tree_bytes(root: Path) -> dict[str, bytes | None]:
 
 
 @pytest.fixture
-def fake_uv(tmp_path: Path) -> tuple[Path, Path]:
+def fake_uv(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
+    inherited_bin = tmp_path / "inherited-bin"
+    inherited_bin.mkdir()
+    interpreter = inherited_bin / "python3.11"
+    interpreter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    interpreter.chmod(interpreter.stat().st_mode | stat.S_IXUSR)
+    monkeypatch.setenv("PATH", os.pathsep.join((str(inherited_bin), os.defpath)))
     executable = tmp_path / "fake-uv"
     log = tmp_path / "fake-uv.jsonl"
     executable.write_text(
@@ -503,7 +513,10 @@ def test_disposable_provisioning_uses_exact_local_wheel_and_isolated_state(
     assert result["network_mode"] == network_mode
     assert len(records) == 3
     create, candidate_install, harness_install = records
-    assert create["argv"][:3] == ["venv", "--python", "3.11"]
+    interpreter = (tmp_path / "inherited-bin/python3.11").resolve()
+    assert create["argv"][:3] == ["venv", "--python", str(interpreter)]
+    assert Path(create["argv"][2]).is_absolute()
+    assert create["argv"][2] != "3.11"
     assert Path(candidate_install["argv"][-1]).name == valid_case["wheel"].name
     assert Path(candidate_install["argv"][-1]).parent.name == "candidate"
     assert not Path(candidate_install["argv"][-1]).exists()
@@ -537,6 +550,53 @@ def test_disposable_provisioning_uses_exact_local_wheel_and_isolated_state(
         assert "--no-index" in harness_install["argv"]
         assert harness_install["argv"][harness_install["argv"].index("--find-links") + 1] == str(wheelhouse)
         assert "--index-url" not in harness_install["argv"]
+
+
+def test_python311_resolution_rejects_relative_path_entry(helper, monkeypatch):
+    monkeypatch.setenv("PATH", "relative/bin")
+    _assert_code(
+        helper,
+        "clean_preflight.provision.failed",
+        lambda: helper._resolve_python_interpreter("python3.11"),
+    )
+
+
+def test_python311_resolution_rejects_nonexecutable_file(
+    helper, tmp_path: Path, monkeypatch
+):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    executable = bin_dir / "python3.11"
+    executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    executable.chmod(0o600)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    _assert_code(
+        helper,
+        "clean_preflight.provision.failed",
+        lambda: helper._resolve_python_interpreter("python3.11"),
+    )
+
+
+def test_python311_resolution_returns_canonical_regular_executable_through_symlink(
+    helper, tmp_path: Path, monkeypatch
+):
+    canonical_bin = tmp_path / "canonical"
+    inherited_bin = tmp_path / "inherited"
+    canonical_bin.mkdir()
+    inherited_bin.mkdir()
+    canonical = canonical_bin / "python3.11"
+    canonical.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    canonical.chmod(canonical.stat().st_mode | stat.S_IXUSR)
+    (inherited_bin / "python3.11").symlink_to(canonical)
+    monkeypatch.setenv("PATH", str(inherited_bin))
+
+    resolved = helper._resolve_python_interpreter("python3.11")
+
+    assert resolved == str(canonical)
+    assert Path(resolved).is_absolute()
+    assert Path(resolved).is_file()
+    assert not Path(resolved).is_symlink()
+    assert os.access(resolved, os.X_OK)
 
 
 @pytest.mark.parametrize("missing", sorted(REQUIRED_HARNESS))
@@ -822,12 +882,17 @@ def test_nonzero_precedes_mutation_diagnostic(helper, valid_case, fake_uv):
     )
 
 
-def test_default_uv_is_resolved_from_inherited_real_style_path(valid_case, fake_uv, tmp_path):
+def test_default_toolchain_is_resolved_from_inherited_real_style_path(
+    valid_case, fake_uv, tmp_path
+):
     bin_dir = tmp_path / "user-bin"
     bin_dir.mkdir()
     uv = bin_dir / "uv"
     uv.write_bytes(fake_uv[0].read_bytes())
     uv.chmod(0o700)
+    interpreter = bin_dir / "python3.11"
+    interpreter.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    interpreter.chmod(0o700)
     completed = subprocess.run(
         [
             sys.executable, str(HELPER), "--repo", str(valid_case["repo"]),
@@ -842,6 +907,13 @@ def test_default_uv_is_resolved_from_inherited_real_style_path(valid_case, fake_
     )
     assert completed.returncode == 0, completed.stderr
     assert json.loads(completed.stdout)["diagnostic_code"] == "clean_preflight.pass"
+    records = [
+        json.loads(line)
+        for line in uv.with_suffix(".jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    create = records[0]["argv"]
+    assert create[:3] == ["venv", "--python", str(interpreter.resolve())]
+    assert Path(create[2]).is_absolute()
 
 
 @pytest.mark.parametrize("kind", ["symlink", "nonexec", "relative"])

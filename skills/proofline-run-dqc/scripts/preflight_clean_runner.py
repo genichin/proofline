@@ -72,7 +72,7 @@ _CANONICAL_STEP_ARGV = {
             "{wheel_sha256}",
         ),
         "create-environment": (
-            "uv", "venv", "--python", "3.11", "{environment}",
+            "uv", "venv", "--python", "{python_interpreter}", "{environment}",
         ),
         "install-candidate": (
             "uv", "pip", "install", "--python", "{python}", "--no-deps",
@@ -669,6 +669,49 @@ def _resolve_uv_executable(value: str) -> str:
     return str(canonical)
 
 
+def _resolve_python_interpreter(value: str = "python3.11") -> str:
+    requested = Path(value)
+    candidate: Path | None = None
+    if requested.is_absolute():
+        candidate = requested
+    elif requested.parent != Path("."):
+        _fail(
+            "clean_preflight.provision.failed",
+            "Python interpreter must not be relative",
+        )
+    else:
+        for entry in os.environ.get("PATH", "").split(os.pathsep):
+            directory = Path(entry)
+            if not directory.is_absolute():
+                _fail("clean_preflight.provision.failed", "PATH entries must be absolute")
+            possible = directory / value
+            if possible.exists() or possible.is_symlink():
+                candidate = possible
+                break
+    if candidate is None:
+        _fail("clean_preflight.provision.failed", "Python interpreter was not found")
+    assert candidate is not None
+    try:
+        canonical = candidate.resolve(strict=True)
+        metadata = canonical.lstat()
+    except OSError as exc:
+        raise ValidationError(
+            "clean_preflight.provision.failed",
+            "Python interpreter identity is unavailable",
+        ) from exc
+    if (
+        not canonical.is_absolute()
+        or canonical.is_symlink()
+        or not stat.S_ISREG(metadata.st_mode)
+        or not os.access(canonical, os.X_OK)
+    ):
+        _fail(
+            "clean_preflight.provision.failed",
+            "Python interpreter must resolve to one regular executable",
+        )
+    return str(canonical)
+
+
 def _linux_child_subreaper_state() -> int | None:
     if not sys.platform.startswith("linux"):
         return None
@@ -877,6 +920,7 @@ def _provision_clean_environment(
     network_mode: str,
     wheelhouse: Path | None,
     uv_executable: str,
+    python_interpreter: str,
     budget: ExecutionBudget,
 ) -> None:
     dependencies = [
@@ -923,6 +967,7 @@ def _provision_clean_environment(
             "{wheel}": str(pinned_wheel),
             "{wheel_sha256}": wheel_sha256,
             "{environment}": str(environment_path),
+            "{python_interpreter}": python_interpreter,
             "{python}": str(python),
             "{contract_probe}": str(contract_probe),
         }
@@ -1073,6 +1118,7 @@ def run_clean_preflight(
     if network_mode == "offline":
         _offline_inventory(wheelhouse, dependencies)
     exact_uv = _resolve_uv_executable(uv_executable)
+    exact_python_interpreter = _resolve_python_interpreter()
     wheel_fd, wheel_identity, wheel_sha256 = _open_pinned_wheel(wheel, provenance)
     identity = {
         "candidate_commit": exact_candidate,
@@ -1099,6 +1145,7 @@ def run_clean_preflight(
                 network_mode=network_mode,
                 wheelhouse=wheelhouse,
                 uv_executable=exact_uv,
+                python_interpreter=exact_python_interpreter,
                 budget=ExecutionBudget(),
             )
         except ValidationError as exc:
