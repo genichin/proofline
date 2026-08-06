@@ -238,7 +238,7 @@ def run_update(*, check: bool = False, version: str | None = None, adopt: bool =
     current = metadata.version("proofline")
     distribution = metadata.distribution("proofline")
     provenance = detect_provenance(distribution)
-    if version is not None:
+    if version is not None and parse_version(version) == parse_version(current):
         exact_decision = decide_update(current, version, provenance, check=check, adopt=adopt)
         if exact_decision.status == "already-current":
             try:
