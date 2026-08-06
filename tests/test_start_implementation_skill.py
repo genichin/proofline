@@ -1,4 +1,5 @@
 from pathlib import Path
+import hashlib
 import importlib.util
 import os
 import shlex
@@ -16,6 +17,24 @@ SKILL = ROOT / "skills/proofline-start-implementation/SKILL.md"
 CONTRACT = ROOT / "docs/contracts/line-delivery.md"
 GITIGNORE = ROOT / ".gitignore"
 SCRIPT = ROOT / "skills/proofline-start-implementation/scripts/create_worktree.py"
+
+
+def _hosted_candidate_wheel() -> Path | None:
+    if os.environ.get("PROOFLINE_HOSTED_CANDIDATE_MODE") != "1":
+        return None
+    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
+    expected = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256")
+    installed = os.environ.get("PROOFLINE_INSTALLED_EXECUTABLE")
+    assert provided and expected and installed, "hosted candidate controls are incomplete"
+    wheel = Path(provided)
+    executable = Path(installed)
+    assert wheel.is_absolute() and wheel.is_file(), "candidate wheel must be an absolute file"
+    assert executable.is_absolute() and executable.is_file(), "installed executable must be an absolute file"
+    assert len(expected) == 64 and expected == expected.lower() and all(
+        character in "0123456789abcdef" for character in expected
+    ), "candidate wheel SHA256 must be lowercase hexadecimal"
+    assert hashlib.sha256(wheel.read_bytes()).hexdigest() == expected, "candidate wheel SHA256 mismatch"
+    return wheel
 
 
 def load_worktree_script():
@@ -1090,10 +1109,9 @@ def test_worktree_script_rejects_dirty_exact_h_idempotent_retry_without_mutation
 @pytest.fixture(scope="module")
 def packaged_worktree_script(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("packaged-start-implementation")
-    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
-    if provided:
-        wheel = Path(provided)
-        assert wheel.is_absolute() and wheel.is_file()
+    wheel = _hosted_candidate_wheel()
+    if wheel is not None:
+        pass
     else:
         dist = root / "dist"
         build = subprocess.run(

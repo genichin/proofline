@@ -26,11 +26,20 @@ RUN_DQC_SKILL = ROOT / "skills/proofline-run-dqc/SKILL.md"
 DELIVERY_CONTRACT = ROOT / "docs/contracts/line-delivery.md"
 WHEEL_PACKAGE_TESTS = ROOT / "tests/test_wheel_package.py"
 HOSTED_WHEEL_CONSUMERS = {
-    ROOT / "tests/helpers/line_0020_scenario_runner.py": "execute_cross_artifact_registry",
-    ROOT / "tests/test_start_implementation_skill.py": "packaged_worktree_script",
-    ROOT / "tests/test_implementation_history.py": "installed_wheel_cli",
+    ROOT / "tests/helpers/line_0020_scenario_runner.py": ("execute_cross_artifact_registry",),
+    ROOT / "tests/test_start_implementation_skill.py": ("packaged_worktree_script",),
+    ROOT / "tests/test_implementation_history.py": ("installed_wheel_cli",),
     ROOT / "tests/test_specification_approval_authority.py": (
-        "test_source_and_built_wheel_extracted_script_have_behavior_and_diagnostic_parity"
+        "test_source_and_built_wheel_extracted_script_have_behavior_and_diagnostic_parity",
+    ),
+    ROOT / "tests/test_criteria_validation.py": (
+        "test_installed_wheel_cli_accepts_committed_update_draft_lifecycle",
+    ),
+    ROOT / "tests/test_line_0021_clean_runner_registry.py": ("_provided_or_fixture_wheel",),
+    ROOT / "tests/test_wheel_package.py": (
+        "test_built_wheel_contains_and_reads_canonical_schema_templates",
+        "test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workflow",
+        "test_source_and_isolated_wheel_share_real_git_migration_registry",
     ),
 }
 JOBS = {"build-candidate", "ubuntu-python311", "windows-python311"}
@@ -165,32 +174,53 @@ def test_verified_absolute_wheel_is_exported_to_each_hosted_consumer_suite() -> 
         "$env:PROOFLINE_HOSTED_CANDIDATE_WHEEL = $wheel[0].FullName"
     ) < windows.index("uv run pytest -q tests/test_windows_history_runtime.py")
 
+    controls = (
+        "PROOFLINE_HOSTED_CANDIDATE_MODE",
+        "PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256",
+        "PROOFLINE_HOSTED_CANDIDATE_WHEEL",
+        "PROOFLINE_INSTALLED_EXECUTABLE",
+    )
+    for job in workflow["jobs"].values():
+        for step in job["steps"]:
+            run = step.get("run", "")
+            if "pytest" not in run:
+                continue
+            pytest_index = run.index("pytest")
+            for control in controls:
+                assert control in run[:pytest_index], (step.get("name"), control)
+    assert "digest=${digest,,}" in WORKFLOW.read_text(encoding="utf-8")
+    assert ".ToLowerInvariant()" in WORKFLOW.read_text(encoding="utf-8")
 
-@pytest.mark.parametrize(("path", "function_name"), HOSTED_WHEEL_CONSUMERS.items())
+
+@pytest.mark.parametrize("path", HOSTED_WHEEL_CONSUMERS)
 def test_hosted_wheel_consumers_validate_exact_file_and_bypass_local_build(
-    path: Path, function_name: str
+    path: Path,
 ) -> None:
     tree = ast.parse(path.read_text(encoding="utf-8"))
-    function = next(
+    helper = next(
         node
         for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_hosted_candidate_wheel"
+    )
+    helper_source = ast.unparse(helper)
+    for control in (
+        "PROOFLINE_HOSTED_CANDIDATE_MODE",
+        "PROOFLINE_HOSTED_CANDIDATE_WHEEL",
+        "PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256",
+        "PROOFLINE_INSTALLED_EXECUTABLE",
+    ):
+        assert control in helper_source
+    assert "!= '1'" in helper_source
+    assert ".is_absolute()" in helper_source
+    assert helper_source.count(".is_file()") >= 2
+    assert "sha256" in helper_source
+    assert "hexdigest" in helper_source
+
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.name == function_name
-    )
-    hosted_assignment = next(
-        node
-        for node in ast.walk(function)
-        if isinstance(node, ast.Assign)
-        and "PROOFLINE_HOSTED_CANDIDATE_WHEEL" in ast.unparse(node.value)
-    )
-    assert len(hosted_assignment.targets) == 1
-    hosted_name = ast.unparse(hosted_assignment.targets[0])
-    hosted_branch = next(
-        node
-        for node in ast.walk(function)
-        if isinstance(node, ast.If) and ast.unparse(node.test) == hosted_name
-    )
-    branch = "\n".join(ast.unparse(node) for node in hosted_branch.body)
+    }
 
     def contains_uv_build(nodes: list[ast.stmt]) -> bool:
         return any(
@@ -204,11 +234,32 @@ def test_hosted_wheel_consumers_validate_exact_file_and_bypass_local_build(
             for node in nodes
         )
 
-    assert "Path(" in branch
-    assert ".is_absolute()" in branch
-    assert ".is_file()" in branch
-    assert not contains_uv_build(hosted_branch.body)
-    assert contains_uv_build(hosted_branch.orelse)
+    for function_name in HOSTED_WHEEL_CONSUMERS[path]:
+        function = functions[function_name]
+        source = ast.unparse(function)
+        assert "_hosted_candidate_wheel()" in source
+        candidate_branch = next(
+            node
+            for node in ast.walk(function)
+            if isinstance(node, ast.If)
+            and "_hosted_candidate_wheel" in source
+            and "wheel is not None" in ast.unparse(node.test)
+        )
+        assert not contains_uv_build(candidate_branch.body)
+
+
+def test_installed_executable_precedence_is_bound_to_candidate_install_provenance() -> None:
+    tree = ast.parse(IMPLEMENTATION_HISTORY_TESTS.read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "installed_wheel_cli"
+    )
+    source = ast.unparse(function)
+    assert "_hosted_candidate_wheel()" in source
+    assert "direct_url.json" in source
+    assert "archive_info" in source
+    assert "PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256" in source
 
 
 def test_windows_gate_exercises_exact_wheel_and_full_fresh_install_sequence() -> None:

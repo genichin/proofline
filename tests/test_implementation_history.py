@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import stat
@@ -22,6 +23,24 @@ MS = ".proofline/lines/line-0001/micro-specs/ms-0001-001.md"
 IQC = ".proofline/lines/line-0001/micro-specs/iqc-0001-001.md"
 MIGRATION = ".proofline/lines/line-0001/legacy-migration-0001.md"
 DQC = ".proofline/lines/line-0001/dqc-0001.md"
+
+
+def _hosted_candidate_wheel() -> Path | None:
+    if os.environ.get("PROOFLINE_HOSTED_CANDIDATE_MODE") != "1":
+        return None
+    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
+    expected = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256")
+    installed = os.environ.get("PROOFLINE_INSTALLED_EXECUTABLE")
+    assert provided and expected and installed, "hosted candidate controls are incomplete"
+    wheel = Path(provided)
+    executable = Path(installed)
+    assert wheel.is_absolute() and wheel.is_file(), "candidate wheel must be an absolute file"
+    assert executable.is_absolute() and executable.is_file(), "installed executable must be an absolute file"
+    assert len(expected) == 64 and expected == expected.lower() and all(
+        character in "0123456789abcdef" for character in expected
+    ), "candidate wheel SHA256 must be lowercase hexadecimal"
+    assert hashlib.sha256(wheel.read_bytes()).hexdigest() == expected, "candidate wheel SHA256 mismatch"
+    return wheel
 
 
 def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -2586,6 +2605,32 @@ def run_source_with_env(
 
 @pytest.fixture(scope="module")
 def installed_wheel_cli(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    wheel = _hosted_candidate_wheel()
+    if wheel is not None:
+        executable = Path(os.environ["PROOFLINE_INSTALLED_EXECUTABLE"])
+        python = executable.parent / ("python.exe" if os.name == "nt" else "python")
+        assert python.is_file(), "installed executable has no candidate environment Python"
+        provenance = subprocess.run(
+            (
+                str(python),
+                "-I",
+                "-c",
+                "import json; from importlib.metadata import distribution; "
+                "print(distribution('proofline').read_text('direct_url.json'))",
+            ),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert provenance.returncode == 0, provenance.stderr
+        direct_url = json.loads(provenance.stdout)
+        expected = os.environ["PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256"]
+        assert direct_url["url"] == wheel.resolve().as_uri(), "installed candidate wheel path mismatch"
+        assert direct_url["archive_info"]["hash"] == f"sha256={expected}", (
+            "installed candidate wheel digest mismatch"
+        )
+        return executable
+
     provided = os.environ.get("PROOFLINE_INSTALLED_EXECUTABLE")
     if provided:
         executable = Path(provided)
@@ -2596,22 +2641,17 @@ def installed_wheel_cli(tmp_path_factory: pytest.TempPathFactory) -> Path:
         return executable
 
     root = tmp_path_factory.mktemp("installed-wheel")
-    hosted = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
-    if hosted:
-        wheel = Path(hosted)
-        assert wheel.is_absolute() and wheel.is_file()
-    else:
-        dist = root / "dist"
-        dist.mkdir()
-        built = subprocess.run(
-            ("uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)),
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert built.returncode == 0, built.stderr
-        wheel = next(dist.glob("proofline-*.whl"))
+    dist = root / "dist"
+    dist.mkdir()
+    built = subprocess.run(
+        ("uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)),
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert built.returncode == 0, built.stderr
+    wheel = next(dist.glob("proofline-*.whl"))
     venv = root / "venv"
     created = subprocess.run(
         ("uv", "venv", "--python", sys.executable, str(venv)),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -22,11 +23,27 @@ SOURCE_HELPER = ROOT / "skills/proofline-run-dqc/scripts/preflight_clean_runner.
 SOURCE_PLAN = ROOT / "skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json"
 
 
-def _provided_or_fixture_wheel(tmp_path: Path) -> Path:
+def _hosted_candidate_wheel() -> Path | None:
+    if os.environ.get("PROOFLINE_HOSTED_CANDIDATE_MODE") != "1":
+        return None
     provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
-    if provided:
-        wheel = Path(provided)
-        assert wheel.is_absolute() and wheel.is_file()
+    expected = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256")
+    installed = os.environ.get("PROOFLINE_INSTALLED_EXECUTABLE")
+    assert provided and expected and installed, "hosted candidate controls are incomplete"
+    wheel = Path(provided)
+    executable = Path(installed)
+    assert wheel.is_absolute() and wheel.is_file(), "candidate wheel must be an absolute file"
+    assert executable.is_absolute() and executable.is_file(), "installed executable must be an absolute file"
+    assert len(expected) == 64 and expected == expected.lower() and all(
+        character in "0123456789abcdef" for character in expected
+    ), "candidate wheel SHA256 must be lowercase hexadecimal"
+    assert hashlib.sha256(wheel.read_bytes()).hexdigest() == expected, "candidate wheel SHA256 mismatch"
+    return wheel
+
+
+def _provided_or_fixture_wheel(tmp_path: Path) -> Path:
+    wheel = _hosted_candidate_wheel()
+    if wheel is not None:
         return wheel
     wheel = tmp_path / "proofline-0.6.1-py3-none-any.whl"
     with zipfile.ZipFile(wheel, "w") as archive:

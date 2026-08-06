@@ -21,6 +21,24 @@ REVIEW_SCHEMA = "proofline.independent-review/v1"
 APPROVAL_SCHEMA = "proofline.user-approval/v1"
 
 
+def _hosted_candidate_wheel() -> Path | None:
+    if os.environ.get("PROOFLINE_HOSTED_CANDIDATE_MODE") != "1":
+        return None
+    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
+    expected = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256")
+    installed = os.environ.get("PROOFLINE_INSTALLED_EXECUTABLE")
+    assert provided and expected and installed, "hosted candidate controls are incomplete"
+    wheel = Path(provided)
+    executable = Path(installed)
+    assert wheel.is_absolute() and wheel.is_file(), "candidate wheel must be an absolute file"
+    assert executable.is_absolute() and executable.is_file(), "installed executable must be an absolute file"
+    assert len(expected) == 64 and expected == expected.lower() and all(
+        character in "0123456789abcdef" for character in expected
+    ), "candidate wheel SHA256 must be lowercase hexadecimal"
+    assert hashlib.sha256(wheel.read_bytes()).hexdigest() == expected, "candidate wheel SHA256 mismatch"
+    return wheel
+
+
 def git(repo: Path, *args: str) -> str:
     result = subprocess.run(
         ("git", *args), cwd=repo, text=True, capture_output=True, check=False
@@ -608,10 +626,9 @@ def test_source_and_built_wheel_extracted_script_have_behavior_and_diagnostic_pa
     fixture = tmp_path / "fixture"
     repo, target, approval = make_repo(fixture, mode="bootstrap")
     review, user_approval = write_evidence(fixture, repo, target)
-    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
-    if provided:
-        wheel = Path(provided)
-        assert wheel.is_absolute() and wheel.is_file()
+    wheel = _hosted_candidate_wheel()
+    if wheel is not None:
+        pass
     else:
         dist = tmp_path / "dist"
         built = subprocess.run(

@@ -45,6 +45,7 @@ jobs:
           test "$(printf '%s\n' "$wheel" | sed '/^$/d' | wc -l)" -eq 1
           wheel_name=${wheel#./}
           digest=$(sha256sum "$wheel_name" | cut -d ' ' -f1)
+          digest=${digest,,}
           printf '%s  %s\n' "$digest" "$wheel_name" > SHA256SUMS
           python - <<'PY'
           import json, os
@@ -60,8 +61,24 @@ jobs:
               'artifact_name': artifact, 'wheel_filename': wheel.name,
               'wheel_sha256': digest}, sort_keys=True) + '\n')
           PY
+          sha256sum --check --strict SHA256SUMS
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          wheel = next(Path('.').glob('proofline-*.whl')).resolve()
+          provenance = json.loads(Path('CANDIDATE_PROVENANCE.json').read_text())
+          assert provenance['wheel_filename'] == wheel.name
+          assert provenance['wheel_sha256'] == hashlib.sha256(wheel.read_bytes()).hexdigest()
+          PY
+          WHEEL=$(realpath "$wheel_name")
+          uv venv --python 3.11 "$RUNNER_TEMP/proofline-wheel-env"
+          uv pip install --python "$RUNNER_TEMP/proofline-wheel-env/bin/python" "$WHEEL"
           cd "$GITHUB_WORKSPACE"
-          PROOFLINE_HOSTED_CANDIDATE_WHEEL="$RUNNER_TEMP/proofline-candidate/$wheel_name" uv run pytest -q -m candidate_build_only
+          export PROOFLINE_HOSTED_CANDIDATE_MODE=1
+          export PROOFLINE_HOSTED_CANDIDATE_WHEEL="$WHEEL"
+          export PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256="$digest"
+          export PROOFLINE_INSTALLED_EXECUTABLE="$RUNNER_TEMP/proofline-wheel-env/bin/proofline"
+          uv run pytest -q -m candidate_build_only
       - uses: actions/upload-artifact@v4
         with:
           name: proofline-candidate-${{ github.run_id }}-${{ github.run_attempt }}
@@ -113,9 +130,13 @@ jobs:
           uv venv --python 3.11 "$RUNNER_TEMP/proofline-wheel-env"
           uv pip install --python "$RUNNER_TEMP/proofline-wheel-env/bin/python" proofline-*.whl
           WHEEL=$(realpath proofline-*.whl)
+          digest=$(sha256sum "$WHEEL" | cut -d ' ' -f1)
+          digest=${digest,,}
           cd "$GITHUB_WORKSPACE"
+          export PROOFLINE_HOSTED_CANDIDATE_MODE=1
           export PROOFLINE_INSTALLED_EXECUTABLE="$RUNNER_TEMP/proofline-wheel-env/bin/proofline"
           export PROOFLINE_HOSTED_CANDIDATE_WHEEL="$WHEEL"
+          export PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256="$digest"
           PYTHONPATH=src uv run proofline validate
           "$PROOFLINE_INSTALLED_EXECUTABLE" validate
           python -m compileall -q src tests
@@ -174,7 +195,9 @@ jobs:
               $provenance.wheel_sha256 -cne $digest) { throw "candidate provenance mismatch" }
           uv venv --python 3.11 "$env:RUNNER_TEMP\proofline-wheel-env"
           uv pip install --python "$env:RUNNER_TEMP\proofline-wheel-env\Scripts\python.exe" $wheel[0].FullName
+          $env:PROOFLINE_HOSTED_CANDIDATE_MODE = "1"
           $env:PROOFLINE_INSTALLED_EXECUTABLE = "$env:RUNNER_TEMP\proofline-wheel-env\Scripts\proofline.exe"
           $env:PROOFLINE_HOSTED_CANDIDATE_WHEEL = $wheel[0].FullName
+          $env:PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256 = $digest.ToLowerInvariant()
           uv run pytest -q tests/test_windows_history_runtime.py tests/test_start_implementation_windows_runtime.py tests/test_implementation_history.py
           python -m compileall -q src tests

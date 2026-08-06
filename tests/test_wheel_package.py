@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import sys
@@ -19,6 +20,24 @@ from test_implementation_history import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _hosted_candidate_wheel() -> Path | None:
+    if os.environ.get("PROOFLINE_HOSTED_CANDIDATE_MODE") != "1":
+        return None
+    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
+    expected = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256")
+    installed = os.environ.get("PROOFLINE_INSTALLED_EXECUTABLE")
+    assert provided and expected and installed, "hosted candidate controls are incomplete"
+    wheel = Path(provided)
+    executable = Path(installed)
+    assert wheel.is_absolute() and wheel.is_file(), "candidate wheel must be an absolute file"
+    assert executable.is_absolute() and executable.is_file(), "installed executable must be an absolute file"
+    assert len(expected) == 64 and expected == expected.lower() and all(
+        character in "0123456789abcdef" for character in expected
+    ), "candidate wheel SHA256 must be lowercase hexadecimal"
+    assert hashlib.sha256(wheel.read_bytes()).hexdigest() == expected, "candidate wheel SHA256 mismatch"
+    return wheel
 
 
 def test_source_checkout_line_init_fresh_and_legacy_e2e(tmp_path: Path) -> None:
@@ -319,10 +338,9 @@ def test_built_sdist_contains_project_schema_resources(tmp_path: Path) -> None:
 def test_built_wheel_contains_and_reads_canonical_schema_templates(
     tmp_path: Path,
 ) -> None:
-    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
-    if provided:
-        wheel = Path(provided)
-        assert wheel.is_absolute() and wheel.is_file()
+    wheel = _hosted_candidate_wheel()
+    if wheel is not None:
+        pass
     else:
         dist = tmp_path / "dist"
         build = subprocess.run(
@@ -909,10 +927,9 @@ def test_built_wheel_operations_match_source_inventory_and_payload_bytes(
 def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workflow(
     tmp_path: Path,
 ) -> None:
-    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
-    if provided:
-        wheel = Path(provided)
-        assert wheel.is_absolute() and wheel.is_file()
+    wheel = _hosted_candidate_wheel()
+    if wheel is not None:
+        pass
     else:
         dist = tmp_path / "dist"
         build = subprocess.run(
@@ -964,10 +981,9 @@ def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workfl
 def test_source_and_isolated_wheel_share_real_git_migration_registry(
     tmp_path: Path,
 ) -> None:
-    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
-    if provided:
-        wheel = Path(provided)
-        assert wheel.is_absolute() and wheel.is_file()
+    wheel = _hosted_candidate_wheel()
+    if wheel is not None:
+        pass
     else:
         dist = tmp_path / "dist"
         build = subprocess.run(
