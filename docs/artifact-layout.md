@@ -7,7 +7,7 @@
 - 모든 경로는 적용 대상 프로젝트의 저장소 root를 기준으로 하는 상대 경로이다.
 - 프로젝트별 ProofLine 설정은 프로젝트 root의 `proofline.yaml`에 기록한다.
 - ProofLine의 영속 project artifact root는 `.proofline/`이다.
-- User-level harness root `~/.proofline/`은 manifest, contracts, templates와 skills를 보관하며 project artifact topology에 포함되지 않는다.
+- User-level harness root `~/.proofline/`은 manifest, contracts, operations, templates와 skills를 보관하며 project artifact topology에 포함되지 않는다. `docs/operations/*.md` 전체는 public managed inventory로 wheel의 `proofline_home/operations/`와 HOME의 `~/.proofline/operations/`에 exact bytes로 대응하고 `manifest.yaml` path·SHA-256 record에 포함된다. Exact init 재실행과 initialized `proofline update --check`는 이를 변경하지 않는다.
 - canonical 산출물은 Git으로 추적하여 현재 내용과 변경 이력을 함께 관리한다.
 - 고정 파일명의 과거 내용은 별도 revision 파일이 아니라 Git history로 보존한다.
 - 임시 파일, 실행 log, 다운로드 cache 등 재생성 가능한 실행 부산물은 canonical 산출물과 섞지 않는다.

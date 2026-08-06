@@ -4,7 +4,7 @@
 
 ## User-level harness resource
 
-ProofLine이 관리하는 manifest, contracts, templates와 skills는 user home의 `~/.proofline/`에 저장한다. 이 resource는 project lifecycle artifact가 아니며 project `.proofline/` 아래에 복제하지 않는다.
+ProofLine이 관리하는 manifest, contracts, operations, templates와 skills는 user home의 `~/.proofline/`에 저장한다. `docs/operations/*.md` 전체는 wheel의 `proofline_home/operations/`를 거쳐 `~/.proofline/operations/`에 exact bytes로 설치되는 public managed inventory이며 각 path와 SHA-256은 `manifest.yaml`이 기록한다. Exact `proofline init` 재실행과 initialized `proofline update --check`는 이 inventory를 변경하지 않는다. 이 resource는 project lifecycle artifact가 아니며 project `.proofline/` 아래에 복제하지 않는다.
 
 Project `.proofline/`은 Lines와 criteria의 canonical artifact root로만 사용한다. `proofline init`은 user-level harness만 초기화하며 current project의 `.proofline/`, `proofline.yaml` 또는 Git state를 변경하지 않는다.
 

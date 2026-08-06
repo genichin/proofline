@@ -10,6 +10,7 @@ import zipfile
 from pathlib import Path
 
 import pytest
+import yaml
 
 from proofline.identity_ledger import decode_ledger, encode_ledger
 from proofline.home_writer import payload_from_wheel
@@ -916,16 +917,20 @@ print(diagnostic, end='', file=sys.stderr)
 def test_built_wheel_operations_match_source_inventory_and_payload_bytes(
     tmp_path: Path,
 ) -> None:
-    dist = tmp_path / "dist"
-    build = subprocess.run(
-        ["uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)],
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert build.returncode == 0, build.stderr
-    wheel = next(dist.glob("proofline-*.whl"))
+    wheel = _hosted_candidate_wheel()
+    if wheel is not None:
+        pass
+    else:
+        dist = tmp_path / "dist"
+        build = subprocess.run(
+            ["uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert build.returncode == 0, build.stderr
+        wheel = next(dist.glob("proofline-*.whl"))
     expected = {
         path.name: path.read_bytes()
         for path in sorted((ROOT / "docs/operations").glob("*.md"))
@@ -952,6 +957,71 @@ def test_built_wheel_operations_match_source_inventory_and_payload_bytes(
         if relative.startswith("operations/")
     } == expected
 
+    venv = tmp_path / "operations-wheel-env"
+    created = subprocess.run(
+        ["uv", "venv", "--python", sys.executable, str(venv)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert created.returncode == 0, created.stderr
+    python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    proofline = venv / ("Scripts/proofline.exe" if os.name == "nt" else "bin/proofline")
+    installed = subprocess.run(
+        ["uv", "pip", "install", "--refresh", "--python", str(python), str(wheel)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert installed.returncode == 0, installed.stderr
+    home = tmp_path / "operations-home"
+    home.mkdir()
+    project = tmp_path / "operations-project"
+    project.mkdir()
+    environment = os.environ.copy()
+    environment["HOME"] = str(home)
+    environment["USERPROFILE"] = str(home)
+    environment.pop("PYTHONPATH", None)
+    initialized = subprocess.run(
+        [str(proofline), "init"], cwd=project, env=environment,
+        text=True, capture_output=True, check=False,
+    )
+    assert initialized.returncode == 0, initialized.stderr
+    installed_root = home / ".proofline"
+    assert {
+        path.name: path.read_bytes()
+        for path in sorted((installed_root / "operations").glob("*.md"))
+    } == expected
+    manifest = yaml.safe_load((installed_root / "manifest.yaml").read_text(encoding="utf-8"))
+    operation_records = {
+        record["path"].removeprefix("operations/"): record["sha256"]
+        for record in manifest["managed_files"]
+        if record["path"].startswith("operations/")
+    }
+    assert operation_records == {
+        name: hashlib.sha256(content).hexdigest() for name, content in expected.items()
+    }
+    before = {
+        path.relative_to(home): path.read_bytes()
+        for path in home.rglob("*") if path.is_file()
+    }
+    repeated = subprocess.run(
+        [str(proofline), "init"], cwd=project, env=environment,
+        text=True, capture_output=True, check=False,
+    )
+    assert repeated.returncode == 0, repeated.stderr
+    assert "already-initialized" in repeated.stdout
+    checked = subprocess.run(
+        [str(proofline), "update", "--check", "--version", "0.6.2"],
+        cwd=project, env=environment, text=True, capture_output=True, check=False,
+    )
+    assert checked.returncode == 0, checked.stderr
+    assert "status: already-current" in checked.stdout
+    assert {
+        path.relative_to(home): path.read_bytes()
+        for path in home.rglob("*") if path.is_file()
+    } == before
+
 
 def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workflow(
     tmp_path: Path,
@@ -971,6 +1041,7 @@ def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workfl
         assert build.returncode == 0, build.stderr
         wheel = next(dist.glob("proofline-*.whl"))
     resources = {
+        "src/proofline_home/agent-context.md": "proofline_home/agent-context.md",
         "docs/contracts/line-delivery.md": "proofline_home/contracts/line-delivery.md",
         "docs/contracts/micro-spec-and-iqc.md": "proofline_home/contracts/micro-spec-and-iqc.md",
         "docs/contracts/requirements-and-criteria.md": "proofline_home/contracts/requirements-and-criteria.md",

@@ -127,11 +127,12 @@ ProofLine 0.3.0 이상에서는 위 설치 확인 순서의 `proofline init --dr
 ├── manifest.yaml
 ├── agent-context.md
 ├── contracts/
+├── operations/
 ├── templates/
 └── skills/
 ```
 
-Project의 `.proofline/`은 Lines와 criteria 같은 canonical artifact 전용이며 harness resource를 저장하지 않습니다.
+`docs/operations/*.md` 전체는 public managed operation inventory로 wheel의 `proofline_home/operations/`, HOME의 `~/.proofline/operations/`에 exact bytes로 설치되고 `manifest.yaml` SHA-256 record로 관리됩니다. Exact `proofline init` 재실행과 initialized `proofline update --check`는 이 tree를 읽기만 하며 변경하지 않습니다. Project의 `.proofline/`은 Lines와 criteria 같은 canonical artifact 전용이며 harness resource를 저장하지 않습니다.
 
 ## 업데이트
 
