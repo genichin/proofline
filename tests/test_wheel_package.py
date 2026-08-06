@@ -298,7 +298,7 @@ def test_source_checkout_rejects_ledger_only_delta_without_mutation(
 def test_built_sdist_contains_project_schema_resources(tmp_path: Path) -> None:
     dist = tmp_path / "dist"
     build = subprocess.run(
-        ["uv", "build", "--offline", "--sdist", "--out-dir", str(dist)],
+        ["uv", "build", "--refresh", "--sdist", "--out-dir", str(dist)],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -326,7 +326,7 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(
     else:
         dist = tmp_path / "dist"
         build = subprocess.run(
-            ["uv", "build", "--offline", "--wheel", "--out-dir", str(dist)],
+            ["uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)],
             cwd=ROOT,
             text=True,
             capture_output=True,
@@ -401,7 +401,7 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(
             "uv",
             "pip",
             "install",
-            "--offline",
+            "--refresh",
             "--python",
             str(python),
             str(wheel),
@@ -871,7 +871,7 @@ def test_built_wheel_operations_match_source_inventory_and_payload_bytes(
 ) -> None:
     dist = tmp_path / "dist"
     build = subprocess.run(
-        ["uv", "build", "--offline", "--wheel", "--out-dir", str(dist)],
+        ["uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -916,7 +916,7 @@ def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workfl
     else:
         dist = tmp_path / "dist"
         build = subprocess.run(
-            ["uv", "build", "--offline", "--wheel", "--out-dir", str(dist)],
+            ["uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)],
             cwd=ROOT,
             text=True,
             capture_output=True,
