@@ -23,7 +23,7 @@ SHA = "a" * 40
 RUN_ID = "12345"
 ATTEMPT = "1"
 ARTIFACT = f"proofline-candidate-{RUN_ID}-{ATTEMPT}"
-WHEEL = "proofline-0.6.0-py3-none-any.whl"
+WHEEL = "proofline-0.6.1-py3-none-any.whl"
 
 
 def _module():

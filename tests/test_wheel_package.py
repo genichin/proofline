@@ -315,12 +315,15 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
         assert "proofline_schema_v1_templates/artifacts/discovery.md" in names
         assert "proofline_schema_v1_templates/artifacts/dqc.md" in names
         assert "proofline_schema_v1_templates/artifacts/integration.md" in names
+        assert "proofline_schema_v1_templates/artifacts/legacy-migration.md" in names
         assert "proofline_schema_v1_templates/project/proofline.yaml" in names
         assert "proofline_schema_v1_templates/project/lines.gitkeep" in names
         assert "proofline_schema_v1_templates/project/criteria.gitkeep" in names
         assert "proofline_home/contracts/storage-and-retention.md" in names
         assert "proofline_home/templates/schema-v1/artifacts/line.md" in names
         assert "proofline_home/templates/schema-v1/artifacts/integration.md" in names
+        assert "proofline_home/templates/schema-v1/artifacts/legacy-migration.md" in names
+        assert "proofline_home/operations/legacy-nonterminal-history-migration.md" in names
         assert "proofline_home/skills/proofline-start-line/SKILL.md" in names
         run_iqc = "proofline_home/skills/proofline-run-iqc/SKILL.md"
         assert run_iqc in names
@@ -389,7 +392,7 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
                 "from pathlib import Path; import proofline; "
                 "p=Path(proofline.__file__).resolve(); "
                 "assert 'site-packages' in p.parts; "
-                "assert version('proofline') == '0.6.0'"
+                "assert version('proofline') == '0.6.1'"
             ),
         ],
         cwd=tmp_path,
@@ -408,7 +411,7 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
         check=False,
     )
     assert installed_version.returncode == 0, installed_version.stderr
-    assert installed_version.stdout == "proofline 0.6.0\n"
+    assert installed_version.stdout == "proofline 0.6.1\n"
 
     isolated_home = tmp_path / "home"
     isolated_home.mkdir()
@@ -849,6 +852,8 @@ def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workfl
         "skills/proofline-run-dqc/SKILL.md": "proofline_home/skills/proofline-run-dqc/SKILL.md",
         "skills/proofline-run-dqc/scripts/preflight_integration_candidate.py": "proofline_home/skills/proofline-run-dqc/scripts/preflight_integration_candidate.py",
         "templates/schema-v1/artifacts/integration.md": "proofline_home/templates/schema-v1/artifacts/integration.md",
+        "templates/schema-v1/artifacts/legacy-migration.md": "proofline_home/templates/schema-v1/artifacts/legacy-migration.md",
+        "docs/operations/legacy-nonterminal-history-migration.md": "proofline_home/operations/legacy-nonterminal-history-migration.md",
     }
     with zipfile.ZipFile(wheel) as archive:
         for source, packaged in resources.items():

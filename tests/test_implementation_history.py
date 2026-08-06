@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LINE = ".proofline/lines/line-0001/line-0001.md"
 MS = ".proofline/lines/line-0001/micro-specs/ms-0001-001.md"
 IQC = ".proofline/lines/line-0001/micro-specs/iqc-0001-001.md"
+MIGRATION = ".proofline/lines/line-0001/legacy-migration-0001.md"
 
 
 def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -241,6 +242,130 @@ def build_valid_cycle(tmp_path: Path, *, order: str = "baseline-first") -> Histo
     implementation = repo.product_commit()
     repo.finish(implementation)
     return repo
+
+
+def build_legacy_migration(
+    tmp_path: Path,
+    *,
+    parent: str | None = None,
+    evidence: list[tuple[str, str]] | None = None,
+    extra_change: bool = False,
+    activate_before_cycle: bool = False,
+) -> HistoryRepo:
+    """Build an eligible fieldless S/P/I/Q cycle followed by exact migration B."""
+    repo = HistoryRepo.create(tmp_path)
+    if activate_before_cycle:
+        line2 = repo.path / ".proofline/lines/line-0002"
+        line2.mkdir()
+        (line2 / "line-0002.md").write_text(
+            '---\nid: "line-0002"\nexecution_status: not_started\n'
+            'implementation_history: first_parent\n---\n',
+            encoding="utf-8",
+        )
+        repo.commit("activation", "activate history policy")
+    repo.start()
+    implementation = repo.product_commit()
+    repo.finish(implementation)
+    pre_migration_parent = repo.commits["quality"]
+    inventory = evidence or [
+        (path, git(repo.path, "rev-parse", f"{pre_migration_parent}:{path}").stdout.strip())
+        for path in (IQC, MS)
+    ]
+    entries = "".join(
+        f'  - path: "{path}"\n    blob_oid: "{oid}"\n' for path, oid in inventory
+    )
+    (repo.path / MIGRATION).write_text(
+        '---\nid: "legacy-migration-0001"\nline: "line-0001"\n'
+        f'pre_migration_parent: "{parent or pre_migration_parent}"\nevidence:\n{entries}---\n',
+        encoding="utf-8",
+    )
+    current = (repo.path / LINE).read_text(encoding="utf-8")
+    (repo.path / LINE).write_text(
+        current.replace(
+            "execution_status: in_progress\n",
+            "execution_status: in_progress\nimplementation_history: first_parent\n",
+        ),
+        encoding="utf-8",
+    )
+    if extra_change:
+        (repo.path / "product.py").write_text("MIGRATION_CHANGED = True\n", encoding="utf-8")
+    repo.commit("migration", "migrate legacy line")
+    return repo
+
+
+def test_eligible_legacy_nonterminal_migration_passes_without_mutation(tmp_path: Path) -> None:
+    repo = build_legacy_migration(tmp_path)
+    before = repository_snapshot(repo.path)
+
+    assert validate_project(repo.path) == []
+    assert repository_snapshot(repo.path) == before
+
+
+def test_migration_does_not_exempt_cycle_completed_after_policy_activation(
+    tmp_path: Path,
+) -> None:
+    repo = build_legacy_migration(tmp_path, activate_before_cycle=True)
+
+    assert (MS, "history.ms.order") in history_codes(repo)
+
+
+@pytest.mark.parametrize(
+    ("defect", "code"),
+    [
+        ("wrong-parent", "migration.parent.mismatch"),
+        ("unsorted", "migration.inventory.order"),
+        ("stale-oid", "migration.inventory.oid"),
+        ("extra-change", "migration.baseline.paths"),
+    ],
+)
+def test_legacy_migration_fail_closed_boundaries(
+    tmp_path: Path, defect: str, code: str
+) -> None:
+    seed = HistoryRepo.create(tmp_path / "seed")
+    oid_length = len(seed.commits["approval"])
+    shutil.rmtree(seed.path, onerror=remove_readonly)
+    kwargs: dict[str, object] = {}
+    if defect == "wrong-parent":
+        kwargs["parent"] = "0" * oid_length
+    elif defect == "unsorted":
+        repo = build_legacy_migration(tmp_path / "inventory")
+        parent = repo.commits["quality"]
+        values = [
+            (path, git(repo.path, "rev-parse", f"{parent}:{path}").stdout.strip())
+            for path in (MS, IQC)
+        ]
+        shutil.rmtree(repo.path, onerror=remove_readonly)
+        kwargs["evidence"] = values
+    elif defect == "stale-oid":
+        kwargs["evidence"] = [(IQC, "0" * oid_length), (MS, "0" * oid_length)]
+    elif defect == "extra-change":
+        kwargs["extra_change"] = True
+    repo = build_legacy_migration(tmp_path / "case", **kwargs)
+    before = repository_snapshot(repo.path)
+
+    assert (MIGRATION, code) in history_codes(repo)
+    assert repository_snapshot(repo.path) == before
+
+
+def test_migration_artifact_is_immutable_and_cannot_be_reapplied(tmp_path: Path) -> None:
+    repo = build_legacy_migration(tmp_path)
+    artifact = repo.path / MIGRATION
+    artifact.write_text(artifact.read_text().replace("evidence:", "evidence: # changed"))
+    repo.commit("mutation", "mutate migration authority")
+
+    assert (MIGRATION, "migration.immutable") in history_codes(repo)
+
+
+@pytest.mark.parametrize("oid_length", [40, 64])
+def test_repository_native_commit_parser_accepts_only_exact_lowercase_oid(
+    oid_length: int,
+) -> None:
+    oid = "a" * oid_length
+    positions = {oid: 7}
+
+    assert implementation_history._resolved_commit(oid, positions, oid_length) == 7
+    assert implementation_history._resolved_commit(oid.upper(), positions, oid_length) is None
+    assert implementation_history._resolved_commit("a" * (104 - oid_length), positions, oid_length) is None
 
 
 def history_codes(repo: HistoryRepo | Path) -> set[tuple[str, str]]:

@@ -78,7 +78,7 @@ def test_windows_installer_errors_do_not_exit_the_calling_powershell_host() -> N
 
 def test_readme_documents_immutable_tagged_windows_install_from_a_temporary_file() -> None:
     text = README.read_text(encoding="utf-8")
-    installer_url = "https://raw.githubusercontent.com/genichin/proofline/v0.6.0/install.ps1"
+    installer_url = "https://raw.githubusercontent.com/genichin/proofline/v0.6.1/install.ps1"
 
     assert text.count(installer_url) == 2
     assert "Invoke-WebRequest" in text

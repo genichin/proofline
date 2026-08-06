@@ -21,6 +21,10 @@ MS_PATH = re.compile(
 IQC_PATH = re.compile(
     r"^\.proofline/lines/line-(\d{4})/micro-specs/iqc-\1-\d{3}\.md$"
 )
+DQC_PATH = re.compile(r"^\.proofline/lines/line-(\d{4})/dqc-\1\.md$")
+MIGRATION_PATH = re.compile(
+    r"^\.proofline/lines/line-(\d{4})/legacy-migration-\1\.md$"
+)
 INTEGRATION_PATH = re.compile(
     r"^\.proofline/lines/line-(\d{4})/integration-\1\.md$"
 )
@@ -492,6 +496,7 @@ def _current_artifacts(root: Path) -> tuple[dict[str, dict[str, object]], list[s
             or MS_PATH.fullmatch(relative)
             or IQC_PATH.fullmatch(relative)
             or INTEGRATION_PATH.fullmatch(relative)
+            or MIGRATION_PATH.fullmatch(relative)
         ):
             continue
         try:
@@ -858,6 +863,128 @@ def _first_policy(states: list[dict[str, object] | None]) -> int | None:
     )
 
 
+def _validate_legacy_migration(
+    session: _GitSession,
+    line_path: str,
+    states: list[dict[str, object] | None],
+    commits: list[str],
+    trees: list[set[str]],
+    activation: int | None,
+) -> tuple[list[HistoryError], int | None]:
+    line_match = LINE_PATH.fullmatch(line_path)
+    assert line_match is not None
+    number = line_match.group(1)
+    migration_path = (
+        f".proofline/lines/line-{number}/legacy-migration-{number}.md"
+    )
+    appearances = [index for index, tree in enumerate(trees) if migration_path in tree]
+    if not appearances:
+        return [], None
+    baseline = appearances[0]
+
+    def error(code: str, message: str) -> tuple[list[HistoryError], None]:
+        return [_line_error(migration_path, code, message)], None
+
+    if baseline == 0:
+        return error("migration.parent.mismatch", "migration baseline에는 first parent가 필요합니다.")
+    artifact_bytes = _file(session, commits[baseline], migration_path, trees[baseline])
+    if artifact_bytes is None:
+        return error("migration.schema.unavailable", "migration artifact regular blob을 읽을 수 없습니다.")
+    if any(
+        _file(session, commit, migration_path, tree) != artifact_bytes
+        for commit, tree in zip(commits[baseline:], trees[baseline:], strict=True)
+    ):
+        return error("migration.immutable", "persisted migration artifact는 변경·제거·재도입할 수 없습니다.")
+    current_path = session.root / migration_path
+    try:
+        if not current_path.is_file() or current_path.read_bytes() != artifact_bytes:
+            return error("migration.immutable", "현재 migration artifact는 exact candidate bytes와 같아야 합니다.")
+    except OSError:
+        return error("migration.immutable", "현재 migration artifact를 입증할 수 없습니다.")
+    try:
+        artifact = _frontmatter(artifact_bytes)
+    except HistoryUnavailable:
+        return error("migration.schema.unavailable", "migration frontmatter를 해석할 수 없습니다.")
+    if (
+        set(artifact) != {"id", "line", "pre_migration_parent", "evidence"}
+        or artifact.get("id") != f"legacy-migration-{number}"
+        or artifact.get("line") != f"line-{number}"
+    ):
+        return error("migration.path.identity", "migration path와 identity가 일치하지 않습니다.")
+    oid_length = len(commits[0])
+    parent = artifact.get("pre_migration_parent")
+    if (
+        not isinstance(parent, str)
+        or re.fullmatch(rf"[0-9a-f]{{{oid_length}}}", parent) is None
+        or parent != commits[baseline - 1]
+    ):
+        return error("migration.parent.mismatch", "pre_migration_parent는 exact B^1이어야 합니다.")
+    if activation is None:
+        return error("migration.eligibility.activation", "repository policy activation을 입증할 수 없습니다.")
+    creation = next((index for index, state in enumerate(states) if state is not None), None)
+    if creation is None or creation >= activation:
+        return error("migration.eligibility.creation", "target Line은 A0의 strict ancestor에서 생성돼야 합니다.")
+    before_state = states[baseline - 1]
+    if (
+        before_state is None
+        or before_state.get("implementation_history") is not None
+        or before_state.get("execution_status") not in {"in_progress", "verifying"}
+    ):
+        return error("migration.eligibility.state", "B^1 target은 fieldless non-terminal이어야 합니다.")
+    changed = set(_changed_paths(session, commits[baseline]))
+    if changed != {line_path, migration_path}:
+        return error("migration.baseline.paths", "B는 policy Line과 migration artifact 두 path만 변경해야 합니다.")
+    before_line = _file(session, commits[baseline - 1], line_path, trees[baseline - 1])
+    after_line = _file(session, commits[baseline], line_path, trees[baseline])
+    if (
+        before_line is None
+        or after_line is None
+        or _frontmatter_field_revision_bytes(
+            after_line, "implementation_history", {"first_parent"}
+        )
+        != before_line
+    ):
+        return error("migration.baseline.policy", "B의 Line delta는 first_parent policy 추가만 허용합니다.")
+
+    raw_evidence = artifact.get("evidence")
+    if not isinstance(raw_evidence, list) or not raw_evidence:
+        return error("migration.inventory.schema", "migration evidence는 nonempty list여야 합니다.")
+    parsed: list[tuple[str, str]] = []
+    for entry in raw_evidence:
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != {"path", "blob_oid"}
+            or not isinstance(entry.get("path"), str)
+            or not isinstance(entry.get("blob_oid"), str)
+        ):
+            return error("migration.inventory.schema", "evidence entry schema가 유효하지 않습니다.")
+        parsed.append((entry["path"], entry["blob_oid"]))
+    listed_paths = [path for path, _oid in parsed]
+    if listed_paths != sorted(listed_paths) or len(listed_paths) != len(set(listed_paths)):
+        return error("migration.inventory.order", "evidence path는 unique lexicographic order여야 합니다.")
+    line_directory = line_path.rsplit("/", 1)[0]
+    expected_paths = sorted(
+        path
+        for path in trees[baseline - 1]
+        if path.startswith(f"{line_directory}/")
+        and (MS_PATH.fullmatch(path) or IQC_PATH.fullmatch(path) or DQC_PATH.fullmatch(path))
+    )
+    if listed_paths != expected_paths or not any(MS_PATH.fullmatch(path) for path in expected_paths) or not any(
+        IQC_PATH.fullmatch(path) for path in expected_paths
+    ):
+        return error("migration.inventory.paths", "B^1의 MS/IQC/DQC inventory를 전수 포함해야 합니다.")
+    entries = session.tree_entries.get(commits[baseline - 1])
+    if entries is None:
+        raise HistoryUnavailable
+    for path, oid in parsed:
+        entry = entries.get(path)
+        if entry is None or entry[0] not in {"100644", "100755"} or entry[1] != "blob":
+            return error("migration.inventory.type", "evidence는 repository-native regular blob이어야 합니다.")
+        if re.fullmatch(rf"[0-9a-f]{{{oid_length}}}", oid) is None or oid != entry[2]:
+            return error("migration.inventory.oid", "evidence blob OID가 B^1 tree와 일치하지 않습니다.")
+    return [], baseline
+
+
 def _validate_line_policy(
     path: str,
     current: dict[str, object],
@@ -975,8 +1102,14 @@ def _latest_transition(
     return result
 
 
-def _resolved_commit(value: object, positions: dict[str, int]) -> int | None:
-    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
+def _resolved_commit(
+    value: object, positions: dict[str, int], oid_length: int
+) -> int | None:
+    if (
+        oid_length not in {40, 64}
+        or not isinstance(value, str)
+        or re.fullmatch(rf"[0-9a-f]{{{oid_length}}}", value) is None
+    ):
         return None
     return positions.get(value)
 
@@ -1053,6 +1186,8 @@ def _validate_historical_cycles(
     commits: list[str],
     trees: list[set[str]],
     positions: dict[str, int],
+    migration_baseline: int | None = None,
+    migration_activation: int | None = None,
 ) -> list[HistoryError]:
     """Audit every persisted implementation cycle, including superseded ones."""
     effective: list[tuple[int, str]] = []
@@ -1131,8 +1266,12 @@ def _validate_historical_cycles(
             return [_line_error(path, "history.ms.binding", "IQC는 해당 Micro-SPEC identity를 exact하게 bind해야 합니다.")]
         implementation_value = iqc.get("implementation_commit")
         specification_value = iqc.get("micro_spec_commit")
-        bound_implementation = _resolved_commit(implementation_value, positions)
-        specification = _resolved_commit(specification_value, positions)
+        bound_implementation = _resolved_commit(
+            implementation_value, positions, len(commits[0])
+        )
+        specification = _resolved_commit(
+            specification_value, positions, len(commits[0])
+        )
         if bound_implementation is None or specification is None:
             return [_line_error(path, "history.ms.binding", "IQC는 exact first-parent implementation과 approved Micro-SPEC revision을 bind해야 합니다.")]
         implementation = bound_implementation
@@ -1145,7 +1284,16 @@ def _validate_historical_cycles(
             or specification != approved_revision
             or quality_index != finish
             or not (specification < start < implementation < finish == quality_index)
-            or not (baseline < implementation)
+            or not (
+                baseline < implementation
+                or (
+                    migration_baseline == baseline
+                    and migration_activation is not None
+                    and quality_index < baseline
+                    and quality_index < migration_activation
+                    and implementation < baseline
+                )
+            )
         ):
             return [_line_error(path, "history.ms.order", "P < I < implemented < Q 및 approved Micro-SPEC binding 순서가 필요합니다.")]
     return []
@@ -1501,6 +1649,8 @@ def _validate_micro_spec(
     *,
     current_bytes: bytes | None,
     head_bytes: bytes | None,
+    migration_baseline: int | None = None,
+    migration_activation: int | None = None,
 ) -> list[HistoryError]:
     # Historical malformed states are always checked: they can hide a transition,
     # including when the path was subsequently deleted from the candidate tree.
@@ -1530,7 +1680,15 @@ def _validate_micro_spec(
         ]
     states = _line_states(session, path, commits, trees)
     historical_errors = _validate_historical_cycles(
-        session, path, baseline, states, commits, trees, positions
+        session,
+        path,
+        baseline,
+        states,
+        commits,
+        trees,
+        positions,
+        migration_baseline,
+        migration_activation,
     )
     if historical_errors:
         return historical_errors
@@ -1594,11 +1752,15 @@ def _validate_micro_spec(
 
     implementation_value = iqc.get("implementation_commit")
     specification_value = iqc.get("micro_spec_commit")
-    implementation = _resolved_commit(implementation_value, positions)
-    specification = _resolved_commit(specification_value, positions)
+    implementation = _resolved_commit(
+        implementation_value, positions, len(commits[0])
+    )
+    specification = _resolved_commit(
+        specification_value, positions, len(commits[0])
+    )
     if (
         isinstance(implementation_value, str)
-        and re.fullmatch(r"[0-9a-f]{40}", implementation_value) is not None
+        and re.fullmatch(rf"[0-9a-f]{{{len(commits[0])}}}", implementation_value) is not None
         and implementation is None
     ):
         return [
@@ -1691,7 +1853,16 @@ def _validate_micro_spec(
     ]
     if not (
         specification < start < implementation < transition <= quality
-        and baseline < implementation
+        and (
+            baseline < implementation
+            or (
+                migration_baseline == baseline
+                and migration_activation is not None
+                and quality < baseline
+                and quality < migration_activation
+                and implementation < baseline
+            )
+        )
         and implementation in implementation_candidates
     ):
         return [
@@ -1755,6 +1926,7 @@ def validate_implementation_history(
             if LINE_PATH.fullmatch(path)
             or MS_PATH.fullmatch(path)
             or IQC_PATH.fullmatch(path)
+            or MIGRATION_PATH.fullmatch(path)
         }
     )
     for artifact_path in historical_artifact_paths:
@@ -1800,6 +1972,12 @@ def validate_implementation_history(
             head_bytes = _file(session, commits[-1], line_path, head_paths)
             current_path = root / line_path
             current_bytes = current_path.read_bytes() if current_path.is_file() else None
+            migration_errors, migration_baseline = _validate_legacy_migration(
+                session, line_path, states, commits, trees, activation
+            )
+            errors.extend(migration_errors)
+            if migration_errors:
+                continue
             policy_errors, baseline = _validate_line_policy(
                 line_path, current.get(line_path, {}), states, activation,
                 current_bytes=current_bytes, head_bytes=head_bytes,
@@ -1876,6 +2054,10 @@ def validate_implementation_history(
                             positions,
                             current_bytes=current_ms_bytes,
                             head_bytes=head_ms_bytes,
+                            migration_baseline=migration_baseline,
+                            migration_activation=(
+                                activation if migration_baseline is not None else None
+                            ),
                         )
                     )
                 except HistoryUnavailable:

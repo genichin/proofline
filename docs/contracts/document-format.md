@@ -51,7 +51,7 @@ Validator는 정의되지 않은 frontmatter key를 오류로 처리한다. 이�
 
 | Artifact | Schema 소유 문서 |
 | --- | --- |
-| Line, DQC, Integration manifest | [Line 검증·통합·Delivery 계약](line-delivery.md) |
+| Line, DQC, Integration manifest, Legacy migration | [Line 검증·통합·Delivery 계약](line-delivery.md) |
 | Discovery | [Discovery 계약](discovery.md) |
 | REQ, AC | [REQ와 AC 계약](requirements-and-criteria.md) |
 | Micro-SPEC, IQC | [Micro-SPEC과 IQC 계약](micro-spec-and-iqc.md) |
@@ -72,7 +72,8 @@ templates/schema-v1/
 │   ├── micro-spec.md
 │   ├── iqc.md
 │   ├── dqc.md
-│   └── integration.md
+│   ├── integration.md
+│   └── legacy-migration.md
 └── derived/
     └── requirements.md
 ```
@@ -82,7 +83,7 @@ templates/schema-v1/
 - Template은 ProofLine 저장소의 Git 추적 소스 자산이며 적용 프로젝트의 `.proofline/` canonical tree에 복사하지 않는다.
 - Writer는 `proofline.yaml`의 `schema_version`과 일치하는 template bundle만 사용한다.
 - Template은 artifact schema의 source of truth가 아니다. 이 문서와 artifact별 contract가 template보다 우선한다.
-- Template을 변경할 때는 대응 artifact의 frontmatter field, H1·H2 구조, placeholder 및 lifecycle vocabulary를 함께 검증한다. Frontmatter-only integration template은 `INTEGRATION_ID`, `LINE_ID`, `MAIN_PARENT`, `LINE_HEAD` variable을 실제 값으로 모두 치환하며 governance placeholder나 Markdown 본문을 갖지 않는다.
+- Template을 변경할 때는 대응 artifact의 frontmatter field, H1·H2 구조, placeholder 및 lifecycle vocabulary를 함께 검증한다. Frontmatter-only integration template과 legacy migration template은 모든 variable을 실제 값으로 치환하며 governance placeholder나 Markdown 본문을 갖지 않는다.
 
 ## Placeholder 문법과 완결성 gate
 
@@ -216,7 +217,7 @@ REQ.status: withdrawn
 Micro-SPEC.spec_status: withdrawn
 ```
 
-Line artifact는 모든 상태에서 frontmatter-only이며 canonical frontmatter에는 placeholder를 사용할 수 없으므로 어떤 `execution_status`에서도 placeholder를 허용하지 않는다.
+Line, Integration manifest와 Legacy migration artifact는 frontmatter-only이며 canonical frontmatter에는 placeholder를 사용할 수 없다.
 
 Micro-SPEC의 `implementation_status` transition만으로는 placeholder 허용 여부가 바뀌지 않는다. Placeholder 완결성은 `spec_status`가 소유한다.
 

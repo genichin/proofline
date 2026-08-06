@@ -119,6 +119,19 @@ gh release download v0.1.0 \
 
 DQC evidence는 tag, Release URL, candidate commit, remote asset digest와 verification 결과를 기록한다.
 
+## v0.6.1 Legacy Migration Hotfix Candidate
+
+`v0.6.1` candidate는 legacy non-terminal history migration validator, canonical template와 packaged 운영 절차를 포함한다.
+
+```text
+Tag:      v0.6.1
+Wheel:    proofline-0.6.1-py3-none-any.whl
+Checksum: SHA256SUMS
+Assets:   wheel + SHA256SUMS only
+```
+
+Prepare 단계에서는 source/full regression, exact candidate에서 fresh wheel 1회 build, strict checksum, checkout 밖 isolated install, distribution/CLI version `0.6.1`, migration template·contract·operation resource의 exact source↔wheel byte parity를 확인한다. 이 candidate 문서와 installer version 동기화는 publication authority가 아니다. IQC/DQC와 별도 사용자 approval 전에는 tag 생성·push, Release 생성 또는 asset upload를 수행하지 않으며 기존 `v0.6.0` object를 변경하지 않는다.
+
 ## Partial Failure와 Retry
 
 Remote publication은 local rollback으로 원상복구할 수 없다.
