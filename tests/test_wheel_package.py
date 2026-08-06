@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from proofline.identity_ledger import decode_ledger, encode_ledger
+from proofline.home_writer import payload_from_wheel
 from proofline.line_writer import _render
 from test_implementation_history import (
     MIGRATION_SCENARIO_IDS,
@@ -297,7 +298,7 @@ def test_source_checkout_rejects_ledger_only_delta_without_mutation(
 def test_built_sdist_contains_project_schema_resources(tmp_path: Path) -> None:
     dist = tmp_path / "dist"
     build = subprocess.run(
-        ["uv", "build", "--refresh", "--sdist", "--out-dir", str(dist)],
+        ["uv", "build", "--offline", "--sdist", "--out-dir", str(dist)],
         cwd=ROOT,
         text=True,
         capture_output=True,
@@ -325,7 +326,7 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(
     else:
         dist = tmp_path / "dist"
         build = subprocess.run(
-            ["uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)],
+            ["uv", "build", "--offline", "--wheel", "--out-dir", str(dist)],
             cwd=ROOT,
             text=True,
             capture_output=True,
@@ -400,7 +401,7 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(
             "uv",
             "pip",
             "install",
-            "--refresh",
+            "--offline",
             "--python",
             str(python),
             str(wheel),
@@ -865,6 +866,46 @@ print(diagnostic, end='', file=sys.stderr)
     assert not (absent_home / ".proofline").exists()
 
 
+def test_built_wheel_operations_match_source_inventory_and_payload_bytes(
+    tmp_path: Path,
+) -> None:
+    dist = tmp_path / "dist"
+    build = subprocess.run(
+        ["uv", "build", "--offline", "--wheel", "--out-dir", str(dist)],
+        cwd=ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert build.returncode == 0, build.stderr
+    wheel = next(dist.glob("proofline-*.whl"))
+    expected = {
+        path.name: path.read_bytes()
+        for path in sorted((ROOT / "docs/operations").glob("*.md"))
+    }
+
+    with zipfile.ZipFile(wheel) as archive:
+        names = archive.namelist()
+        assert len(names) == len(set(names))
+        operation_names = sorted(
+            name.removeprefix("proofline_home/operations/")
+            for name in names
+            if name.startswith("proofline_home/operations/") and not name.endswith("/")
+        )
+        assert operation_names == sorted(expected)
+        assert {
+            name: archive.read(f"proofline_home/operations/{name}")
+            for name in operation_names
+        } == expected
+
+    payload = payload_from_wheel(wheel, "0.6.1")
+    assert {
+        relative.removeprefix("operations/"): content
+        for relative, content in payload.items()
+        if relative.startswith("operations/")
+    } == expected
+
+
 def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workflow(
     tmp_path: Path,
 ) -> None:
@@ -875,7 +916,7 @@ def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workfl
     else:
         dist = tmp_path / "dist"
         build = subprocess.run(
-            ["uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)],
+            ["uv", "build", "--offline", "--wheel", "--out-dir", str(dist)],
             cwd=ROOT,
             text=True,
             capture_output=True,

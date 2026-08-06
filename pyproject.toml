@@ -38,4 +38,4 @@ packages = ["src/proofline", "src/proofline_home"]
 "docs/contracts" = "proofline_home/contracts"
 "templates" = "proofline_home/templates"
 "skills" = "proofline_home/skills"
-"docs/operations/legacy-nonterminal-history-migration.md" = "proofline_home/operations/legacy-nonterminal-history-migration.md"
+"docs/operations" = "proofline_home/operations"
