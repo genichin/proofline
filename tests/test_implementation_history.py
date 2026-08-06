@@ -2596,17 +2596,22 @@ def installed_wheel_cli(tmp_path_factory: pytest.TempPathFactory) -> Path:
         return executable
 
     root = tmp_path_factory.mktemp("installed-wheel")
-    dist = root / "dist"
-    dist.mkdir()
-    built = subprocess.run(
-        ("uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)),
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert built.returncode == 0, built.stderr
-    wheel = next(dist.glob("proofline-*.whl"))
+    hosted = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
+    if hosted:
+        wheel = Path(hosted)
+        assert wheel.is_absolute() and wheel.is_file()
+    else:
+        dist = root / "dist"
+        dist.mkdir()
+        built = subprocess.run(
+            ("uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)),
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert built.returncode == 0, built.stderr
+        wheel = next(dist.glob("proofline-*.whl"))
     venv = root / "venv"
     created = subprocess.run(
         ("uv", "venv", "--python", sys.executable, str(venv)),

@@ -196,18 +196,23 @@ def _repo_git_snapshot(repo: Path) -> dict[str, Any]:
 def execute_cross_artifact_registry(root: Path, registry_path: Path, temp_root: Path) -> CrossArtifactEvidence:
     registry = load_registry(registry_path)
     before = _repo_git_snapshot(root)
-    dist = temp_root / "candidate-dist"
-    dist.mkdir()
-    built = subprocess.run(
-        ("uv", "build", "--offline", "--wheel", "--out-dir", str(dist)),
-        cwd=root,
-        env=_sanitized_env(),
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert built.returncode == 0, built.stderr
-    wheel = next(dist.glob("proofline-*.whl"))
+    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
+    if provided:
+        wheel = Path(provided)
+        assert wheel.is_absolute() and wheel.is_file()
+    else:
+        dist = temp_root / "candidate-dist"
+        dist.mkdir()
+        built = subprocess.run(
+            ("uv", "build", "--offline", "--wheel", "--out-dir", str(dist)),
+            cwd=root,
+            env=_sanitized_env(),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert built.returncode == 0, built.stderr
+        wheel = next(dist.glob("proofline-*.whl"))
     wheel_sha256 = hashlib.sha256(wheel.read_bytes()).hexdigest()
 
     venv = temp_root / "candidate-venv"

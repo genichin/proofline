@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 import json
 import os
@@ -8,6 +9,7 @@ import shutil
 import subprocess
 import sys
 
+import pytest
 import yaml
 
 
@@ -23,6 +25,14 @@ PLAN = ROOT / "skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1
 RUN_DQC_SKILL = ROOT / "skills/proofline-run-dqc/SKILL.md"
 DELIVERY_CONTRACT = ROOT / "docs/contracts/line-delivery.md"
 WHEEL_PACKAGE_TESTS = ROOT / "tests/test_wheel_package.py"
+HOSTED_WHEEL_CONSUMERS = {
+    ROOT / "tests/helpers/line_0020_scenario_runner.py": "execute_cross_artifact_registry",
+    ROOT / "tests/test_start_implementation_skill.py": "packaged_worktree_script",
+    ROOT / "tests/test_implementation_history.py": "installed_wheel_cli",
+    ROOT / "tests/test_specification_approval_authority.py": (
+        "test_source_and_built_wheel_extracted_script_have_behavior_and_diagnostic_parity"
+    ),
+}
 JOBS = {"build-candidate", "ubuntu-python311", "windows-python311"}
 
 
@@ -122,6 +132,75 @@ def test_ubuntu_and_windows_independently_verify_same_wheel_and_required_regress
     assert "3.12" not in text
     for forbidden in ("release", "publish", "secrets.", "pull_request_target", "git push"):
         assert forbidden not in text.lower()
+
+
+def test_verified_absolute_wheel_is_exported_to_each_hosted_consumer_suite() -> None:
+    workflow = _workflow()
+    ubuntu = next(
+        step["run"]
+        for step in workflow["jobs"]["ubuntu-python311"]["steps"]
+        if step.get("name") == "Verify exact wheel and source candidate"
+    )
+    windows = next(
+        step["run"]
+        for step in workflow["jobs"]["windows-python311"]["steps"]
+        if step.get("name") == "Verify source history and installed wheel regressions"
+    )
+
+    assert ubuntu.index("sha256sum --check --strict SHA256SUMS") < ubuntu.index(
+        "WHEEL=$(realpath proofline-*.whl)"
+    ) < ubuntu.index('export PROOFLINE_HOSTED_CANDIDATE_WHEEL="$WHEEL"')
+    assert ubuntu.index('export PROOFLINE_HOSTED_CANDIDATE_WHEEL="$WHEEL"') < ubuntu.index(
+        'uv run pytest -q -m "not candidate_build_only"'
+    )
+    assert windows.index("candidate provenance mismatch") < windows.index(
+        "$env:PROOFLINE_HOSTED_CANDIDATE_WHEEL = $wheel[0].FullName"
+    ) < windows.index("uv run pytest -q tests/test_windows_history_runtime.py")
+
+
+@pytest.mark.parametrize(("path", "function_name"), HOSTED_WHEEL_CONSUMERS.items())
+def test_hosted_wheel_consumers_validate_exact_file_and_bypass_local_build(
+    path: Path, function_name: str
+) -> None:
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name == function_name
+    )
+    hosted_assignment = next(
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.Assign)
+        and "PROOFLINE_HOSTED_CANDIDATE_WHEEL" in ast.unparse(node.value)
+    )
+    assert len(hosted_assignment.targets) == 1
+    hosted_name = ast.unparse(hosted_assignment.targets[0])
+    hosted_branch = next(
+        node
+        for node in ast.walk(function)
+        if isinstance(node, ast.If) and ast.unparse(node.test) == hosted_name
+    )
+    branch = "\n".join(ast.unparse(node) for node in hosted_branch.body)
+
+    def contains_uv_build(nodes: list[ast.stmt]) -> bool:
+        return any(
+            {"uv", "build"}.issubset(
+                {
+                    child.value
+                    for child in ast.walk(node)
+                    if isinstance(child, ast.Constant) and isinstance(child.value, str)
+                }
+            )
+            for node in nodes
+        )
+
+    assert "Path(" in branch
+    assert ".is_absolute()" in branch
+    assert ".is_file()" in branch
+    assert not contains_uv_build(hosted_branch.body)
+    assert contains_uv_build(hosted_branch.orelse)
 
 
 def test_windows_gate_exercises_exact_wheel_and_full_fresh_install_sequence() -> None:

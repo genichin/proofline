@@ -608,13 +608,18 @@ def test_source_and_built_wheel_extracted_script_have_behavior_and_diagnostic_pa
     fixture = tmp_path / "fixture"
     repo, target, approval = make_repo(fixture, mode="bootstrap")
     review, user_approval = write_evidence(fixture, repo, target)
-    dist = tmp_path / "dist"
-    built = subprocess.run(
-        ("uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)),
-        cwd=ROOT, text=True, capture_output=True, check=False,
-    )
-    assert built.returncode == 0, built.stderr
-    wheel = next(dist.glob("proofline-*.whl"))
+    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
+    if provided:
+        wheel = Path(provided)
+        assert wheel.is_absolute() and wheel.is_file()
+    else:
+        dist = tmp_path / "dist"
+        built = subprocess.run(
+            ("uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)),
+            cwd=ROOT, text=True, capture_output=True, check=False,
+        )
+        assert built.returncode == 0, built.stderr
+        wheel = next(dist.glob("proofline-*.whl"))
     member = "proofline_home/skills/proofline-approve-specification/scripts/audit_approval_authority.py"
     extracted = tmp_path / "packaged-audit.py"
     with zipfile.ZipFile(wheel) as archive:

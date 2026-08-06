@@ -1090,16 +1090,21 @@ def test_worktree_script_rejects_dirty_exact_h_idempotent_retry_without_mutation
 @pytest.fixture(scope="module")
 def packaged_worktree_script(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("packaged-start-implementation")
-    dist = root / "dist"
-    build = subprocess.run(
-        ("uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)),
-        cwd=ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert build.returncode == 0, build.stderr
-    wheel = next(dist.glob("proofline-*.whl"))
+    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
+    if provided:
+        wheel = Path(provided)
+        assert wheel.is_absolute() and wheel.is_file()
+    else:
+        dist = root / "dist"
+        build = subprocess.run(
+            ("uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)),
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert build.returncode == 0, build.stderr
+        wheel = next(dist.glob("proofline-*.whl"))
     target = root / "create_worktree.py"
     with zipfile.ZipFile(wheel) as archive:
         target.write_bytes(
