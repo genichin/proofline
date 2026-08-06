@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 import os
 import re
 import shutil
@@ -18,6 +19,10 @@ WINDOWS_FIXTURE = ROOT / "tests/fixtures/valid-minimal"
 IMPLEMENTATION_HISTORY_TESTS = ROOT / "tests/test_implementation_history.py"
 WINDOWS_HISTORY_TESTS = ROOT / "tests/test_windows_history_runtime.py"
 LINE_INIT_TESTS = ROOT / "tests/test_line_init.py"
+PLAN = ROOT / "skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json"
+RUN_DQC_SKILL = ROOT / "skills/proofline-run-dqc/SKILL.md"
+DELIVERY_CONTRACT = ROOT / "docs/contracts/line-delivery.md"
+WHEEL_PACKAGE_TESTS = ROOT / "tests/test_wheel_package.py"
 JOBS = {"build-candidate", "ubuntu-python311", "windows-python311"}
 
 
@@ -193,3 +198,61 @@ def test_windows_consumer_history_harness_is_platform_neutral() -> None:
     assert "sys.stdout.buffer.write" in windows_runtime
     assert "print('ok')" not in windows_runtime
     assert 'fcntl = pytest.importorskip("fcntl")' in line_init
+
+
+def test_hosted_workflow_declares_shared_clean_runner_plan_contract() -> None:
+    workflow = _workflow()
+    plan = json.loads(PLAN.read_text(encoding="utf-8"))
+    contract = workflow["env"]
+
+    assert plan["plan_id"] == "candidate-clean-runner-v1"
+    assert contract == {
+        "PROOFLINE_CLEAN_RUNNER_PLAN_ID": plan["plan_id"],
+        "PROOFLINE_CLEAN_RUNNER_PLAN_RESOURCE": (
+            "skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json"
+        ),
+        "PROOFLINE_CLEAN_RUNNER_PACKAGED_PLAN_RESOURCE": (
+            "proofline_home/skills/proofline-run-dqc/resources/"
+            "candidate-clean-runner-plan-v1.json"
+        ),
+        "PROOFLINE_CLEAN_RUNNER_STEP_ORDER": (
+            "verify-wheel,verify-checksum,create-environment,"
+            "provision-harness,contract-probe"
+        ),
+        "PROOFLINE_CLEAN_RUNNER_ENDPOINT": "https://pypi.org/simple",
+        "PROOFLINE_CLEAN_RUNNER_VERSION_SOURCE": "uv.lock",
+        "PROOFLINE_CLEAN_RUNNER_NETWORK_MODE": "online-offline",
+        "PROOFLINE_CLEAN_RUNNER_PUBLICATION_PREREQUISITE": "none",
+    }
+    for platform in ("ubuntu-python311", "windows-python311"):
+        steps = plan["platforms"][platform]["steps"]
+        assert [step["step_id"] for step in steps] == contract[
+            "PROOFLINE_CLEAN_RUNNER_STEP_ORDER"
+        ].split(",")
+        assert steps[0]["step_id"] == "verify-wheel"
+        assert steps[1]["step_id"] == "verify-checksum"
+        assert all(step["publication_prerequisite"] == "none" for step in steps)
+        provision = next(step for step in steps if step["step_id"] == "provision-harness")
+        assert provision["endpoint"] == contract["PROOFLINE_CLEAN_RUNNER_ENDPOINT"]
+        assert provision["version_source"] == contract[
+            "PROOFLINE_CLEAN_RUNNER_VERSION_SOURCE"
+        ]
+        assert provision["network_mode"] == contract["PROOFLINE_CLEAN_RUNNER_NETWORK_MODE"]
+
+    package_test = WHEEL_PACKAGE_TESTS.read_text(encoding="utf-8")
+    assert contract["PROOFLINE_CLEAN_RUNNER_PLAN_RESOURCE"] in package_test
+    assert contract["PROOFLINE_CLEAN_RUNNER_PACKAGED_PLAN_RESOURCE"] in package_test
+
+
+def test_dqc_docs_run_non_authoritative_pre_push_before_hosted_authority() -> None:
+    for path in (RUN_DQC_SKILL, DELIVERY_CONTRACT):
+        text = path.read_text(encoding="utf-8")
+        helper = text.index("preflight_clean_runner.py")
+        candidate_push = text.index("candidate/{line_id}", helper)
+        hosted = text.index("build-candidate", candidate_push)
+        evidence = text.index("verify-candidate-evidence.py", hosted)
+        dqc = text.index("DQC", evidence)
+        assert helper < candidate_push < hosted < evidence < dqc
+        assert "non-authoritative" in text
+        assert "remote push" in text
+        assert "대체하지" in text

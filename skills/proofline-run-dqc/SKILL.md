@@ -145,6 +145,25 @@ Canonical template를 사용해 다음을 남긴다.
 
 ### Mandatory Hosted Candidate Gate
 
+Hosted candidate ref를 push하기 전에 exact `V`와 이미 build된 single wheel에 대해 다음 non-authoritative clean-runner preflight를 먼저 실행한다.
+
+```bash
+python3 skills/proofline-run-dqc/scripts/preflight_clean_runner.py \
+  --repo "$PWD" --candidate "$V" \
+  --wheel "$WHEEL" --provenance "$PREFLIGHT_PROVENANCE" \
+  --network-mode online
+```
+
+Offline 실행은 같은 argv에 `--network-mode offline --wheelhouse "$WHEELHOUSE"`를 사용한다. Helper는 shared `candidate-clean-runner-v1` plan과 exact wheel/provenance, endpoint, `uv.lock` version source, network mode 및 `publication_prerequisite: none` 계약만 판정한다. Windows plan 결과는 `contract_only`이며 native Windows 또는 hosted PASS가 아니다. Helper PASS 자체는 remote push·workflow dispatch를 수행하지 않고 hosted run/job/artifact evidence나 IQC·DQC result를 만들지 않으며 mandatory hosted gate를 대체하지 않는다.
+
+순서는 분리해서 유지한다.
+
+1. `preflight_clean_runner.py` local pre-push contract PASS를 확인한다.
+2. 별도 governance handoff로 exact `V`를 `candidate/{line_id}` ref에 push한다.
+3. Mandatory hosted `build-candidate`, `ubuntu-python311`, `windows-python311` 세 job의 terminal success를 확인한다.
+4. `.github/scripts/verify-candidate-evidence.py`로 exact attempt의 artifact·provenance·checksum evidence를 read-back한다.
+5. 위 hosted evidence와 기존 mandatory Line-level checks를 별도로 기록한 뒤에만 DQC를 판정한다.
+
 `hosted_candidate_gate`는 mandatory이며, exact candidate를 `candidate/{line_id}` remote ref로 push하고 선언된 workflow·세 job·run attempt·artifact·provenance·wheel digest를 `.github/scripts/verify-candidate-evidence.py`로 read-back한다. Helper는 remote ref의 Line identity와 허용된 단일 canonical DQC path를 결속한다. Hosted run, required job, artifact 또는 exact candidate identity가 누락·실패·stale이면 원인과 관계없이 DQC를 blocked로 유지한다. Evidence read-back 이후 DQC commit까지 제품 source, test, build 또는 runtime configuration 변경은 stale이다. same-`V` retry는 허용하지 않는다.
 
 원격 identity와 wheel identity는 DQC Checks에 기록하며, 이 gate는 main integration이나 release authority를 부여하지 않는다.

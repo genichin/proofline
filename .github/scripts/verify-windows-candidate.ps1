@@ -9,6 +9,23 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# Shared clean-runner plan markers. This tracked Windows surface is contract-only;
+# native runtime PASS remains owned by the hosted windows-python311 job.
+$CleanRunnerPlanId = "candidate-clean-runner-v1"
+$CleanRunnerPlanResource = "skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json"
+$CleanRunnerPlanOutcome = "contract_only"
+$CleanRunnerEndpoint = "https://pypi.org/simple"
+$CleanRunnerVersionSource = "uv.lock"
+$CleanRunnerNetworkMode = "online-offline"
+$CleanRunnerPublicationPrerequisite = "none"
+$CleanRunnerStepOrder = @(
+    "verify-wheel",
+    "verify-checksum",
+    "create-environment",
+    "provision-harness",
+    "contract-probe"
+)
+
 function Assert-True([bool]$Condition, [string]$Message) {
     if (-not $Condition) { throw $Message }
 }

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -8,6 +9,8 @@ ROOT = Path(__file__).resolve().parents[1]
 POSIX_INSTALLER = ROOT / "install.sh"
 WINDOWS_INSTALLER = ROOT / "install.ps1"
 README = ROOT / "README.md"
+WINDOWS_GATE = ROOT / ".github/scripts/verify-windows-candidate.ps1"
+PLAN = ROOT / "skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json"
 
 
 def _constant(text: str, name: str, *, powershell: bool) -> str:
@@ -117,3 +120,34 @@ def test_readme_install_verification_sections_use_initialized_approved_order() -
         ]
 
     assert "absent" not in sections[1].lower()
+
+
+def test_windows_candidate_gate_declares_contract_only_shared_plan() -> None:
+    text = WINDOWS_GATE.read_text(encoding="utf-8")
+    plan = json.loads(PLAN.read_text(encoding="utf-8"))
+    windows_steps = plan["platforms"]["windows-python311"]["steps"]
+
+    assert '$CleanRunnerPlanId = "candidate-clean-runner-v1"' in text
+    assert (
+        '$CleanRunnerPlanResource = "skills/proofline-run-dqc/resources/'
+        'candidate-clean-runner-plan-v1.json"'
+    ) in text
+    assert '$CleanRunnerPlanOutcome = "contract_only"' in text
+    assert '$CleanRunnerEndpoint = "https://pypi.org/simple"' in text
+    assert '$CleanRunnerVersionSource = "uv.lock"' in text
+    assert '$CleanRunnerNetworkMode = "online-offline"' in text
+    assert '$CleanRunnerPublicationPrerequisite = "none"' in text
+    assert '$CleanRunnerStepOrder = @(' in text
+    assert plan["plan_id"] == "candidate-clean-runner-v1"
+    assert [step["step_id"] for step in windows_steps] == [
+        "verify-wheel",
+        "verify-checksum",
+        "create-environment",
+        "provision-harness",
+        "contract-probe",
+    ]
+    assert text.index('"verify-wheel"') < text.index('"verify-checksum"')
+    assert all(step["publication_prerequisite"] == "none" for step in windows_steps)
+    assert "hosted_result" not in text.lower()
+    assert "dqc_result" not in text.lower()
+    assert "hosted_pass" not in text.lower()
