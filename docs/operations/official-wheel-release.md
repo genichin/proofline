@@ -132,6 +132,10 @@ Assets:   wheel + SHA256SUMS only
 
 Prepare 단계에서는 source/full regression, exact candidate에서 fresh wheel 1회 build, strict checksum, checkout 밖 isolated install, distribution/CLI version `0.6.1`, migration template·contract·operation resource의 exact source↔wheel byte parity를 확인한다. 이 candidate 문서와 installer version 동기화는 publication authority가 아니다. IQC/DQC와 별도 사용자 approval 전에는 tag 생성·push, Release 생성 또는 asset upload를 수행하지 않으며 기존 `v0.6.0` object를 변경하지 않는다.
 
+## v0.6.2 Operations Resource Corrective Candidate
+
+`v0.6.2` corrective candidate는 clean candidate에서 fresh wheel을 한 번만 build하고 strict checksum과 checkout 밖 isolated install을 검증한다. Source의 전체 `docs/operations/*.md` inventory와 bytes가 managed resource 및 packaged wheel payload와 정확히 일치해야 하며 distribution/CLI version은 `0.6.2`여야 한다. 이 candidate 동기화는 publication authority가 아니므로 IQC/DQC와 별도 사용자 approval 전에는 tag 생성·push, Release 생성 또는 asset upload를 수행하지 않는다.
+
 ## Partial Failure와 Retry
 
 Remote publication은 local rollback으로 원상복구할 수 없다.
