@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import proofline.updater as updater
 from proofline.updater import (
     UpdateError,
     decide_update,
@@ -14,6 +15,7 @@ from proofline.updater import (
     parse_checksum,
     parse_release,
     parse_version,
+    run_update,
 )
 
 
@@ -77,6 +79,30 @@ def test_decision_handles_check_current_update_and_downgrade() -> None:
     assert decide_update("0.2.0", "0.2.0", "source", check=False, adopt=True).mutate
     with pytest.raises(UpdateError, match="downgrade"):
         decide_update("0.2.0", "0.1.0", "archive", check=False, adopt=False)
+
+
+def test_exact_current_archive_check_does_not_require_published_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Dist:
+        def read_text(self, name: str) -> str | None:
+            assert name == "direct_url.json"
+            return json.dumps({"url": "file:///candidate.whl", "archive_info": {}})
+
+    monkeypatch.setattr(updater.metadata, "version", lambda name: "0.6.1")
+    monkeypatch.setattr(updater.metadata, "distribution", lambda name: Dist())
+    monkeypatch.setattr(updater.home_writer, "preflight_home", lambda payload: "current")
+
+    def unexpected_discovery(version: str | None) -> object:
+        raise AssertionError(f"release discovery must not run for exact current: {version}")
+
+    monkeypatch.setattr(updater, "discover_release", unexpected_discovery)
+
+    result = run_update(check=True, version="0.6.1")
+
+    assert result.status == "already-current"
+    assert result.exit_code == 0
+    assert not result.mutate
 
 
 def test_detect_provenance_distinguishes_source_archive_and_unknown() -> None:
