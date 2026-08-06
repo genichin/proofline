@@ -422,7 +422,7 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(
                 "from pathlib import Path; import proofline; "
                 "p=Path(proofline.__file__).resolve(); "
                 "assert 'site-packages' in p.parts; "
-                "assert version('proofline') == '0.6.1'"
+                "assert version('proofline') == '0.6.2'"
             ),
         ],
         cwd=tmp_path,
@@ -440,7 +440,7 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(
         check=False,
     )
     assert installed_version.returncode == 0, installed_version.stderr
-    assert installed_version.stdout == "proofline 0.6.1\n"
+    assert installed_version.stdout == "proofline 0.6.2\n"
 
     isolated_home = tmp_path / "home"
     isolated_home.mkdir()
@@ -898,7 +898,7 @@ def test_built_wheel_operations_match_source_inventory_and_payload_bytes(
             for name in operation_names
         } == expected
 
-    payload = payload_from_wheel(wheel, "0.6.1")
+    payload = payload_from_wheel(wheel, "0.6.2")
     assert {
         relative.removeprefix("operations/"): content
         for relative, content in payload.items()
@@ -978,7 +978,7 @@ def test_source_and_isolated_wheel_share_real_git_migration_registry(
             check=False,
         )
         assert build.returncode == 0, build.stderr
-        wheel = next(dist.glob("proofline-0.6.1-*.whl"))
+        wheel = next(dist.glob("proofline-0.6.2-*.whl"))
 
     venv = tmp_path / "migration-wheel-env"
     create = subprocess.run(
