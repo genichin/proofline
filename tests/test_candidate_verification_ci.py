@@ -234,8 +234,6 @@ def test_hosted_wheel_consumers_validate_exact_file_and_bypass_local_build(
         "distribution('proofline')",
         "direct_url.json",
         ".resolve().as_uri()",
-        "archive_info",
-        "sha256=",
         "returncode == 0",
     ):
         assert required in provenance_source
@@ -281,10 +279,15 @@ def test_installed_executable_precedence_is_bound_to_candidate_install_provenanc
         if isinstance(node, ast.FunctionDef) and node.name == "installed_wheel_cli"
     )
     source = ast.unparse(function)
+    helper = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_hosted_candidate_wheel"
+    )
+    helper_source = ast.unparse(helper)
     assert "_hosted_candidate_wheel()" in source
     assert "direct_url.json" in source
-    assert "archive_info" in source
-    assert "PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256" in source
+    assert "PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256" in helper_source
 
 
 def test_windows_gate_exercises_exact_wheel_and_full_fresh_install_sequence() -> None:

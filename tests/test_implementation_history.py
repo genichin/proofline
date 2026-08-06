@@ -2624,11 +2624,7 @@ def installed_wheel_cli(tmp_path_factory: pytest.TempPathFactory) -> Path:
         )
         assert provenance.returncode == 0, provenance.stderr
         direct_url = json.loads(provenance.stdout)
-        expected = os.environ["PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256"]
         assert direct_url["url"] == wheel.resolve().as_uri(), "installed candidate wheel path mismatch"
-        assert direct_url["archive_info"]["hash"] == f"sha256={expected}", (
-            "installed candidate wheel digest mismatch"
-        )
         return executable
 
     provided = os.environ.get("PROOFLINE_INSTALLED_EXECUTABLE")
@@ -2695,9 +2691,12 @@ def installed_wheel_cli(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def test_installed_wheel_cli_uses_hosted_candidate_executable_without_building(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    executable = tmp_path / ("proofline.exe" if os.name == "nt" else "proofline")
-    executable.write_bytes(b"candidate executable")
-    monkeypatch.setenv("PROOFLINE_INSTALLED_EXECUTABLE", str(executable.resolve()))
+    if os.environ.get("PROOFLINE_HOSTED_CANDIDATE_MODE") == "1":
+        executable = Path(os.environ["PROOFLINE_INSTALLED_EXECUTABLE"])
+    else:
+        executable = tmp_path / ("proofline.exe" if os.name == "nt" else "proofline")
+        executable.write_bytes(b"candidate executable")
+        monkeypatch.setenv("PROOFLINE_INSTALLED_EXECUTABLE", str(executable.resolve()))
 
     resolved = installed_wheel_cli.__wrapped__(None)  # type: ignore[arg-type]
 
