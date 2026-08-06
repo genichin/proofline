@@ -21,6 +21,7 @@ LINE = ".proofline/lines/line-0001/line-0001.md"
 MS = ".proofline/lines/line-0001/micro-specs/ms-0001-001.md"
 IQC = ".proofline/lines/line-0001/micro-specs/iqc-0001-001.md"
 MIGRATION = ".proofline/lines/line-0001/legacy-migration-0001.md"
+DQC = ".proofline/lines/line-0001/dqc-0001.md"
 
 
 def git(repo: Path, *args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -251,6 +252,12 @@ def build_legacy_migration(
     evidence: list[tuple[str, str]] | None = None,
     extra_change: bool = False,
     activate_before_cycle: bool = False,
+    incomplete: str | None = None,
+    dqc_defect: str | None = None,
+    target_state: str = "in_progress",
+    policy_before: str | None = None,
+    inventory_defect: str | None = None,
+    inventory_mode: str | None = None,
 ) -> HistoryRepo:
     """Build an eligible fieldless S/P/I/Q cycle followed by exact migration B."""
     repo = HistoryRepo.create(tmp_path)
@@ -263,14 +270,75 @@ def build_legacy_migration(
             encoding="utf-8",
         )
         repo.commit("activation", "activate history policy")
-    repo.start()
-    implementation = repo.product_commit()
-    repo.finish(implementation)
-    pre_migration_parent = repo.commits["quality"]
+    if incomplete == "evidence-absent":
+        repo.write_line("in_progress", policy=None)
+        repo.commit("legacy-state", "legacy state without cycle evidence")
+    elif incomplete == "iqc-only":
+        repo.write_line("in_progress", policy=None)
+        repo.write_iqc(1, repo.commits["approval"])
+        repo.commit("legacy-state", "legacy IQC without implementation cycle")
+    else:
+        repo.start()
+        if incomplete != "p-only":
+            implementation = repo.product_commit()
+            if incomplete not in {"no-finish", "i-without-q"}:
+                repo.finish(implementation)
+    if dqc_defect is not None:
+        candidate = repo.commits.get("quality", repo.commits["approval"])
+        values = {
+            "id": "dqc-wrong" if dqc_defect == "wrong-identity" else "dqc-0001",
+            "line": "line-9999" if dqc_defect == "wrong-line" else "line-0001",
+            "candidate": (
+                "0" * len(candidate)
+                if dqc_defect == "stale"
+                else repo.commits["approval"]
+                if dqc_defect == "mismatched"
+                else candidate
+            ),
+            "result": "invalid" if dqc_defect == "wrong-result" else "passed",
+        }
+        dqc = repo.path / DQC
+        if dqc_defect == "malformed":
+            dqc.write_text("---\nid: [\n---\n", encoding="utf-8")
+        else:
+            dqc.write_text(
+                "---\n"
+                f'id: "{values["id"]}"\nline: "{values["line"]}"\n'
+                f'candidate_commit: "{values["candidate"]}"\nresult: {values["result"]}\n'
+                "---\n",
+                encoding="utf-8",
+            )
+        repo.commit("legacy-dqc", "persist legacy DQC")
+    if target_state != "in_progress" or policy_before is not None:
+        repo.write_line(target_state, policy=policy_before)
+        repo.commit("legacy-target", "set migration target state")
+    if inventory_mode is not None:
+        ms_oid = git(repo.path, "rev-parse", f"HEAD:{MS}").stdout.strip()
+        object_oid = repo.commits["approval"] if inventory_mode == "160000" else ms_oid
+        git(repo.path, "update-index", "--add", "--cacheinfo", f"{inventory_mode},{object_oid},{MS}")
+        git(repo.path, "commit", "-qm", f"persist {inventory_mode} migration evidence")
+    pre_migration_parent = git(repo.path, "rev-parse", "HEAD").stdout.strip()
+    inventory_paths = [
+        path
+        for path in (DQC, IQC, MS)
+        if git(repo.path, "cat-file", "-e", f"{pre_migration_parent}:{path}", check=False).returncode
+        == 0
+    ]
     inventory = evidence or [
         (path, git(repo.path, "rev-parse", f"{pre_migration_parent}:{path}").stdout.strip())
-        for path in (IQC, MS)
+        for path in inventory_paths
     ]
+    if inventory_defect == "missing":
+        inventory = inventory[1:]
+    elif inventory_defect == "extra":
+        inventory.append(
+            (
+                "product.py",
+                git(repo.path, "rev-parse", f"{pre_migration_parent}:product.py").stdout.strip(),
+            )
+        )
+    elif inventory_defect == "duplicate":
+        inventory.insert(1, inventory[0])
     entries = "".join(
         f'  - path: "{path}"\n    blob_oid: "{oid}"\n' for path, oid in inventory
     )
@@ -280,16 +348,26 @@ def build_legacy_migration(
         encoding="utf-8",
     )
     current = (repo.path / LINE).read_text(encoding="utf-8")
-    (repo.path / LINE).write_text(
-        current.replace(
-            "execution_status: in_progress\n",
-            "execution_status: in_progress\nimplementation_history: first_parent\n",
-        ),
-        encoding="utf-8",
-    )
+    if "implementation_history:" not in current:
+        status_line = next(
+            line for line in current.splitlines() if line.startswith("execution_status:")
+        )
+        (repo.path / LINE).write_text(
+            current.replace(
+                f"{status_line}\n",
+                f"{status_line}\nimplementation_history: first_parent\n",
+                1,
+            ),
+            encoding="utf-8",
+        )
     if extra_change:
         (repo.path / "product.py").write_text("MIGRATION_CHANGED = True\n", encoding="utf-8")
-    repo.commit("migration", "migrate legacy line")
+    if inventory_mode is None:
+        repo.commit("migration", "migrate legacy line")
+    else:
+        git(repo.path, "add", "--", LINE, MIGRATION)
+        git(repo.path, "commit", "-qm", "migrate legacy line")
+        repo.commits["migration"] = git(repo.path, "rev-parse", "HEAD").stdout.strip()
     return repo
 
 
@@ -306,7 +384,79 @@ def test_migration_does_not_exempt_cycle_completed_after_policy_activation(
 ) -> None:
     repo = build_legacy_migration(tmp_path, activate_before_cycle=True)
 
-    assert (MS, "history.ms.order") in history_codes(repo)
+    assert (MIGRATION, "migration.eligibility.cycle") in history_codes(repo)
+
+
+@pytest.mark.parametrize(
+    "incomplete",
+    ["evidence-absent", "no-finish", "iqc-only", "p-only", "i-without-q"],
+)
+def test_migration_requires_a_complete_valid_pre_activation_cycle(
+    tmp_path: Path, incomplete: str
+) -> None:
+    repo = build_legacy_migration(tmp_path, incomplete=incomplete)
+    before = repository_snapshot(repo.path)
+
+    assert (MIGRATION, "migration.eligibility.cycle") in history_codes(repo)
+    assert repository_snapshot(repo.path) == before
+
+
+@pytest.mark.parametrize(
+    "defect",
+    [
+        "malformed",
+        "wrong-identity",
+        "wrong-line",
+        "wrong-result",
+        "stale",
+        "mismatched",
+        "no-applicable-candidate",
+    ],
+)
+def test_migration_inventory_rejects_unprovable_existing_dqc(
+    tmp_path: Path, defect: str
+) -> None:
+    repo = build_legacy_migration(tmp_path, dqc_defect=defect)
+    before = repository_snapshot(repo.path)
+
+    assert (MIGRATION, "migration.inventory.dqc") in history_codes(repo)
+    assert repository_snapshot(repo.path) == before
+
+
+@pytest.mark.parametrize(
+    ("target_state", "policy_before"),
+    [("not_started", None), ("delivered", None), ("in_progress", "first_parent")],
+)
+def test_migration_rejects_wrong_target_state_or_existing_policy(
+    tmp_path: Path, target_state: str, policy_before: str | None
+) -> None:
+    repo = build_legacy_migration(
+        tmp_path, target_state=target_state, policy_before=policy_before
+    )
+
+    assert (MIGRATION, "migration.eligibility.state") in history_codes(repo)
+
+
+@pytest.mark.parametrize(
+    ("defect", "code"),
+    [
+        ("missing", "migration.inventory.paths"),
+        ("extra", "migration.inventory.paths"),
+        ("duplicate", "migration.inventory.order"),
+    ],
+)
+def test_migration_inventory_is_exact_and_unique(
+    tmp_path: Path, defect: str, code: str
+) -> None:
+    repo = build_legacy_migration(tmp_path, inventory_defect=defect)
+
+    assert (MIGRATION, code) in history_codes(repo)
+
+
+def test_migration_inventory_accepts_executable_regular_blob(tmp_path: Path) -> None:
+    repo = build_legacy_migration(tmp_path, inventory_mode="100755")
+
+    assert validate_project(repo.path) == []
 
 
 @pytest.mark.parametrize(

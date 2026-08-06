@@ -863,6 +863,124 @@ def _first_policy(states: list[dict[str, object] | None]) -> int | None:
     )
 
 
+def _has_complete_pre_migration_cycle(
+    session: _GitSession,
+    line_path: str,
+    commits: list[str],
+    trees: list[set[str]],
+    baseline: int,
+    activation: int,
+) -> bool:
+    """Prove at least one exact approved S/P/I/Q cycle before A0 and B."""
+    positions = {commit: index for index, commit in enumerate(commits)}
+    line_directory = line_path.rsplit("/", 1)[0]
+    ms_paths = sorted(
+        path
+        for path in trees[baseline - 1]
+        if MS_PATH.fullmatch(path)
+        and path.startswith(f"{line_directory}/micro-specs/")
+    )
+    for ms_path in ms_paths:
+        states = _line_states(session, ms_path, commits, trees)
+        start: int | None = None
+        previous: object = None
+        for index, state in enumerate(states[:baseline]):
+            status = state.get("implementation_status") if state is not None else None
+            if status == "in_progress" and previous != "in_progress":
+                start = index
+            if status == "implemented" and previous == "in_progress" and start is not None:
+                finish = index
+                iqc_path = _iqc_path_for(ms_path)
+                iqc_bytes = _file(session, commits[finish], iqc_path, trees[finish])
+                if iqc_bytes is None:
+                    previous = status
+                    continue
+                try:
+                    iqc = _frontmatter(iqc_bytes)
+                except HistoryUnavailable:
+                    previous = status
+                    continue
+                implementation = _resolved_commit(
+                    iqc.get("implementation_commit"), positions, len(commits[0])
+                )
+                specification = _resolved_commit(
+                    iqc.get("micro_spec_commit"), positions, len(commits[0])
+                )
+                approved = _historical_approved_revision(
+                    session, ms_path, states, commits, trees, start
+                )
+                if (
+                    iqc.get("id") == Path(iqc_path).stem
+                    and iqc.get("micro_spec") == Path(ms_path).stem
+                    and iqc.get("result") == "passed"
+                    and implementation is not None
+                    and specification is not None
+                    and approved == specification
+                    and specification < start < implementation < finish
+                    and finish < activation
+                    and _quality_boundary(
+                        session, iqc_path, iqc_bytes, commits, trees
+                    )
+                    == finish
+                    and not _governance_only_commit(session, commits[implementation])
+                ):
+                    return True
+            previous = status
+    return False
+
+
+def _valid_inventory_dqc(
+    session: _GitSession,
+    dqc_path: str,
+    content: bytes,
+    commits: list[str],
+    trees: list[set[str]],
+    baseline: int,
+) -> bool:
+    """Strictly bind an existing DQC to an applicable integration candidate."""
+    match = DQC_PATH.fullmatch(dqc_path)
+    if match is None:
+        return False
+    number = match.group(1)
+    try:
+        dqc = _frontmatter(content)
+    except HistoryUnavailable:
+        return False
+    candidate = dqc.get("candidate_commit")
+    positions = {commit: index for index, commit in enumerate(commits)}
+    candidate_index = (
+        positions.get(candidate) if isinstance(candidate, str) else None
+    )
+    if (
+        set(dqc) != {"id", "line", "candidate_commit", "result"}
+        or dqc.get("id") != f"dqc-{number}"
+        or dqc.get("line") != f"line-{number}"
+        or dqc.get("result") not in {"draft", "passed", "failed", "blocked"}
+        or candidate_index is None
+        or candidate_index >= baseline
+    ):
+        return False
+    rows = _first_parent_parent_rows(session, commits)
+    parents = rows[candidate_index]
+    if len(parents) != 3:
+        return False
+    manifest_path = f".proofline/lines/line-{number}/integration-{number}.md"
+    manifest_bytes = _file(
+        session, commits[candidate_index], manifest_path, trees[candidate_index]
+    )
+    try:
+        manifest = _frontmatter(manifest_bytes or b"")
+    except HistoryUnavailable:
+        return False
+    return (
+        set(manifest) == {"id", "line_id", "main_parent", "line_head"}
+        and manifest.get("id") == f"integration-{number}"
+        and manifest.get("line_id") == f"line-{number}"
+        and manifest.get("main_parent") == parents[1]
+        and manifest.get("line_head") == parents[2]
+    )
+
+
 def _validate_legacy_migration(
     session: _GitSession,
     line_path: str,
@@ -931,6 +1049,13 @@ def _validate_legacy_migration(
         or before_state.get("execution_status") not in {"in_progress", "verifying"}
     ):
         return error("migration.eligibility.state", "B^1 target은 fieldless non-terminal이어야 합니다.")
+    if not _has_complete_pre_migration_cycle(
+        session, line_path, commits, trees, baseline, activation
+    ):
+        return error(
+            "migration.eligibility.cycle",
+            "target Line에는 A0와 B 전에 끝난 valid approved S/P/I/Q cycle이 필요합니다.",
+        )
     changed = set(_changed_paths(session, commits[baseline]))
     if changed != {line_path, migration_path}:
         return error("migration.baseline.paths", "B는 policy Line과 migration artifact 두 path만 변경해야 합니다.")
@@ -982,6 +1107,15 @@ def _validate_legacy_migration(
             return error("migration.inventory.type", "evidence는 repository-native regular blob이어야 합니다.")
         if re.fullmatch(rf"[0-9a-f]{{{oid_length}}}", oid) is None or oid != entry[2]:
             return error("migration.inventory.oid", "evidence blob OID가 B^1 tree와 일치하지 않습니다.")
+        if DQC_PATH.fullmatch(path):
+            content = _file(session, commits[baseline - 1], path, trees[baseline - 1])
+            if content is None or not _valid_inventory_dqc(
+                session, path, content, commits, trees, baseline
+            ):
+                return error(
+                    "migration.inventory.dqc",
+                    "existing DQC는 canonical identity/result와 applicable integration candidate를 입증해야 합니다.",
+                )
     return [], baseline
 
 
