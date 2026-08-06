@@ -34,6 +34,7 @@ ARTIFACT_FIELDS = {
     },
     "dqc": {"id", "line", "candidate_commit", "result"},
     "integration": {"id", "line_id", "main_parent", "line_head"},
+    "legacy-migration": {"id", "line", "pre_migration_parent", "evidence"},
 }
 
 ARTIFACT_OPTIONAL_FIELDS = {
@@ -60,6 +61,7 @@ ARTIFACT_STATUSES = {
     "iqc": {"result": {"draft", "passed", "failed", "blocked"}},
     "dqc": {"result": {"draft", "passed", "failed", "blocked"}},
     "integration": {},
+    "legacy-migration": {},
 }
 
 REQUIRED_H2 = {
@@ -90,6 +92,9 @@ ARTIFACT_PATHS = {
     "dqc": re.compile(r"^\.proofline/lines/line-(\d{4})/dqc-\1\.md$"),
     "integration": re.compile(
         r"^\.proofline/lines/line-(\d{4})/integration-\1\.md$"
+    ),
+    "legacy-migration": re.compile(
+        r"^\.proofline/lines/line-(\d{4})/legacy-migration-\1\.md$"
     ),
 }
 
@@ -123,7 +128,7 @@ def _headings(body: str) -> tuple[list[str], list[str]]:
 
 
 def _headings_are_valid(kind: str, body: str) -> bool:
-    if kind in {"line", "integration"}:
+    if kind in {"line", "integration", "legacy-migration"}:
         return not body.strip()
     h1, h2 = _headings(body)
     if len(h1) != 1:
@@ -441,7 +446,9 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
             errors.append(
                 ValidationError(
                     relative,
-                    "artifact.frontmatter",
+                    "migration.schema.yaml"
+                    if kind == "legacy-migration"
+                    else "artifact.frontmatter",
                     "YAML 머리말을 해석할 수 없습니다.",
                 )
             )
@@ -457,6 +464,75 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
             continue
         artifacts[relative] = (kind, frontmatter)
         body = "\n".join(lines[closing + 1 :])
+        if kind == "legacy-migration":
+            expected = ARTIFACT_FIELDS[kind]
+            if set(frontmatter) != expected:
+                errors.append(
+                    ValidationError(
+                        relative,
+                        "migration.schema.fields",
+                        "migration artifact는 exact canonical field set만 가져야 합니다.",
+                    )
+                )
+            line_match = ARTIFACT_PATHS[kind].fullmatch(relative)
+            number = line_match.group(1) if line_match else None
+            scalar_values = (
+                frontmatter.get("id"),
+                frontmatter.get("line"),
+                frontmatter.get("pre_migration_parent"),
+            )
+            evidence = frontmatter.get("evidence")
+            entries_are_typed = isinstance(evidence, list) and bool(evidence)
+            if entries_are_typed:
+                entries_are_typed = all(
+                    isinstance(entry, dict)
+                    and set(entry) == {"path", "blob_oid"}
+                    and isinstance(entry.get("path"), str)
+                    and isinstance(entry.get("blob_oid"), str)
+                    for entry in evidence
+                )
+            if not all(isinstance(value, str) for value in scalar_values) or not entries_are_typed:
+                errors.append(
+                    ValidationError(
+                        relative,
+                        "migration.schema.type",
+                        "migration scalar와 evidence entry는 nonempty canonical string/list/mapping type이어야 합니다.",
+                    )
+                )
+            elif number is not None:
+                parent = frontmatter["pre_migration_parent"]
+                paths = [entry["path"] for entry in evidence]
+                oids = [entry["blob_oid"] for entry in evidence]
+                if (
+                    frontmatter["id"] != f"legacy-migration-{number}"
+                    or frontmatter["line"] != f"line-{number}"
+                ):
+                    errors.append(
+                        ValidationError(
+                            relative,
+                            "migration.path.identity",
+                            "migration path, id와 Line identity가 일치해야 합니다.",
+                        )
+                    )
+                if re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", parent) is None or any(
+                    re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", oid) is None
+                    for oid in oids
+                ):
+                    errors.append(
+                        ValidationError(
+                            relative,
+                            "migration.schema.oid",
+                            "commit/blob OID는 repository-native lowercase hex여야 합니다.",
+                        )
+                    )
+                if paths != sorted(paths) or len(paths) != len(set(paths)):
+                    errors.append(
+                        ValidationError(
+                            relative,
+                            "migration.inventory.order",
+                            "migration evidence path는 unique lexicographic order여야 합니다.",
+                        )
+                    )
         missing = ARTIFACT_FIELDS[kind] - set(frontmatter)
         if missing:
             errors.append(

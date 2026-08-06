@@ -11,6 +11,11 @@ import pytest
 
 from proofline.identity_ledger import decode_ledger, encode_ledger
 from proofline.line_writer import _render
+from test_implementation_history import (
+    MIGRATION_SCENARIO_IDS,
+    build_migration_scenario,
+    repository_snapshot,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -33,7 +38,9 @@ def test_source_checkout_line_init_fresh_and_legacy_e2e(tmp_path: Path) -> None:
         )
         subprocess.run(["git", "init", "-q", "-b", "main"], cwd=project, check=True)
         if legacy:
-            (project / ".proofline/line-identities.json").write_bytes(encode_ledger(set()))
+            (project / ".proofline/line-identities.json").write_bytes(
+                encode_ledger(set())
+            )
         subprocess.run(["git", "add", "-A"], cwd=project, check=True)
         subprocess.run(
             [
@@ -238,40 +245,52 @@ def test_source_checkout_rejects_ledger_only_delta_without_mutation(
     assert external.read_bytes() == b"external sentinel\n"
     assert not list(project.glob(".line-*"))
     assert not list(project.glob(".proofline-ledger-*"))
-    assert subprocess.run(
-        [
-            "git",
-            "status",
-            "--porcelain=v1",
-            "--branch",
-            "--untracked-files=all",
-        ],
-        cwd=project,
-        text=True,
-        capture_output=True,
-        check=True,
-    ).stdout == git_before
-    assert subprocess.run(
-        ["git", "for-each-ref", "--format=%(refname):%(objectname)"],
-        cwd=project,
-        text=True,
-        capture_output=True,
-        check=True,
-    ).stdout == refs_before
-    assert subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=project,
-        text=True,
-        capture_output=True,
-        check=True,
-    ).stdout == head_before
-    assert subprocess.run(
-        ["git", "remote", "-v"],
-        cwd=project,
-        text=True,
-        capture_output=True,
-        check=True,
-    ).stdout == remotes_before
+    assert (
+        subprocess.run(
+            [
+                "git",
+                "status",
+                "--porcelain=v1",
+                "--branch",
+                "--untracked-files=all",
+            ],
+            cwd=project,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout
+        == git_before
+    )
+    assert (
+        subprocess.run(
+            ["git", "for-each-ref", "--format=%(refname):%(objectname)"],
+            cwd=project,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout
+        == refs_before
+    )
+    assert (
+        subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout
+        == head_before
+    )
+    assert (
+        subprocess.run(
+            ["git", "remote", "-v"],
+            cwd=project,
+            text=True,
+            capture_output=True,
+            check=True,
+        ).stdout
+        == remotes_before
+    )
 
 
 @pytest.mark.candidate_build_only
@@ -296,7 +315,9 @@ def test_built_sdist_contains_project_schema_resources(tmp_path: Path) -> None:
         assert any(name.endswith(relative) for name in names)
 
 
-def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Path) -> None:
+def test_built_wheel_contains_and_reads_canonical_schema_templates(
+    tmp_path: Path,
+) -> None:
     provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
     if provided:
         wheel = Path(provided)
@@ -305,7 +326,10 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
         dist = tmp_path / "dist"
         build = subprocess.run(
             ["uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)],
-            cwd=ROOT, text=True, capture_output=True, check=False,
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
         )
         assert build.returncode == 0, build.stderr
         wheel = next(dist.glob("proofline-*.whl"))
@@ -315,18 +339,26 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
         assert "proofline_schema_v1_templates/artifacts/discovery.md" in names
         assert "proofline_schema_v1_templates/artifacts/dqc.md" in names
         assert "proofline_schema_v1_templates/artifacts/integration.md" in names
+        assert "proofline_schema_v1_templates/artifacts/legacy-migration.md" in names
         assert "proofline_schema_v1_templates/project/proofline.yaml" in names
         assert "proofline_schema_v1_templates/project/lines.gitkeep" in names
         assert "proofline_schema_v1_templates/project/criteria.gitkeep" in names
         assert "proofline_home/contracts/storage-and-retention.md" in names
         assert "proofline_home/templates/schema-v1/artifacts/line.md" in names
         assert "proofline_home/templates/schema-v1/artifacts/integration.md" in names
+        assert (
+            "proofline_home/templates/schema-v1/artifacts/legacy-migration.md" in names
+        )
+        assert (
+            "proofline_home/operations/legacy-nonterminal-history-migration.md" in names
+        )
         assert "proofline_home/skills/proofline-start-line/SKILL.md" in names
         run_iqc = "proofline_home/skills/proofline-run-iqc/SKILL.md"
         assert run_iqc in names
-        assert archive.read(run_iqc) == (
-            ROOT / "skills/proofline-run-iqc/SKILL.md"
-        ).read_bytes()
+        assert (
+            archive.read(run_iqc)
+            == (ROOT / "skills/proofline-run-iqc/SKILL.md").read_bytes()
+        )
         assert "proofline_home/agent-context.md" in names
         unpacked = tmp_path / "wheel"
         archive.extractall(unpacked)
@@ -389,7 +421,7 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
                 "from pathlib import Path; import proofline; "
                 "p=Path(proofline.__file__).resolve(); "
                 "assert 'site-packages' in p.parts; "
-                "assert version('proofline') == '0.6.0'"
+                "assert version('proofline') == '0.6.1'"
             ),
         ],
         cwd=tmp_path,
@@ -399,7 +431,6 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
     )
     assert provenance.returncode == 0, provenance.stderr
 
-
     installed_version = subprocess.run(
         [str(proofline), "--version"],
         cwd=tmp_path,
@@ -408,7 +439,7 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
         check=False,
     )
     assert installed_version.returncode == 0, installed_version.stderr
-    assert installed_version.stdout == "proofline 0.6.0\n"
+    assert installed_version.stdout == "proofline 0.6.1\n"
 
     isolated_home = tmp_path / "home"
     isolated_home.mkdir()
@@ -446,7 +477,11 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
     e2e_project = tmp_path / "checkout-outside-project"
     e2e_project.mkdir()
     git_init = subprocess.run(
-        ["git", "init", "-q", "-b", "main"], cwd=e2e_project, capture_output=True, text=True, check=False
+        ["git", "init", "-q", "-b", "main"],
+        cwd=e2e_project,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     assert git_init.returncode == 0, git_init.stderr
     git_metadata_before = subprocess.run(
@@ -506,13 +541,16 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
         check=False,
     )
     assert validate.returncode == 0, validate.stderr  # ac-0001
-    assert subprocess.run(
-        ["git", "for-each-ref", "--format=%(refname):%(objectname)"],
-        cwd=e2e_project,
-        text=True,
-        capture_output=True,
-        check=False,
-    ).stdout == git_metadata_before
+    assert (
+        subprocess.run(
+            ["git", "for-each-ref", "--format=%(refname):%(objectname)"],
+            cwd=e2e_project,
+            text=True,
+            capture_output=True,
+            check=False,
+        ).stdout
+        == git_metadata_before
+    )
 
     subprocess.run(
         ["git", "add", "-A"], cwd=e2e_project, capture_output=True, check=True
@@ -665,13 +703,16 @@ print(diagnostic, end='', file=sys.stderr)
         for path in project_home.rglob("*")
         if path.is_file()
     } == home_before
-    assert subprocess.run(
-        ["git", "for-each-ref", "--format=%(refname):%(objectname)"],
-        cwd=e2e_project,
-        text=True,
-        capture_output=True,
-        check=False,
-    ).stdout == git_metadata_before
+    assert (
+        subprocess.run(
+            ["git", "for-each-ref", "--format=%(refname):%(objectname)"],
+            cwd=e2e_project,
+            text=True,
+            capture_output=True,
+            check=False,
+        ).stdout
+        == git_metadata_before
+    )
 
     good_ledger = ledger.read_bytes()
     bad_ledger = encode_ledger({"line-0001", "line-0002"})
@@ -788,7 +829,9 @@ print(diagnostic, end='', file=sys.stderr)
         check=False,
     )
     assert legacy_actual.returncode == 0, legacy_actual.stderr
-    assert decode_ledger(legacy_ledger.read_bytes()).allocated_line_ids == ("line-0005",)
+    assert decode_ledger(legacy_ledger.read_bytes()).allocated_line_ids == (
+        "line-0005",
+    )
     legacy_validate = subprocess.run(
         [str(proofline), "validate"],
         cwd=legacy_project,
@@ -833,7 +876,10 @@ def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workfl
         dist = tmp_path / "dist"
         build = subprocess.run(
             ["uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)],
-            cwd=ROOT, text=True, capture_output=True, check=False,
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
         )
         assert build.returncode == 0, build.stderr
         wheel = next(dist.glob("proofline-*.whl"))
@@ -849,12 +895,98 @@ def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workfl
         "skills/proofline-run-dqc/SKILL.md": "proofline_home/skills/proofline-run-dqc/SKILL.md",
         "skills/proofline-run-dqc/scripts/preflight_integration_candidate.py": "proofline_home/skills/proofline-run-dqc/scripts/preflight_integration_candidate.py",
         "templates/schema-v1/artifacts/integration.md": "proofline_home/templates/schema-v1/artifacts/integration.md",
+        "templates/schema-v1/artifacts/legacy-migration.md": "proofline_home/templates/schema-v1/artifacts/legacy-migration.md",
+        "docs/operations/legacy-nonterminal-history-migration.md": "proofline_home/operations/legacy-nonterminal-history-migration.md",
     }
     with zipfile.ZipFile(wheel) as archive:
         for source, packaged in resources.items():
             assert archive.read(packaged) == (ROOT / source).read_bytes()
-        skill = archive.read(resources["skills/proofline-start-implementation/SKILL.md"]).decode()
+        skill = archive.read(
+            resources["skills/proofline-start-implementation/SKILL.md"]
+        ).decode()
         assert "별도 lifecycle-only `in_progress` commit `P`" in skill
-        assert "그 다음 `implementation_history: first_parent`만 추가한 별도 commit `B`" in skill
-        script = archive.read(resources["skills/proofline-start-implementation/scripts/create_worktree.py"])
+        assert (
+            "그 다음 `implementation_history: first_parent`만 추가한 별도 commit `B`"
+            in skill
+        )
+        script = archive.read(
+            resources[
+                "skills/proofline-start-implementation/scripts/create_worktree.py"
+            ]
+        )
         assert b"approval_commit" in script
+
+
+@pytest.mark.candidate_build_only
+def test_source_and_isolated_wheel_share_real_git_migration_registry(
+    tmp_path: Path,
+) -> None:
+    provided = os.environ.get("PROOFLINE_HOSTED_CANDIDATE_WHEEL")
+    if provided:
+        wheel = Path(provided)
+        assert wheel.is_absolute() and wheel.is_file()
+    else:
+        dist = tmp_path / "dist"
+        build = subprocess.run(
+            ["uv", "build", "--wheel", "--out-dir", str(dist)],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert build.returncode == 0, build.stderr
+        wheel = next(dist.glob("proofline-0.6.1-*.whl"))
+
+    venv = tmp_path / "migration-wheel-env"
+    create = subprocess.run(
+        ["uv", "venv", "--python", sys.executable, str(venv)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert create.returncode == 0, create.stderr
+    python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    proofline = venv / ("Scripts/proofline.exe" if os.name == "nt" else "bin/proofline")
+    install = subprocess.run(
+        ["uv", "pip", "install", "--python", str(python), str(wheel)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert install.returncode == 0, install.stderr
+
+    source_env = os.environ.copy()
+    source_env["PYTHONPATH"] = str(ROOT / "src")
+    source_command = [
+        sys.executable,
+        "-c",
+        "from proofline.cli import main; raise SystemExit(main())",
+        "validate",
+    ]
+    for scenario_id in MIGRATION_SCENARIO_IDS:
+        repo = build_migration_scenario(
+            tmp_path / f"scenario-{scenario_id}", scenario_id
+        )
+        before = repository_snapshot(repo.path)
+        source = subprocess.run(
+            source_command,
+            cwd=repo.path,
+            env=source_env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert repository_snapshot(repo.path) == before
+        installed = subprocess.run(
+            [str(proofline), "validate"],
+            cwd=repo.path,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert repository_snapshot(repo.path) == before
+        assert (installed.returncode, installed.stdout, installed.stderr) == (
+            source.returncode,
+            source.stdout,
+            source.stderr,
+        )

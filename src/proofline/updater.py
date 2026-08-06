@@ -238,6 +238,15 @@ def run_update(*, check: bool = False, version: str | None = None, adopt: bool =
     current = metadata.version("proofline")
     distribution = metadata.distribution("proofline")
     provenance = detect_provenance(distribution)
+    if version is not None and parse_version(version) == parse_version(current):
+        exact_decision = decide_update(current, version, provenance, check=check, adopt=adopt)
+        if exact_decision.status == "already-current":
+            try:
+                exact_home_state = home_writer.preflight_home(packaged_home_payload())
+            except home_writer.HomeInitError as exc:
+                raise UpdateError(f"home preflight failed: {exc}") from exc
+            if exact_home_state != "absent":
+                return exact_decision
     release = discover_release(version)
     decision = decide_update(current, release.version, provenance, check=check, adopt=adopt)
     current_payload = packaged_home_payload()

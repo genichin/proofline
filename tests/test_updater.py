@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import proofline.updater as updater
 from proofline.updater import (
     UpdateError,
     decide_update,
@@ -14,6 +15,7 @@ from proofline.updater import (
     parse_checksum,
     parse_release,
     parse_version,
+    run_update,
 )
 
 
@@ -77,6 +79,65 @@ def test_decision_handles_check_current_update_and_downgrade() -> None:
     assert decide_update("0.2.0", "0.2.0", "source", check=False, adopt=True).mutate
     with pytest.raises(UpdateError, match="downgrade"):
         decide_update("0.2.0", "0.1.0", "archive", check=False, adopt=False)
+
+
+def test_exact_current_archive_check_does_not_require_published_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Dist:
+        def read_text(self, name: str) -> str | None:
+            assert name == "direct_url.json"
+            return json.dumps({"url": "file:///candidate.whl", "archive_info": {}})
+
+    monkeypatch.setattr(updater.metadata, "version", lambda name: "0.6.1")
+    monkeypatch.setattr(updater.metadata, "distribution", lambda name: Dist())
+    monkeypatch.setattr(updater.home_writer, "preflight_home", lambda payload: "current")
+
+    def unexpected_discovery(version: str | None) -> object:
+        raise AssertionError(f"release discovery must not run for exact current: {version}")
+
+    monkeypatch.setattr(updater, "discover_release", unexpected_discovery)
+
+    result = run_update(check=True, version="0.6.1")
+
+    assert result.status == "already-current"
+    assert result.exit_code == 0
+    assert not result.mutate
+
+
+@pytest.mark.parametrize(
+    ("current", "target", "provenance", "home_state"),
+    [
+        ("0.6.1", "0.6.0", "archive", "current"),
+        ("0.6.1", "0.6.2", "archive", "current"),
+        ("0.6.1", "0.6.1", "source", "current"),
+        ("0.6.1", "0.6.1", "archive", "absent"),
+    ],
+)
+def test_non_exact_current_archive_paths_preserve_release_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+    current: str,
+    target: str,
+    provenance: str,
+    home_state: str,
+) -> None:
+    class Dist:
+        def read_text(self, name: str) -> str | None:
+            assert name == "direct_url.json"
+            detail = "archive_info" if provenance == "archive" else "dir_info"
+            return json.dumps({"url": "file:///candidate", detail: {}})
+
+    monkeypatch.setattr(updater.metadata, "version", lambda name: current)
+    monkeypatch.setattr(updater.metadata, "distribution", lambda name: Dist())
+    monkeypatch.setattr(updater.home_writer, "preflight_home", lambda payload: home_state)
+
+    def observed_discovery(version: str | None) -> object:
+        raise RuntimeError(f"discovery-called:{version}")
+
+    monkeypatch.setattr(updater, "discover_release", observed_discovery)
+
+    with pytest.raises(RuntimeError, match=f"discovery-called:{target}"):
+        run_update(check=True, version=target)
 
 
 def test_detect_provenance_distinguishes_source_archive_and_unknown() -> None:

@@ -10,7 +10,12 @@ import pytest
 
 from proofline.validator import validate_project
 import proofline.implementation_history as implementation_history
-from test_implementation_history import HistoryRepo, LINE, repository_snapshot
+from test_implementation_history import (
+    HistoryRepo,
+    LINE,
+    build_legacy_migration,
+    repository_snapshot,
+)
 
 
 INTEGRATION = ".proofline/lines/line-0001/integration-0001.md"
@@ -208,6 +213,50 @@ def test_main_first_candidate_accepts_designated_line_spine_and_manifest(
 ) -> None:
     repo, _, _, _ = build_candidate(tmp_path)
 
+    assert validate_project(repo.path) == []
+
+
+def test_migrated_line_requires_fresh_recovery_integration_and_dqc(
+    tmp_path: Path,
+) -> None:
+    repo = build_legacy_migration(tmp_path)
+    baseline = repo.commits["migration"]
+    git(repo.path, "switch", "-qc", "line-0001")
+    p2 = repo.start("recovery-start")
+    i2 = repo.product_commit("recovery-implementation")
+    repo.write_line("verifying", policy="first_parent")
+    q2 = repo.finish(i2, "recovery-quality")
+    line_head = q2
+
+    git(repo.path, "switch", "-q", "main")
+    (repo.path / "main-governance.txt").write_text("main advanced\n", encoding="utf-8")
+    main_parent = repo.commit("main", "advance main governance")
+    merged = subprocess.run(
+        ("git", "merge", "--no-ff", "--no-commit", "line-0001"),
+        cwd=repo.path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert merged.returncode == 0, merged.stderr
+    (repo.path / INTEGRATION).write_text(
+        "---\n"
+        'id: "integration-0001"\nline_id: "line-0001"\n'
+        f'main_parent: "{main_parent}"\nline_head: "{line_head}"\n'
+        "---\n",
+        encoding="utf-8",
+    )
+    candidate = repo.commit("integration", "integrate migrated Line recovery")
+    dqc = write_dqc(repo, candidate)
+
+    for ancestor, descendant in (
+        (baseline, p2),
+        (p2, i2),
+        (i2, q2),
+        (q2, candidate),
+        (candidate, dqc),
+    ):
+        assert git(repo.path, "merge-base", "--is-ancestor", ancestor, descendant) == ""
     assert validate_project(repo.path) == []
 
 
