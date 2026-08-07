@@ -70,6 +70,7 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
         for source_root, packaged_root in (
             (ROOT / "docs/contracts", "proofline_home/contracts"),
             (ROOT / "docs/operations", "proofline_home/operations"),
+            (ROOT / "templates", "proofline_home/templates"),
             (ROOT / "skills", "proofline_home/skills"),
         ):
             for source in source_root.rglob("*"):
@@ -130,12 +131,19 @@ def test_built_wheel_operations_match_source_inventory_and_payload_bytes(tmp_pat
     env["HOME"] = str(home)
     initialized_home = subprocess.run([str(proofline), "init"], cwd=project, env=env, text=True, capture_output=True)
     assert initialized_home.returncode == 0, initialized_home.stderr
-    assert (home / ".proofline/skills/proofline-start-requirement/SKILL.md").read_bytes() == (
-        ROOT / "skills/proofline-start-requirement/SKILL.md"
-    ).read_bytes()
-    assert (home / ".proofline/skills/proofline-approve-specification/SKILL.md").read_bytes() == (
-        ROOT / "skills/proofline-approve-specification/SKILL.md"
-    ).read_bytes()
+    for relative in (
+        "contracts/document-format.md",
+        "templates/schema-v1/artifacts/discovery.md",
+        "templates/schema-v1/artifacts/requirement.md",
+        "templates/schema-v1/artifacts/acceptance-criterion.md",
+        "skills/proofline-start-line/SKILL.md",
+        "skills/proofline-start-requirement/SKILL.md",
+        "skills/proofline-approve-specification/SKILL.md",
+    ):
+        source = ROOT / (
+            f"docs/{relative}" if relative.startswith("contracts/") else relative
+        )
+        assert (home / ".proofline" / relative).read_bytes() == source.read_bytes()
     assert not (
         home
         / ".proofline/skills/proofline-approve-specification/scripts/audit_transition.py"

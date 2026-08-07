@@ -1,7 +1,7 @@
 ---
 name: proofline-start-line
 description: Use when starting a new ProofLine Line and writing its evidence-grounded Discovery draft without granting the agent confirmation authority.
-version: 1.2.0
+version: 1.3.0
 author: ProofLine
 license: MIT
 metadata:
@@ -82,6 +82,10 @@ Evidence가 부족하면 추측으로 채우지 않고 `{{NEEDS_EVIDENCE: ...}}`
 REQ 작성 전에 변경을 `create`, `update`, `retire`, 기존 active AC를 변경하지 않는 `satisfy`, `release evidence`, 또는 Line 밖 `housekeeping`으로 분류한다. `create` 전에 가장 가까운 active AC, `update` 가능성, version-independent 동작인지, 독립 PASS/FAIL과 장기 active 가치가 있는지 확인한다.
 
 Version·tag·checksum 같은 release-specific 표현은 review warning으로 표시하되 validator hard error로 단정하지 않는다. `create/update/satisfy`가 불명확하면 사용자가 결정할 Open Question으로 남긴다.
+
+## Authored-content Language Guidance
+
+사람이 작성하는 본문은 원칙적으로 한국어로 작성한다. H1 제목·구조적 heading, ID, status, YAML key, CLI, 코드, path, 고유 기술 용어 및 영어가 의미를 더 정확하게 전달하는 내용은 영어로 유지할 수 있다. 이는 authoring guidance이며 artifact 언어를 validator·QC·CI의 PASS/FAIL 조건으로 만들지 않는다.
 
 ## Discovery 작성
 

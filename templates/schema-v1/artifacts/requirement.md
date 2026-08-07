@@ -13,7 +13,7 @@ criteria:
 
 ## Objective
 
-{{TODO: 이번 Line에서 전달할 관찰 가능한 결과를 작성한다}}
+{{TODO: 사람이 작성하는 본문은 원칙적으로 한국어로 작성한다. H1 제목·구조적 heading, ID, status, YAML key, CLI, 코드, path, 고유 기술 용어 및 영어가 의미를 더 정확하게 전달하는 내용은 영어로 유지할 수 있다. 이번 Line에서 전달할 관찰 가능한 결과를 작성한다}}
 
 ## Scope
 

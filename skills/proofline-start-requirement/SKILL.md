@@ -1,7 +1,7 @@
 ---
 name: proofline-start-requirement
 description: Use when creating a draft ProofLine Requirement and AC scaffolds from a confirmed Discovery without granting approval authority.
-version: 1.0.0
+version: 1.1.0
 author: ProofLine
 license: MIT
 metadata:
@@ -33,6 +33,10 @@ satisfy: []
 ```
 
 `create`는 중복 없는 한 줄 제목 list이고 나머지는 existing active AC ID list다. 같은 ID를 list 안이나 여러 list에 중복하지 않는다.
+
+## Authored-content Language Guidance
+
+사람이 작성하는 본문은 원칙적으로 한국어로 작성한다. H1 제목·구조적 heading, ID, status, YAML key, CLI, 코드, path, 고유 기술 용어 및 영어가 의미를 더 정확하게 전달하는 내용은 영어로 유지할 수 있다. 이는 authoring guidance이며 artifact 언어를 validator·QC·CI의 PASS/FAIL 조건으로 만들지 않는다.
 
 ## Workflow
 

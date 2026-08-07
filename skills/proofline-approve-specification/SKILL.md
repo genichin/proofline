@@ -1,7 +1,7 @@
 ---
 name: proofline-approve-specification
 description: Use when presenting and approving a ProofLine REQ and its AC specification through explicit user authority and current canonical validation.
-version: 3.0.0
+version: 3.1.0
 author: ProofLine
 license: MIT
 metadata:
@@ -33,6 +33,10 @@ metadata:
 REQ의 Objective·Scope·Non-Goals와 대상 AC의 Criterion·Verification을 사용자에게 보여주고 명시적인 approval을 기다린다. 승인 없이 REQ를 `approved`, AC를 `active` 또는 `retired`로 전환하지 않는다.
 
 `criteria.satisfy` 대상은 기존 active AC의 의미를 변경하지 않는 binding이다. Approval 전후에 AC 본문과 status를 변경하지 않는다. 의미 변경이 필요하면 `criteria.update`로 고쳐 다시 검토한다.
+
+## Authored-content Language Guidance
+
+사람이 작성하는 본문은 원칙적으로 한국어로 작성한다. H1 제목·구조적 heading, ID, status, YAML key, CLI, 코드, path, 고유 기술 용어 및 영어가 의미를 더 정확하게 전달하는 내용은 영어로 유지할 수 있다. 이는 authoring guidance이며 artifact 언어를 validator·QC·CI의 PASS/FAIL 조건으로 만들지 않는다.
 
 ## Approval Workflow
 

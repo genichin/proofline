@@ -7,7 +7,7 @@ status: draft
 
 ## Criterion
 
-{{TODO: 필요한 선행 조건과 경계를 포함하여 독립적으로 PASS 또는 FAIL을 판정할 수 있는 하나의 규범적 시스템 동작을 작성한다}}
+{{TODO: 사람이 작성하는 본문은 원칙적으로 한국어로 작성한다. H1 제목·구조적 heading, ID, status, YAML key, CLI, 코드, path, 고유 기술 용어 및 영어가 의미를 더 정확하게 전달하는 내용은 영어로 유지할 수 있다. 필요한 선행 조건과 경계를 포함하여 독립적으로 PASS 또는 FAIL을 판정할 수 있는 하나의 규범적 시스템 동작을 작성한다}}
 
 ## Verification
 

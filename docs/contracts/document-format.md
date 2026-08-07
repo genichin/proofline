@@ -27,6 +27,12 @@ Line은 frontmatter-only이다. Discovery, REQ와 AC는 정확히 하나의 H1�
 
 Draft artifact도 H1과 필수 H2를 모두 가져야 한다. 미완성 section은 비우지 않고 허용된 governance placeholder를 사용한다. `confirmed`, `approved`, `active` 또는 `retired`로 전환하기 전에는 필수 section에 실질적인 내용이 있고 placeholder가 없어야 한다. `withdrawn` artifact는 철회 시점의 미완성 내용을 보존할 수 있다.
 
+## Authored-content language guidance
+
+사람이 작성하는 본문은 원칙적으로 한국어로 작성한다. H1 제목·구조적 heading, ID, status, YAML key, CLI, 코드, path, 고유 기술 용어 및 영어가 의미를 더 정확하게 전달하는 내용은 영어로 유지할 수 있다.
+
+이 원칙은 authoring guidance이며 자연어 validation gate가 아니다. Validator, QC와 CI는 artifact의 한국어 여부만으로 구조적으로 유효한 artifact를 실패시키지 않는다. Source template·contract·skill과 wheel·initialized HOME resource의 지침 및 bytes 정합은 검사할 수 있지만 개별 artifact 본문의 언어를 PASS/FAIL 조건으로 사용하지 않는다.
+
 ## Schema 소유권
 
 | Artifact | Schema 소유 문서 |
