@@ -9,6 +9,8 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from proofline.identity_allocator import IdentityAllocator, decode_allocator
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -76,6 +78,7 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
                     assert archive.read(packaged) == source.read_bytes()
 
 
+@pytest.mark.candidate_build_only
 def test_built_sdist_contains_allocator_and_requirement_resources(tmp_path: Path) -> None:
     dist = tmp_path / "dist"
     built = subprocess.run(
