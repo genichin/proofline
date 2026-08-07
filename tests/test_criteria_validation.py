@@ -106,6 +106,10 @@ def add_update_owner(project: Path, number: int = 2, status: str = "draft") -> s
     req_id = f"req-{number:04d}"
     line = project / ".proofline/lines" / line_id
     line.mkdir(parents=True)
+    allocator = project / ".proofline/identities.json"
+    value = json.loads(allocator.read_text(encoding="utf-8"))
+    value["next_line_number"] = max(value["next_line_number"], number + 1)
+    allocator.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
     (line / f"{line_id}.md").write_text(
         f'---\nid: "{line_id}"\n---\n',
         encoding="utf-8",
@@ -515,7 +519,7 @@ def test_req_rejects_ac_in_multiple_criteria_lists(tmp_path: Path) -> None:
     assert "ac-0001" in duplicate[0].message
 
 
-def test_req_allows_same_ac_repeated_inside_one_list(tmp_path: Path) -> None:
+def test_req_rejects_same_ac_repeated_inside_one_list(tmp_path: Path) -> None:
     project = copy_valid_project(tmp_path)
     req = project / REQ
     replace(
@@ -524,7 +528,7 @@ def test_req_allows_same_ac_repeated_inside_one_list(tmp_path: Path) -> None:
         "    - ac-0001\n    - ac-0001\n    - ac-0002",
     )
 
-    assert errors_for(project, REQ) == []
+    assert [error.code for error in errors_for(project, REQ)] == ["criteria.duplicate"]
 
 
 def test_satisfy_rejects_retired_ac(tmp_path: Path) -> None:

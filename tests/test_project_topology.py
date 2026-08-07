@@ -14,6 +14,9 @@ def make_minimal(root: Path) -> Path:
     (root / ".proofline/lines").mkdir(parents=True)
     (root / ".proofline/criteria").mkdir()
     (root / "proofline.yaml").write_text(CONFIG, encoding="utf-8")
+    (root / ".proofline/identities.json").write_text(
+        '{\n  "schema_version": 1,\n  "next_line_number": 1,\n  "next_ac_number": 1\n}\n'
+    )
     return root
 
 

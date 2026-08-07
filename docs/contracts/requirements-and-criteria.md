@@ -6,6 +6,15 @@
 
 REQ는 해당 Line의 전체 변경 범위를 AC ID로 선언한다.
 
+Confirmed Discovery에서 draft scaffold를 시작할 때는 exact `create`, `update`, `retire`, `satisfy` key를 가진 UTF-8 YAML/JSON manifest를 사용한다. `create`에는 중복 없는 한 줄 제목을, 나머지 list에는 중복·교차 overlap 없는 기존 active `ac-NNNN`을 기록한다.
+
+```bash
+proofline requirement init line-0001 --manifest admission.yaml --dry-run
+proofline requirement init line-0001 --manifest admission.yaml
+```
+
+명령은 신규 AC ID, 모든 AC draft, REQ draft와 allocator 전진을 하나의 repository-local transaction으로 처리한다.
+
 ```yaml
 ---
 id: req-0001
@@ -60,8 +69,8 @@ status: draft
 - `active` AC는 프로젝트가 지속적으로 만족해야 하는 version-independent product behavior 또는 constraint를 표현한다.
 - 특정 release version, tag, commit, filename, checksum과 publication transaction은 AC가 아니다. 해당 프로젝트의 release 기록에 남긴다.
 - 승인 전 AC는 candidate 사양이며 구현 기준인 canonical specification baseline이 아니다.
-- REQ 승인 Git revision의 AC 내용이 해당 Line의 canonical specification baseline이 된다.
-- 과거 AC 내용과 이전 승인 baseline은 Git history에서 확인할 수 있지만 ProofLine validator는 그 chronology를 보증하지 않는다.
+- Current canonical `approved` REQ와 그 대상 AC의 계약상 status·내용이 해당 Line의 specification baseline을 형성한다.
+- Git history는 승인된 specification revision을 보존할 수 있지만 approval authority 또는 approval transition validation 입력이 아니다. 아래 `criteria.satisfy`의 historical active binding 검증은 별도 lifecycle 규칙으로 유지한다.
 
 ## REQ specification status
 
@@ -88,8 +97,7 @@ draft ───────→ approved
 
 - `confirmed` Discovery만 같은 Line의 REQ 승인 근거가 될 수 있다.
 - 사용자만 REQ와 대상 AC의 의미를 승인할 수 있다.
-- REQ `draft → approved`와 대상 AC status 전환만 기록하는 별도 commit은 권장 감사 경로지만 필수 chronology는 아니다.
-- Prior draft commit 없이 approved REQ와 대상 AC를 처음 기록한 direct approval도 유효하다.
+- 사용자의 명시적 approval 뒤 REQ와 대상 AC를 계약상 status로 전환하고 current canonical tree를 검증한다.
 - Approved REQ 또는 대상 AC의 의미를 바꾸려면 REQ를 `draft`로 전환해 함께 재검토하고 재승인한다.
 - `withdrawn`은 terminal status이다. 같은 변경을 다시 진행하려면 새 Line과 Discovery/REQ를 만든다.
 - 작업·검증·배포 상태는 REQ `status`에 기록하지 않는다.

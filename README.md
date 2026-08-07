@@ -165,8 +165,10 @@ proofline validate
 새 Line 생성을 미리 확인한 뒤 생성합니다.
 
 ```bash
-proofline line init line-NNNN --title "TITLE" --dry-run
-proofline line init line-NNNN --title "TITLE"
+proofline line init --title "TITLE" --dry-run
+proofline line init --title "TITLE"
+proofline requirement init line-NNNN --manifest admission.yaml --dry-run
+proofline requirement init line-NNNN --manifest admission.yaml
 ```
 
 자세한 tool environment 운영 계약은 [`docs/operations/proofline-tool-environment.md`](docs/operations/proofline-tool-environment.md)를 참고하세요.

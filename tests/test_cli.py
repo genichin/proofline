@@ -1,13 +1,19 @@
 import subprocess
+import os
+import sys
 from pathlib import Path
 
 FIXTURE = Path(__file__).parent / "fixtures" / "valid-minimal"
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def run_validate(root: Path) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(ROOT / "src")
     return subprocess.run(
-        ["proofline", "validate"],
+        [sys.executable, "-c", "from proofline.cli import main; raise SystemExit(main())", "validate"],
         cwd=root,
+        env=env,
         check=False,
         capture_output=True,
         text=True,
@@ -20,6 +26,9 @@ def test_cli_returns_zero_for_valid_project_config(tmp_path: Path) -> None:
     (tmp_path / "proofline.yaml").write_text(
         "schema_version: 1\nartifact_root: .proofline\n",
         encoding="utf-8",
+    )
+    (tmp_path / ".proofline/identities.json").write_text(
+        '{\n  "schema_version": 1,\n  "next_line_number": 1,\n  "next_ac_number": 1\n}\n'
     )
 
     result = run_validate(tmp_path)

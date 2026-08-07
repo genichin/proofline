@@ -16,7 +16,7 @@
 
 | Artifact | 역할 | 소유하는 canonical 사실 |
 | --- | --- | --- |
-| Line identity ledger | 프로젝트 전역 Line allocation 기록 | canonical main에 예약된 `line-NNNN` 집합 |
+| Identity allocator | 프로젝트 전역 Line·AC allocation 기록 | 다음 `line-NNNN`과 `ac-NNNN` 번호 |
 | Line | 독립적인 변경 단위 | Discovery와 REQ의 공통 stable identity |
 | Discovery | 변경이 필요한 이유와 범위 탐색 | 문제, 근거, 범위와 위험 |
 | REQ | 해당 Line에서 승인한 변경 계약 | 생성·수정·폐기·충족할 AC 집합과 Line-level scope |
@@ -55,7 +55,8 @@ AC              .proofline/criteria/ac-<NNNN>.md
 ├── AGENTS.md
 ├── proofline.yaml
 └── .proofline/
-    ├── line-identities.json
+    ├── identities.json
+    ├── line-identities.json  # optional opaque retained data
     ├── lines/
     │   ├── .gitkeep
     │   └── line-0001/
@@ -68,7 +69,7 @@ AC              .proofline/criteria/ac-<NNNN>.md
         └── ac-0002.md
 ```
 
-AC는 특정 Line directory에 복사하거나 소유시키지 않는다. `.proofline/lines/.gitkeep`과 `.proofline/criteria/.gitkeep`은 empty directory 보존용 zero-byte support marker이며 lifecycle artifact가 아니다.
+`.proofline/identities.json`은 exact `schema_version`, `next_line_number`, `next_ac_number` key를 가진 유일한 신규 allocation authority다. Counter `10000`은 소진 sentinel이며 실제 할당 범위는 `0001`부터 `9999`까지다. AC는 특정 Line directory에 복사하거나 소유시키지 않는다. `.proofline/lines/.gitkeep`과 `.proofline/criteria/.gitkeep`은 empty directory 보존용 zero-byte support marker이며 lifecycle artifact가 아니다.
 
 ## Opaque retained data compatibility
 

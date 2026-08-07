@@ -6,8 +6,9 @@ from pathlib import Path
 
 import yaml
 
-from .identity_ledger import LEDGER_PATH, validate_ledger
+from .identity_allocator import ALLOCATOR_PATH, LEGACY_PATH, validate_allocator
 from .project_schema import REQUIRED_DIRECTORIES, SUPPORT_MARKERS
+from .transaction import read_regular_beneath
 from .yaml_strict import safe_load_unique
 
 
@@ -47,22 +48,22 @@ PLACEHOLDER = re.compile(
 PLACEHOLDER_CANDIDATE = re.compile(r"\{\{[^\n]*?\}\}")
 
 ARTIFACT_PATHS = {
-    "line": re.compile(r"^\.proofline/lines/line-(\d{4})/line-\1\.md$"),
-    "dcy": re.compile(r"^\.proofline/lines/line-(\d{4})/dcy-\1\.md$"),
-    "req": re.compile(r"^\.proofline/lines/line-(\d{4})/req-\1\.md$"),
-    "ac": re.compile(r"^\.proofline/criteria/ac-\d{4}\.md$"),
+    "line": re.compile(r"^\.proofline/lines/line-((?!0000)\d{4})/line-\1\.md$"),
+    "dcy": re.compile(r"^\.proofline/lines/line-((?!0000)\d{4})/dcy-\1\.md$"),
+    "req": re.compile(r"^\.proofline/lines/line-((?!0000)\d{4})/req-\1\.md$"),
+    "ac": re.compile(r"^\.proofline/criteria/ac-(?!0000)\d{4}\.md$"),
 }
 
 LEGACY_RETAINED_PATHS = (
     re.compile(
-        r"^\.proofline/lines/line-(\d{4})/micro-specs/ms-\1-\d{3}\.md$"
+        r"^\.proofline/lines/line-((?!0000)\d{4})/micro-specs/ms-\1-\d{3}\.md$"
     ),
     re.compile(
-        r"^\.proofline/lines/line-(\d{4})/micro-specs/iqc-\1-\d{3}\.md$"
+        r"^\.proofline/lines/line-((?!0000)\d{4})/micro-specs/iqc-\1-\d{3}\.md$"
     ),
-    re.compile(r"^\.proofline/lines/line-(\d{4})/dqc-\1\.md$"),
-    re.compile(r"^\.proofline/lines/line-(\d{4})/integration-\1\.md$"),
-    re.compile(r"^\.proofline/lines/line-(\d{4})/legacy-migration-\1\.md$"),
+    re.compile(r"^\.proofline/lines/line-((?!0000)\d{4})/dqc-\1\.md$"),
+    re.compile(r"^\.proofline/lines/line-((?!0000)\d{4})/integration-\1\.md$"),
+    re.compile(r"^\.proofline/lines/line-((?!0000)\d{4})/legacy-migration-\1\.md$"),
 )
 
 LEGACY_CRITERIA_KEYS = {"create", "update", "retire"}
@@ -127,7 +128,7 @@ def _criteria_lists(value: object) -> dict[str, list[str]] | None:
     result: dict[str, list[str]] = {}
     for key, items in value.items():
         if not isinstance(items, list) or not all(
-            isinstance(item, str) and re.fullmatch(r"ac-\d{4}", item)
+            isinstance(item, str) and re.fullmatch(r"ac-(?!0000)\d{4}", item)
             for item in items
         ):
             return None
@@ -138,7 +139,7 @@ def _criteria_lists(value: object) -> dict[str, list[str]] | None:
 def _reference_targets(
     kind: str, relative: str, frontmatter: dict[str, object]
 ) -> tuple[list[str], bool]:
-    line_match = re.search(r"\.proofline/lines/(line-\d{4})/", relative)
+    line_match = re.search(r"\.proofline/lines/(line-(?!0000)\d{4})/", relative)
     line_id = line_match.group(1) if line_match else None
     targets: list[str] = []
     valid = True
@@ -154,14 +155,14 @@ def _reference_targets(
         if "discovery" in frontmatter:
             add(
                 frontmatter["discovery"],
-                r"dcy-\d{4}",
+                r"dcy-(?!0000)\d{4}",
                 f".proofline/lines/{line_id}/{{value}}.md",
             )
         criteria = _criteria_lists(frontmatter.get("criteria"))
         if criteria is not None:
             for values in criteria.values():
                 for value in values:
-                    add(value, r"ac-\d{4}", ".proofline/criteria/{value}.md")
+                    add(value, r"ac-(?!0000)\d{4}", ".proofline/criteria/{value}.md")
         elif "criteria" in frontmatter:
             valid = False
     return targets, valid
@@ -173,8 +174,8 @@ def _validate_topology(root: Path) -> list[ValidationError]:
     valid_directories = (
         re.compile(r"^\.proofline$"),
         re.compile(r"^\.proofline/(?:lines|criteria)$"),
-        re.compile(r"^\.proofline/lines/line-\d{4}$"),
-        re.compile(r"^\.proofline/lines/line-\d{4}/micro-specs$"),
+        re.compile(r"^\.proofline/lines/line-(?!0000)\d{4}$"),
+        re.compile(r"^\.proofline/lines/line-(?!0000)\d{4}/micro-specs$"),
     )
     markers = SUPPORT_MARKERS
     artifact_root = root / ".proofline"
@@ -299,7 +300,7 @@ def _validate_topology(root: Path) -> list[ValidationError]:
                 )
             continue
         if stat.S_ISREG(state.st_mode) and (
-            path.suffix == ".md" or relative == LEDGER_PATH
+            path.suffix == ".md" or relative in {ALLOCATOR_PATH, LEGACY_PATH}
         ):
             continue
         errors.append(
@@ -355,7 +356,10 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
             )
             continue
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
+            snapshot = read_regular_beneath(root, relative)
+            if snapshot.identity != (candidate_state.st_dev, candidate_state.st_ino):
+                raise OSError("artifact changed while opening")
+            lines = snapshot.data.decode("utf-8").splitlines()
         except (OSError, UnicodeError):
             errors.append(
                 ValidationError(
@@ -446,6 +450,14 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
                     )
                 memberships: dict[str, set[str]] = {}
                 for key, items in criteria.items():
+                    if len(items) != len(set(items)):
+                        errors.append(
+                            ValidationError(
+                                relative,
+                                "criteria.duplicate",
+                                f"{key} list에 AC ID가 중복되었습니다.",
+                            )
+                        )
                     for item in set(items):
                         memberships.setdefault(item, set()).add(key)
                 duplicates = sorted(item for item, keys in memberships.items() if len(keys) > 1)
@@ -510,7 +522,9 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
                 )
             )
         for target in targets:
-            if not (root / target).is_file():
+            try:
+                read_regular_beneath(root, target)
+            except OSError:
                 errors.append(
                     ValidationError(
                         relative,
@@ -606,8 +620,8 @@ def _draft_satisfy_uses_last_active_binding(
 
     ac_path = f".proofline/criteria/{ac_id}.md"
     try:
-        current_ac = (root / ac_path).read_bytes()
-        current_req = (root / req_path).read_bytes()
+        current_ac = read_regular_beneath(root, ac_path).data
+        current_req = read_regular_beneath(root, req_path).data
     except OSError:
         return False
     prior_revision = _last_active_revision(root, ac_path, current_ac)
@@ -621,7 +635,7 @@ def _retired_satisfy_uses_historical_active_binding(
     root: Path, req_path: str, ac_id: str
 ) -> bool:
     try:
-        current_req = (root / req_path).read_bytes()
+        current_req = read_regular_beneath(root, req_path).data
     except OSError:
         return False
     history = _git_output(root, "rev-list", "--first-parent", "refs/heads/main")
@@ -732,7 +746,10 @@ def _validate_project(
         ]
 
     try:
-        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        config_snapshot = read_regular_beneath(root, "proofline.yaml")
+        if config_snapshot.identity != (config_state.st_dev, config_state.st_ino):
+            raise OSError("config changed while opening")
+        config = yaml.safe_load(config_snapshot.data.decode("utf-8"))
     except yaml.YAMLError:
         return [
             ValidationError(
@@ -787,13 +804,13 @@ def _validate_project(
     errors.extend(_validate_artifacts(root))
     errors.extend(
         ValidationError(error.path, error.code, error.message)
-        for error in validate_ledger(root)
+        for error in validate_allocator(root)
     )
     return sorted(errors)
 
 
 def validate_project(root: Path) -> list[ValidationError]:
-    """Validate the complete project, including persisted Git history."""
+    """Validate the complete current canonical project tree."""
     return _validate_project(root)
 
 

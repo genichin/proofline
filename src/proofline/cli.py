@@ -11,6 +11,10 @@ from proofline.home_writer import (
 )
 from proofline.line_writer import LineInitError, initialize_line
 from proofline.project_writer import ProjectInitError, initialize_project
+from proofline.requirement_writer import (
+    RequirementInitError,
+    initialize_requirement,
+)
 from proofline.updater import UpdateError, UpdateResult, run_update  # noqa: F401
 from proofline.validator import validate_project
 
@@ -72,11 +76,18 @@ def build_parser() -> argparse.ArgumentParser:
     line = commands.add_parser("line", help="Manage ProofLine Lines")
     line_commands = line.add_subparsers(dest="line_command", required=True)
     init = line_commands.add_parser("init", help="Create a Line and draft Discovery")
-    init.add_argument("line_id", help="Explicit stable ID in line-NNNN form")
     init.add_argument("--title", required=True, help="Discovery H1 title")
     init.add_argument(
         "--dry-run", action="store_true", help="Preflight and render without writing"
     )
+    requirement = commands.add_parser("requirement", help="Manage ProofLine Requirements")
+    requirement_commands = requirement.add_subparsers(dest="requirement_command", required=True)
+    requirement_init = requirement_commands.add_parser(
+        "init", help="Create AC drafts and a Requirement draft"
+    )
+    requirement_init.add_argument("line_id", help="Existing stable ID in line-NNNN form")
+    requirement_init.add_argument("--manifest", required=True, type=Path)
+    requirement_init.add_argument("--dry-run", action="store_true")
     return parser
 
 
@@ -130,10 +141,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "line" and args.line_command == "init":
         root = Path.cwd()
         try:
-            result = initialize_line(
-                root, args.line_id, args.title, dry_run=args.dry_run
-            )
+            result = initialize_line(root, args.title, dry_run=args.dry_run)
         except LineInitError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        prefix = "would create" if result.dry_run else "created"
+        for path in result.paths:
+            print(f"{prefix}: {path}")
+        return 0
+
+    if args.command == "requirement" and args.requirement_command == "init":
+        try:
+            result = initialize_requirement(
+                Path.cwd(), args.line_id, args.manifest, dry_run=args.dry_run
+            )
+        except RequirementInitError as exc:
             print(str(exc), file=sys.stderr)
             return 1
         prefix = "would create" if result.dry_run else "created"

@@ -68,7 +68,7 @@ Main, 모든 Line worktree와 적용 project의 ProofLine governance는 공용 `
 
 ```bash
 proofline validate
-proofline line init line-NNNN --title "TITLE" --dry-run
+proofline line init --title "TITLE" --dry-run
 ```
 
 구현 대상 project의 source build·test는 해당 project가 정의한 command와 environment를 사용한다. Project build environment를 ProofLine governance environment로 취급하지 않는다.

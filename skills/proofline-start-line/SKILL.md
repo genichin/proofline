@@ -1,7 +1,7 @@
 ---
 name: proofline-start-line
 description: Use when starting a new ProofLine Line and writing its evidence-grounded Discovery draft without granting the agent confirmation authority.
-version: 1.1.1
+version: 1.2.0
 author: ProofLine
 license: MIT
 metadata:
@@ -33,7 +33,7 @@ metadata:
 1. 실제 project root에서 작업한다.
 2. `proofline.yaml`이 schema version 1과 `.proofline` root를 선언하는지 확인한다.
 3. Git working tree와 현재 branch를 확인한다.
-4. 사용자가 명시한 `line-NNNN` ID와 제목을 확보한다. ID를 추측하거나 자동 할당하지 않는다.
+4. 사용자에게 제목을 확인한다. Line ID는 canonical allocator가 자동 할당한다.
 5. Credential, token, password, connection string은 evidence에 기록하지 않는다. 필요한 값은 `[REDACTED]`로 대체한다.
 
 ## Workflow
@@ -41,7 +41,7 @@ metadata:
 ### 1. Dry-run으로 scaffold를 preflight한다
 
 ```bash
-proofline line init line-NNNN --title "TITLE" --dry-run
+proofline line init --title "TITLE" --dry-run
 ```
 
 예정된 두 path, ID history, 충돌, symlink와 template validation 결과를 확인한다. 실패하면 파일을 직접 만들어 우회하지 말고 원인을 해결하거나 사용자에게 blocker를 보고한다.
@@ -49,16 +49,16 @@ proofline line init line-NNNN --title "TITLE" --dry-run
 ### 2. Canonical scaffold를 생성한다
 
 ```bash
-proofline line init line-NNNN --title "TITLE"
+proofline line init --title "TITLE"
 ```
 
 다음 두 canonical artifact가 생성되고 identity reuse 방지를 위한
-`.proofline/line-identities.json`만 함께 갱신돼야 한다.
+`.proofline/identities.json`만 함께 갱신돼야 한다.
 
 ```text
 .proofline/lines/line-NNNN/line-NNNN.md
 .proofline/lines/line-NNNN/dcy-NNNN.md
-.proofline/line-identities.json  # 기존 ledger의 해당 Line entry 추가
+.proofline/identities.json  # next_line_number 전진
 ```
 
 Line artifact는 stable `id`만 가지며 Discovery는 `status: draft`로 생성된다. CLI는 Discovery의 실질적 내용을 판단하지 않는다. 생성 직후 `proofline validate`를 실행한다.
@@ -143,16 +143,16 @@ Version·tag·checksum 같은 release-specific 표현은 review warning으로 �
 
 1. **CLI가 Discovery 내용도 생성한다고 가정함.** CLI는 scaffold와 validation만 담당한다. 의미 있는 내용은 Hermes가 직접 evidence를 조사해 작성한다.
 2. **과거 대화를 현재 source보다 우선함.** 과거 대화는 맥락이며 현재 file, URL 또는 live system을 먼저 확인한다.
-3. **ID를 자동 선택함.** Stable identity 재사용을 막기 위해 사용자가 명시한 ID만 사용한다.
+3. **ID를 직접 선택함.** Stable identity는 allocator가 lock 안에서 자동 선택한다.
 4. **Draft를 곧바로 confirmed로 바꿈.** Skill에는 confirmation authority가 없다.
 5. **Secret을 evidence로 복사함.** Credential 값은 보존하지 않고 `[REDACTED]`로 대체한다.
 6. **CLI 실패를 수동 file write로 우회함.** 충돌과 history 검사는 governance guard이므로 우회하지 않는다.
 
 ## Verification Checklist
 
-- [ ] 사용자가 Line ID와 제목을 명시했다.
+- [ ] 사용자가 제목을 명시했다.
 - [ ] Dry-run이 통과했다.
-- [ ] 두 canonical artifact가 생성되고 identity ledger만 함께 갱신됐다.
+- [ ] 두 canonical artifact가 생성되고 identity allocator만 함께 갱신됐다.
 - [ ] Line artifact는 `id`만 가진다.
 - [ ] 직접 evidence를 확인한 뒤 Discovery를 작성했다.
 - [ ] create/update/retire/satisfy/release evidence/housekeeping 분류와 가장 가까운 active AC를 검토했다.

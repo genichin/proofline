@@ -15,9 +15,9 @@ def test_start_line_skill_has_valid_frontmatter_and_actionable_body() -> None:
     assert metadata["name"] == "proofline-start-line"
     assert metadata["description"].startswith("Use when ")
     assert len(metadata["description"]) <= 1024
-    assert metadata["version"] == "1.1.1"
-    assert ".proofline/line-identities.json" in body
-    assert "identity ledger" in body
+    assert metadata["version"] == "1.2.0"
+    assert ".proofline/identities.json" in body
+    assert "next_line_number" in body
     assert body.strip()
 
 

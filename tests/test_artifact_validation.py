@@ -1,6 +1,9 @@
 import shutil
 from pathlib import Path
 
+import pytest
+
+from proofline import validator
 from proofline.validator import _validate_schema_candidate, validate_project
 
 FIXTURE = Path(__file__).parent / "fixtures" / "valid-minimal"
@@ -18,6 +21,62 @@ def test_valid_minimal_artifacts_have_no_errors(tmp_path: Path) -> None:
     assert _validate_schema_candidate(project) == []
 
 
+def test_artifact_replaced_by_symlink_during_open_is_not_followed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = copy_valid_project(tmp_path)
+    artifact = project / ".proofline/lines/line-0001/line-0001.md"
+    outside = tmp_path / "outside.md"
+    outside.write_bytes(artifact.read_bytes())
+    real = validator.read_regular_beneath
+    raced = False
+
+    def replace_before_open(root: Path, relative: str):
+        nonlocal raced
+        if root / relative == artifact and not raced:
+            raced = True
+            artifact.unlink()
+            artifact.symlink_to(outside)
+        return real(root, relative)
+
+    monkeypatch.setattr(validator, "read_regular_beneath", replace_before_open)
+    errors = validate_project(project)
+    assert any(
+        error.path == ".proofline/lines/line-0001/line-0001.md"
+        and error.code == "artifact.read"
+        for error in errors
+    )
+    assert outside.read_bytes().startswith(b"---\n")
+
+
+def test_artifact_parent_replaced_by_symlink_during_open_is_not_followed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project = copy_valid_project(tmp_path)
+    line = project / ".proofline/lines/line-0001"
+    moved = tmp_path / "moved-line"
+    real = validator.read_regular_beneath
+    raced = False
+
+    def replace_parent_before_open(root: Path, relative: str):
+        nonlocal raced
+        if relative.endswith("line-0001/line-0001.md") and not raced:
+            raced = True
+            line.rename(moved)
+            line.symlink_to(moved, target_is_directory=True)
+        return real(root, relative)
+
+    monkeypatch.setattr(
+        validator, "read_regular_beneath", replace_parent_before_open
+    )
+    errors = validate_project(project)
+    assert any(
+        error.path == ".proofline/lines/line-0001/line-0001.md"
+        and error.code == "artifact.read"
+        for error in errors
+    )
+
+
 def test_public_project_validation_has_no_history_opt_out() -> None:
     import inspect
 
@@ -30,6 +89,35 @@ def test_line_accepts_canonical_minimal_schema(tmp_path: Path) -> None:
     artifact.write_text('---\nid: "line-0001"\n---\n', encoding="utf-8")
 
     assert _validate_schema_candidate(project) == []
+
+
+def test_validator_rejects_zero_line_and_ac_artifact_paths(tmp_path: Path) -> None:
+    project = copy_valid_project(tmp_path)
+    zero_line = project / ".proofline/lines/line-0000"
+    zero_line.mkdir()
+    (zero_line / "line-0000.md").write_text(
+        '---\nid: "line-0000"\n---\n', encoding="utf-8"
+    )
+    source_ac = project / ".proofline/criteria/ac-0001.md"
+    zero_ac = project / ".proofline/criteria/ac-0000.md"
+    zero_ac.write_text(
+        source_ac.read_text(encoding="utf-8").replace("ac-0001", "ac-0000"),
+        encoding="utf-8",
+    )
+
+    errors = validate_project(project)
+
+    assert any(error.path == ".proofline/lines/line-0000" for error in errors)
+    assert any(
+        error.path == ".proofline/lines/line-0000/line-0000.md"
+        and error.code == "artifact.path"
+        for error in errors
+    )
+    assert any(
+        error.path == ".proofline/criteria/ac-0000.md"
+        and error.code == "artifact.path"
+        for error in errors
+    )
 
 
 def test_line_accepts_implementation_history_without_execution_status(

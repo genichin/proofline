@@ -6,11 +6,13 @@
 
 ProofLine의 manifest, contracts, operations, templates와 skills는 `~/.proofline/`에 저장한다. `docs/operations/*.md`는 wheel과 HOME에 exact bytes로 대응하며 `manifest.yaml`이 path와 SHA-256을 기록한다. 이 resource는 project lifecycle artifact가 아니며 project `.proofline/`에 복제하지 않는다.
 
-Project `.proofline/`은 Line, Discovery, REQ와 AC의 canonical root이다. `proofline init`은 user-level harness만 초기화하며 current project를 변경하지 않는다. Project scaffold는 `proofline.yaml`, `.proofline/lines/.gitkeep`과 `.proofline/criteria/.gitkeep`만 초기화하며 Git commit, branch 또는 remote를 조작하지 않는다.
+Project `.proofline/`은 Line, Discovery, REQ와 AC의 canonical root이다. `proofline init`은 user-level harness만 초기화하며 current project를 변경하지 않는다. Fresh project scaffold는 `proofline.yaml`, `.proofline/identities.json`, `.proofline/lines/.gitkeep`과 `.proofline/criteria/.gitkeep`을 초기화하며 Git commit, branch 또는 remote를 조작하지 않는다. Existing project는 명시적 `proofline project init`으로 current canonical Line·AC path의 max+1 allocator를 migration한다.
+
+Project migration, Line 생성과 Requirement 생성은 같은 Git common-directory process lock 아래에서 preflight, staged validation, commit과 process-level rollback을 수행한다. 각 no-replace rename과 allocator file 교체는 개별 filesystem operation 단위로 atomic하지만 여러 rename 전체가 crash 또는 전원 손실에도 하나의 atomic operation이라는 보장은 아니다. 정상 process 예외에서는 writer가 자신이 생성한 inode, bytes와 exact topology를 다시 확인한 artifact만 rollback하며 ownership을 확인할 수 없으면 외부 데이터를 보존하고 advanced allocator도 유지한다.
 
 ## 정본과 파생 산출물
 
-`.proofline/line-identities.json`은 Line allocation source of truth이다. ProofLine은 별도의 자동 index를 만들지 않으며 writer와 validator는 deterministic canonical path를 직접 탐색한다.
+`.proofline/identities.json`은 Line·AC allocation의 유일한 source of truth이다. Optional `.proofline/line-identities.json`은 내용을 읽지 않는 opaque retained regular file이다. ProofLine은 Git history를 allocator 입력으로 사용하지 않으며 writer와 validator는 current deterministic canonical path를 직접 탐색한다.
 
 현재 사용자용 파생 문서는 `docs/requirements.md` 하나이다. 지정한 source Git commit에서 `active`인 AC를 ID 순서로 펼쳐 ID, 제목, Criterion과 Verification을 포함한다.
 
