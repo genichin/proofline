@@ -29,7 +29,7 @@ def test_native_windows_installer_exists_and_matches_release_identity() -> None:
     assert _constant(windows, "VERSION", powershell=True) == _constant(
         posix, "VERSION", powershell=False
     )
-    assert _constant(windows, "VERSION", powershell=True) == "0.6.2"
+    assert _constant(windows, "VERSION", powershell=True) == "0.7.0"
     assert _constant(windows, "REPOSITORY", powershell=True) == _constant(
         posix, "REPOSITORY", powershell=False
     )
@@ -85,14 +85,14 @@ def test_corrective_transition_has_posix_windows_staging_parity() -> None:
     posix = POSIX_INSTALLER.read_text(encoding="utf-8")
     assert _constant(windows, "CORRECTIVE_VERSION", powershell=True) == _constant(
         posix, "CORRECTIVE_VERSION", powershell=False
-    ) == "FUTURE_EXACT_TAG"
+    ) == "0.7.0"
     assert _constant(windows, "PREDECESSOR_VERSION", powershell=True) == _constant(
         posix, "PREDECESSOR_VERSION", powershell=False
     ) == "0.6.0"
     for text in (windows, posix):
         assert "proofline.installer_transition" in text
         assert "target-stage" in text
-        assert "FUTURE_EXACT_TAG" in text
+        assert "FUTURE_EXACT_TAG" not in text
         assert ".proofline.backup-v0.6.0" not in text
     assert "CorrectiveTransition" in windows
     assert "--corrective-transition" in posix
@@ -100,9 +100,9 @@ def test_corrective_transition_has_posix_windows_staging_parity() -> None:
 
 def test_readme_documents_immutable_tagged_windows_install_from_a_temporary_file() -> None:
     text = README.read_text(encoding="utf-8")
-    installer_url = "https://raw.githubusercontent.com/genichin/proofline/v0.6.2/install.ps1"
+    installer_url = "https://raw.githubusercontent.com/genichin/proofline/v0.7.0/install.ps1"
 
-    assert text.count(installer_url) == 2
+    assert text.count(installer_url) == 3
     assert "Invoke-WebRequest" in text
     assert "[System.IO.Path]::GetTempPath()" in text
     assert "& $InstallerPath" in text

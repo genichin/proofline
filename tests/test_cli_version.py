@@ -40,6 +40,6 @@ def test_internal_version_verification_skips_home_reconciliation(
     assert capsys.readouterr().out == "proofline 9.8.7\n"
 
 
-def test_manifest_version_is_v062() -> None:
+def test_manifest_version_is_v070() -> None:
     manifest = tomllib.loads((Path(__file__).resolve().parents[1] / "pyproject.toml").read_text())
-    assert manifest["project"]["version"] == "0.6.2"
+    assert manifest["project"]["version"] == "0.7.0"

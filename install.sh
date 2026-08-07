@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-VERSION="0.6.2"
-CORRECTIVE_VERSION="FUTURE_EXACT_TAG"
+VERSION="0.7.0"
+CORRECTIVE_VERSION="0.7.0"
 PREDECESSOR_VERSION="0.6.0"
 REPOSITORY="genichin/proofline"
 WHEEL="proofline-${VERSION}-py3-none-any.whl"
@@ -38,7 +38,6 @@ case "$#" in
 esac
 
 if [ "$CORRECTIVE" = "true" ]; then
-    [ "$CORRECTIVE_VERSION" != "FUTURE_EXACT_TAG" ] || fail "corrective transition is unavailable until a future exact release tag is published"
     VERSION="$CORRECTIVE_VERSION"
     WHEEL="proofline-${VERSION}-py3-none-any.whl"
     BASE_URL="https://github.com/${REPOSITORY}/releases/download/v${VERSION}"

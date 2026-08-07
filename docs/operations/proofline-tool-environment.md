@@ -102,12 +102,12 @@ Update는 application cwd를 install cwd로 사용하지 않고 `.venv`, `pyproj
 
 ## v0.6.0 corrective installer 경계
 
-Public `v0.6.0` executable의 `proofline update`는 `v0.6.1`, `v0.6.2` 또는 다음 corrective release로 전환하는 지원 경로가 아니다. `v0.6.1`과 `v0.6.2`도 corrective target으로 재지정하지 않는다. Future corrective exact tag의 publication과 unauthenticated read-back 전까지 installer의 corrective option은 fail-closed placeholder다.
+Public `v0.6.0` executable의 `proofline update`는 `v0.7.0`으로 전환하는 지원 경로가 아니다. `v0.6.1`과 `v0.6.2`도 corrective target으로 재지정하지 않는다. `v0.7.0` exact-tag installer의 corrective option을 사용한다.
 
-Publication 후에는 `<CORRECTIVE_EXACT_TAG>`를 published immutable tag로 치환한 다음 경로만 사용한다.
+Publication과 unauthenticated read-back을 완료한 `v0.7.0` immutable tag의 다음 경로만 사용한다.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/genichin/proofline/<CORRECTIVE_EXACT_TAG>/install.sh | sh -s -- --corrective-transition
+curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.7.0/install.sh | sh -s -- --corrective-transition
 ```
 
 Windows에서는 같은 tagged `install.ps1`을 native temporary file로 내려받아 `-CorrectiveTransition`으로 실행한다. Fresh install과 package-only `--force`/`-Force`는 이 transition과 별도 interface다.

@@ -7,8 +7,8 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$VERSION = "0.6.2"
-$CORRECTIVE_VERSION = "FUTURE_EXACT_TAG"
+$VERSION = "0.7.0"
+$CORRECTIVE_VERSION = "0.7.0"
 $PREDECESSOR_VERSION = "0.6.0"
 $REPOSITORY = "genichin/proofline"
 $WHEEL = "proofline-${VERSION}-py3-none-any.whl"
@@ -32,9 +32,6 @@ try {
         Fail "-Force and -CorrectiveTransition are mutually exclusive"
     }
     if ($CorrectiveTransition) {
-        if ($CORRECTIVE_VERSION -ceq "FUTURE_EXACT_TAG") {
-            Fail "corrective transition is unavailable until a future exact release tag is published"
-        }
         $VERSION = $CORRECTIVE_VERSION
         $WHEEL = "proofline-${VERSION}-py3-none-any.whl"
         $BASE_URL = "https://github.com/${REPOSITORY}/releases/download/v${VERSION}"

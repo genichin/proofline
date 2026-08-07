@@ -132,11 +132,11 @@ Remote publication은 local rollback으로 원상복구할 수 없다.
 
 ## Corrective Transition Publication Gate
 
-Line 0030의 local fixture test는 immutable predecessor identity `v0.6.0`, wheel `proofline-0.6.0-py3-none-any.whl`, SHA-256 `e17fadeb8cc6bee5eef912cf3b0af97881a128280895ed58e8625cc23ec0ab06`과 local future candidate를 사용한다. 이는 아직 존재하지 않는 public corrective target의 release E2E evidence가 아니다. Existing `v0.6.1`과 `v0.6.2`를 corrective target으로 주장하거나 변경하지 않는다.
+Line 0030의 local fixture test는 immutable predecessor identity `v0.6.0`, wheel `proofline-0.6.0-py3-none-any.whl`, SHA-256 `e17fadeb8cc6bee5eef912cf3b0af97881a128280895ed58e8625cc23ec0ab06`과 local candidate를 사용한다. 이는 `v0.7.0` public corrective transition의 사전 evidence이며 public read-back을 대체하지 않는다. Existing `v0.6.1`과 `v0.6.2`를 corrective target으로 주장하거나 변경하지 않는다.
 
-Future exact target publication에는 일반 release read-back에 더해 다음 별도 gate가 필요하다.
+`v0.7.0` exact target publication에는 일반 release read-back에 더해 다음 별도 gate가 필요하다.
 
-1. Exact candidate source에서 installer의 `FUTURE_EXACT_TAG` placeholder를 target version으로 고정하고 POSIX/Windows parity를 재검증한다.
+1. Exact candidate source에서 POSIX/Windows installer의 release version과 corrective target이 모두 `0.7.0`인지 재검증한다.
 2. Existing `v0.6.0`, `v0.6.1`, `v0.6.2` tag, Release와 assets가 변경되지 않았음을 read-back한다.
 3. Public `v0.6.0` wheel과 `SHA256SUMS`를 fresh isolated HOME, `UV_TOOL_DIR`, `UV_TOOL_BIN_DIR`에 설치하고 actual executable 및 archive provenance를 확인한다.
 4. Published exact-tag installer의 corrective option을 실행해 package version, target HOME manifest/managed bytes와 deterministic backup을 read-back한다.
