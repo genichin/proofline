@@ -33,6 +33,19 @@ def test_read_regular_beneath_without_posix_dir_fd_flags(
     assert snapshot.identity == transaction.identity(target.stat())
 
 
+def test_read_regular_without_posix_nofollow_flag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = tmp_path / "identities.json"
+    target.write_bytes(b'{}\n')
+    monkeypatch.delattr(os, "O_NOFOLLOW")
+
+    snapshot = transaction.read_regular(target)
+
+    assert snapshot.data == b'{}\n'
+    assert snapshot.identity == transaction.identity(target.stat())
+
+
 def test_remove_owned_file_preserves_foreign_replacement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

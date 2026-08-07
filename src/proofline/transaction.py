@@ -43,6 +43,8 @@ def identity(state: os.stat_result) -> tuple[int, int]:
 
 
 def read_regular(path: Path) -> FileSnapshot:
+    if not all(hasattr(os, name) for name in ("O_NOFOLLOW", "O_CLOEXEC")):
+        return _read_regular_by_path(path)
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
     try:
         state = os.fstat(descriptor)
@@ -160,6 +162,25 @@ def _is_reparse_point(state: os.stat_result) -> bool:
     return stat.S_ISLNK(state.st_mode) or bool(attributes & reparse_flag)
 
 
+def _read_regular_by_path(path: Path) -> FileSnapshot:
+    before = path.stat(follow_symlinks=False)
+    if _is_reparse_point(before) or not stat.S_ISREG(before.st_mode):
+        raise OSError(errno.EINVAL, "not a regular file", path)
+    with path.open("rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if not stat.S_ISREG(opened.st_mode) or identity(opened) != identity(before):
+            raise OSError(errno.ESTALE, "path changed while opening", path)
+        data = stream.read()
+    after = path.stat(follow_symlinks=False)
+    if (
+        _is_reparse_point(after)
+        or not stat.S_ISREG(after.st_mode)
+        or identity(after) != identity(opened)
+    ):
+        raise OSError(errno.ESTALE, "path changed while reading", path)
+    return FileSnapshot(data, identity(opened))
+
+
 def _read_regular_beneath_by_path(root: Path, parts: tuple[str, ...]) -> FileSnapshot:
     directory_states: list[tuple[Path, tuple[int, int]]] = []
     current = root
@@ -176,22 +197,7 @@ def _read_regular_beneath_by_path(root: Path, parts: tuple[str, ...]) -> FileSna
     directory_states.append((current, identity(parent_state)))
 
     target = current / parts[-1]
-    before = target.stat(follow_symlinks=False)
-    if _is_reparse_point(before) or not stat.S_ISREG(before.st_mode):
-        raise OSError(errno.EINVAL, "not a regular file", target)
-    with target.open("rb") as stream:
-        opened = os.fstat(stream.fileno())
-        if not stat.S_ISREG(opened.st_mode) or identity(opened) != identity(before):
-            raise OSError(errno.ESTALE, "path changed while opening", target)
-        data = stream.read()
-
-    after = target.stat(follow_symlinks=False)
-    if (
-        _is_reparse_point(after)
-        or not stat.S_ISREG(after.st_mode)
-        or identity(after) != identity(opened)
-    ):
-        raise OSError(errno.ESTALE, "path changed while reading", target)
+    snapshot = _read_regular_by_path(target)
     for directory, expected in directory_states:
         current_state = directory.stat(follow_symlinks=False)
         if (
@@ -200,7 +206,7 @@ def _read_regular_beneath_by_path(root: Path, parts: tuple[str, ...]) -> FileSna
             or identity(current_state) != expected
         ):
             raise OSError(errno.ESTALE, "directory changed while reading", directory)
-    return FileSnapshot(data, identity(opened))
+    return snapshot
 
 
 def read_regular_beneath(root: Path, relative: str) -> FileSnapshot:
