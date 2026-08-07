@@ -18,6 +18,21 @@ from proofline.transaction import (
 )
 
 
+def test_read_regular_beneath_without_posix_dir_fd_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "root"
+    target = root / "nested/artifact.md"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(b"canonical")
+    monkeypatch.delattr(os, "O_DIRECTORY")
+
+    snapshot = transaction.read_regular_beneath(root, "nested/artifact.md")
+
+    assert snapshot.data == b"canonical"
+    assert snapshot.identity == transaction.identity(target.stat())
+
+
 def test_remove_owned_file_preserves_foreign_replacement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

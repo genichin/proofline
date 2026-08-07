@@ -146,10 +146,75 @@ def read_regular_at(parent_fd: int, name: str) -> FileSnapshot:
     return _read_regular_at(parent_fd, name)
 
 
+def _has_directory_fd_primitives() -> bool:
+    return (
+        all(hasattr(os, name) for name in ("O_DIRECTORY", "O_NOFOLLOW", "O_CLOEXEC"))
+        and os.open in os.supports_dir_fd
+        and os.stat in os.supports_dir_fd
+    )
+
+
+def _is_reparse_point(state: os.stat_result) -> bool:
+    attributes = getattr(state, "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400)
+    return stat.S_ISLNK(state.st_mode) or bool(attributes & reparse_flag)
+
+
+def _read_regular_beneath_by_path(root: Path, parts: tuple[str, ...]) -> FileSnapshot:
+    directory_states: list[tuple[Path, tuple[int, int]]] = []
+    current = root
+    for part in parts[:-1]:
+        state = current.stat(follow_symlinks=False)
+        if _is_reparse_point(state) or not stat.S_ISDIR(state.st_mode):
+            raise OSError(errno.ELOOP, "unsafe directory component", current)
+        directory_states.append((current, identity(state)))
+        current /= part
+
+    parent_state = current.stat(follow_symlinks=False)
+    if _is_reparse_point(parent_state) or not stat.S_ISDIR(parent_state.st_mode):
+        raise OSError(errno.ELOOP, "unsafe directory component", current)
+    directory_states.append((current, identity(parent_state)))
+
+    target = current / parts[-1]
+    before = target.stat(follow_symlinks=False)
+    if _is_reparse_point(before) or not stat.S_ISREG(before.st_mode):
+        raise OSError(errno.EINVAL, "not a regular file", target)
+    with target.open("rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if not stat.S_ISREG(opened.st_mode) or identity(opened) != identity(before):
+            raise OSError(errno.ESTALE, "path changed while opening", target)
+        data = stream.read()
+
+    after = target.stat(follow_symlinks=False)
+    if (
+        _is_reparse_point(after)
+        or not stat.S_ISREG(after.st_mode)
+        or identity(after) != identity(opened)
+    ):
+        raise OSError(errno.ESTALE, "path changed while reading", target)
+    for directory, expected in directory_states:
+        current_state = directory.stat(follow_symlinks=False)
+        if (
+            _is_reparse_point(current_state)
+            or not stat.S_ISDIR(current_state.st_mode)
+            or identity(current_state) != expected
+        ):
+            raise OSError(errno.ESTALE, "directory changed while reading", directory)
+    return FileSnapshot(data, identity(opened))
+
+
 def read_regular_beneath(root: Path, relative: str) -> FileSnapshot:
-    parts = Path(relative).parts
-    if not parts or any(part in {"", ".", ".."} for part in parts):
+    relative_path = Path(relative)
+    parts = relative_path.parts
+    if (
+        not parts
+        or relative_path.is_absolute()
+        or relative_path.drive
+        or any(part in {"", ".", ".."} for part in parts)
+    ):
         raise OSError(errno.EINVAL, "invalid relative path", relative)
+    if not _has_directory_fd_primitives():
+        return _read_regular_beneath_by_path(root, parts)
     pins = [open_directory(root)]
     try:
         for index, part in enumerate(parts[:-1]):
