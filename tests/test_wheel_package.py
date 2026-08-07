@@ -408,6 +408,16 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(
             archive.read(run_iqc)
             == (ROOT / "skills/proofline-run-iqc/SKILL.md").read_bytes()
         )
+        changed_resources = {
+            "proofline_home/skills/proofline-run-dqc/SKILL.md": ROOT / "skills/proofline-run-dqc/SKILL.md",
+            "proofline_home/templates/schema-v1/artifacts/dqc.md": ROOT / "templates/schema-v1/artifacts/dqc.md",
+            "proofline_home/contracts/line-delivery.md": ROOT / "docs/contracts/line-delivery.md",
+        }
+        for packaged, source in changed_resources.items():
+            assert archive.read(packaged) == source.read_bytes()
+        assert "proofline_home/skills/proofline-run-dqc/scripts/preflight_clean_runner.py" not in names
+        assert "proofline_home/skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json" not in names
+        assert not any(name.startswith(".github/") for name in names)
         assert "proofline_home/agent-context.md" in names
         unpacked = tmp_path / "wheel"
         archive.extractall(unpacked)
@@ -511,6 +521,21 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(
     assert (isolated_home / ".proofline/contracts").is_dir()
     assert (isolated_home / ".proofline/templates").is_dir()
     assert (isolated_home / ".proofline/skills").is_dir()
+    assert (
+        isolated_home / ".proofline/skills/proofline-run-dqc/SKILL.md"
+    ).read_bytes() == (ROOT / "skills/proofline-run-dqc/SKILL.md").read_bytes()
+    assert (
+        isolated_home / ".proofline/templates/schema-v1/artifacts/dqc.md"
+    ).read_bytes() == (ROOT / "templates/schema-v1/artifacts/dqc.md").read_bytes()
+    assert (
+        isolated_home / ".proofline/contracts/line-delivery.md"
+    ).read_bytes() == (ROOT / "docs/contracts/line-delivery.md").read_bytes()
+    assert not (
+        isolated_home / ".proofline/skills/proofline-run-dqc/scripts/preflight_clean_runner.py"
+    ).exists()
+    assert not (
+        isolated_home / ".proofline/skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json"
+    ).exists()
     assert marker.read_text(encoding="utf-8") == "canonical\n"
 
     project_home = tmp_path / "project-home"
@@ -1052,8 +1077,7 @@ def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workfl
         "skills/proofline-run-iqc/SKILL.md": "proofline_home/skills/proofline-run-iqc/SKILL.md",
         "skills/proofline-run-dqc/SKILL.md": "proofline_home/skills/proofline-run-dqc/SKILL.md",
         "skills/proofline-run-dqc/scripts/preflight_integration_candidate.py": "proofline_home/skills/proofline-run-dqc/scripts/preflight_integration_candidate.py",
-        "skills/proofline-run-dqc/scripts/preflight_clean_runner.py": "proofline_home/skills/proofline-run-dqc/scripts/preflight_clean_runner.py",
-        "skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json": "proofline_home/skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json",
+        "templates/schema-v1/artifacts/dqc.md": "proofline_home/templates/schema-v1/artifacts/dqc.md",
         "templates/schema-v1/artifacts/integration.md": "proofline_home/templates/schema-v1/artifacts/integration.md",
         "templates/schema-v1/artifacts/legacy-migration.md": "proofline_home/templates/schema-v1/artifacts/legacy-migration.md",
         "docs/operations/legacy-nonterminal-history-migration.md": "proofline_home/operations/legacy-nonterminal-history-migration.md",

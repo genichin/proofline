@@ -48,7 +48,7 @@ def test_run_dqc_skill_has_valid_frontmatter() -> None:
     metadata = yaml.safe_load(frontmatter)
     assert metadata["name"] == "proofline-run-dqc"
     assert metadata["description"].startswith("Use when ")
-    assert metadata["version"] == "1.4.0"
+    assert metadata["version"] == "1.5.0"
     assert "## When to Use" in body
     assert body.strip()
 
@@ -62,25 +62,24 @@ def test_policy_has_only_line_level_default_checks() -> None:
         assert component_check not in defaults
 
 
-def test_policy_requires_exact_github_hosted_candidate_gate() -> None:
-    gate = load_policy()["hosted_candidate_gate"]
-    assert gate == {
-        "mandatory": True,
-        "provider": "github-actions",
-        "workflow_path": ".github/workflows/candidate-verification.yml",
-        "candidate_branch": "candidate/{line_id}",
-        "required_jobs": [
-            "build-candidate",
-            "ubuntu-python311",
-            "windows-python311",
-        ],
-        "artifact_name": "proofline-candidate-{run_id}-{run_attempt}",
-        "provenance_filename": "CANDIDATE_PROVENANCE.json",
-        "checksum_filename": "SHA256SUMS",
-        "evidence_helper": ".github/scripts/verify-candidate-evidence.py",
-        "non_pass_action": "block_dqc",
-        "same_v_retry": "forbidden",
+def test_policy_is_provider_free_and_has_only_core_decisions() -> None:
+    policy = load_policy()
+    assert set(policy) == {
+        "policy_version",
+        "required_line_checks",
+        "no_trigger",
+        "conditional_triggers",
     }
+    serialized = yaml.safe_dump(policy)
+    for provider_term in (
+        "provider",
+        "workflow",
+        "run_attempt",
+        "required_jobs",
+        "artifact",
+        "evidence_helper",
+    ):
+        assert provider_term not in serialized
 
 
 def test_exact_bound_passed_iqc_is_reused_without_triggers() -> None:
@@ -113,12 +112,20 @@ def test_contract_separates_required_and_conditional_dqc_responsibilities() -> N
         "explicit Line-level requirement",
         "skip rationale",
         "`proofline validate`의 validation scope를 확대하지 않는다",
-        "mandatory hosted candidate gate",
-        "same-`V` retry",
-        "DQC Checks",
-        "run attempt",
+        "외부 CI",
+        "project-local",
+        "ProofLine DQC PASS",
+        "대체하거나 승격",
     ]:
         assert required in text
+    for forbidden in (
+        "Mandatory Hosted Candidate Gate",
+        "mandatory hosted candidate gate",
+        "preflight_clean_runner.py",
+        "verify-candidate-evidence.py",
+        "run attempt",
+    ):
+        assert forbidden not in text
 
 
 def test_dqc_template_records_bindings_required_checks_and_conditional_decisions() -> None:
@@ -138,19 +145,16 @@ def test_dqc_template_records_bindings_required_checks_and_conditional_decisions
         "explicit_line_level_requirement",
         "Exact IQC binding",
         "Skip 또는 실행 rationale",
-        "### Mandatory Hosted Candidate Gate",
-        "Candidate V",
-        "Run ID / attempt",
-        "build-candidate",
-        "ubuntu-python311",
-        "windows-python311",
-        "Artifact ID / name / expiry",
-        "Wheel filename / SHA-256",
-        "CANDIDATE_PROVENANCE.json",
-        "SHA256SUMS",
-        "verify-candidate-evidence.py",
     ]:
         assert required in text
+    for forbidden in (
+        "Mandatory Hosted Candidate Gate",
+        "Run ID / attempt",
+        "Required jobs",
+        "Artifact ID / name / expiry",
+        "Evidence helper",
+    ):
+        assert forbidden not in text
 
 
 def test_workflow_keeps_authority_and_runtime_boundaries() -> None:
@@ -161,9 +165,10 @@ def test_workflow_keeps_authority_and_runtime_boundaries() -> None:
         "Git branch, commit, merge 또는 push",
         "not applicable은 실패가 아니다",
         "candidate 이후 제품 source 불변",
-        "same-`V` retry",
-        "DQC Checks",
-        "main integration이나 release authority를 부여하지 않는다",
+        "외부 CI",
+        "project-local",
+        "ProofLine DQC PASS",
+        "통합 authority",
         "preflight_integration_candidate.py",
         "pre-integration",
         "post-integration",
@@ -171,3 +176,11 @@ def test_workflow_keeps_authority_and_runtime_boundaries() -> None:
         "V.parent[1]=Q",
     ]:
         assert required in text
+    for forbidden in (
+        "hosted_candidate_gate",
+        "preflight_clean_runner.py",
+        "verify-candidate-evidence.py",
+        "Mandatory hosted",
+        "run attempt",
+    ):
+        assert forbidden not in text

@@ -595,7 +595,7 @@ def test_integration_template_is_canonical_frontmatter_only_and_packaged() -> No
 
 
 def test_synchronized_skill_versions_and_authority_language() -> None:
-    expected = {START: "1.4.0", APPROVE: "1.4.0", RUN_DQC: "1.4.0"}
+    expected = {START: "1.4.0", APPROVE: "1.4.0", RUN_DQC: "1.5.0"}
     for path, version in expected.items():
         _, frontmatter, body = path.read_text(encoding="utf-8").split("---", 2)
         assert yaml.safe_load(frontmatter)["version"] == version

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed read-back of exact hosted candidate evidence for DQC."""
+"""Fail-closed read-back of exact project-local candidate CI evidence."""
 
 from __future__ import annotations
 
@@ -34,9 +34,6 @@ PROVENANCE_KEYS = {
 }
 CHECKSUM_RE = re.compile(r"^([0-9a-fA-F]{64})  \*?([^\s]+)$")
 WHEEL_RE = re.compile(r"^proofline-[0-9]+\.[0-9]+\.[0-9]+-py3-none-any\.whl$")
-DQC_PATH_RE = re.compile(
-    r"\.proofline/lines/(?P<line>line-(?P<number>[0-9]{4}))/dqc-(?P=number)\.md\Z"
-)
 CANDIDATE_BRANCH_RE = re.compile(r"candidate/(?P<line>line-[0-9]{4})\Z")
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 GH_TIMEOUT_SECONDS = 30.0
@@ -437,13 +434,8 @@ def _validate_payload(
 
     if ref_sha != args.candidate_sha:
         raise EvidenceError("candidate ref drift")
-    changed = set(changed_paths)
-    if len(changed_paths) > 1 or any(
-        (match := DQC_PATH_RE.fullmatch(path)) is None
-        or match.group("line") != branch_match.group("line")
-        for path in changed_paths
-    ):
-        raise EvidenceError("stale evidence: post-candidate changes are not DQC-only")
+    if changed_paths:
+        raise EvidenceError("stale evidence: post-candidate changes are present")
 
     download = Path(args.download_dir)
     _safe_extract_archive(archive_bytes, download)

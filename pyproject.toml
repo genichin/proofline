@@ -27,7 +27,7 @@ dev = [
 addopts = "-q"
 testpaths = ["tests"]
 markers = [
-  "candidate_build_only: packaging test executed only by the candidate build job in hosted CI",
+  "candidate_build_only: packaging test executed only by the optional project-local candidate build job",
 ]
 
 [tool.hatch.build.targets.wheel]
