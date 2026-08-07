@@ -1,12 +1,15 @@
 [CmdletBinding()]
 param(
-    [switch]$Force
+    [switch]$Force,
+    [switch]$CorrectiveTransition
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $VERSION = "0.6.2"
+$CORRECTIVE_VERSION = "FUTURE_EXACT_TAG"
+$PREDECESSOR_VERSION = "0.6.0"
 $REPOSITORY = "genichin/proofline"
 $WHEEL = "proofline-${VERSION}-py3-none-any.whl"
 $BASE_URL = "https://github.com/${REPOSITORY}/releases/download/v${VERSION}"
@@ -25,13 +28,24 @@ function Invoke-UvCapture([string[]]$Arguments) {
 }
 
 try {
+    if ($Force -and $CorrectiveTransition) {
+        Fail "-Force and -CorrectiveTransition are mutually exclusive"
+    }
+    if ($CorrectiveTransition) {
+        if ($CORRECTIVE_VERSION -ceq "FUTURE_EXACT_TAG") {
+            Fail "corrective transition is unavailable until a future exact release tag is published"
+        }
+        $VERSION = $CORRECTIVE_VERSION
+        $WHEEL = "proofline-${VERSION}-py3-none-any.whl"
+        $BASE_URL = "https://github.com/${REPOSITORY}/releases/download/v${VERSION}"
+    }
     if (-not (Get-Command uv -CommandType Application -ErrorAction SilentlyContinue)) {
         Fail "required command not found: uv"
     }
 
     $ToolDir = Invoke-UvCapture @("tool", "dir")
     $ExistingTool = Join-Path $ToolDir "proofline"
-    if ((-not $Force) -and (Test-Path -LiteralPath $ExistingTool)) {
+    if ((-not $Force) -and (-not $CorrectiveTransition) -and (Test-Path -LiteralPath $ExistingTool)) {
         Fail "ProofLine is already installed; rerun with -Force to replace it explicitly"
     }
 
@@ -56,6 +70,36 @@ try {
     $ActualHash = (Get-FileHash -LiteralPath $WheelPath -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($ActualHash -cne $ExpectedHash) {
         Fail "wheel checksum verification failed"
+    }
+
+    if ($CorrectiveTransition) {
+        $PredecessorDir = Join-Path $TempDir "predecessor"
+        [void](New-Item -ItemType Directory -Path $PredecessorDir)
+        $PredecessorWheel = "proofline-${PREDECESSOR_VERSION}-py3-none-any.whl"
+        $PredecessorWheelPath = Join-Path $PredecessorDir $PredecessorWheel
+        $PredecessorChecksums = Join-Path $PredecessorDir "SHA256SUMS"
+        $PredecessorUrl = "https://github.com/${REPOSITORY}/releases/download/v${PREDECESSOR_VERSION}"
+        Invoke-WebRequest -UseBasicParsing -Uri "${PredecessorUrl}/${PredecessorWheel}" -OutFile $PredecessorWheelPath
+        Invoke-WebRequest -UseBasicParsing -Uri "${PredecessorUrl}/SHA256SUMS" -OutFile $PredecessorChecksums
+        $PredecessorLines = @(Get-Content -LiteralPath $PredecessorChecksums)
+        $EscapedPredecessorWheel = [regex]::Escape($PredecessorWheel)
+        if ($PredecessorLines.Count -ne 1 -or $PredecessorLines[0] -notmatch "^([0-9A-Fa-f]{64})\s+\*?${EscapedPredecessorWheel}$") {
+            Fail "predecessor SHA256SUMS is malformed or unexpected"
+        }
+        if ((Get-FileHash -LiteralPath $PredecessorWheelPath -Algorithm SHA256).Hash.ToLowerInvariant() -cne $Matches[1].ToLowerInvariant()) {
+            Fail "predecessor wheel checksum verification failed"
+        }
+        $Stage = Join-Path $TempDir "target-stage"
+        & uv venv --no-config $Stage
+        if ($LASTEXITCODE -ne 0) { Fail "cannot create target staging environment" }
+        $StagePython = Join-Path $Stage "Scripts\python.exe"
+        & uv pip install --no-config --python $StagePython $WheelPath
+        if ($LASTEXITCODE -ne 0) { Fail "cannot install target staging package" }
+        $UvPath = (Get-Command uv -CommandType Application).Source
+        & $StagePython -I -m proofline.installer_transition --target-wheel $WheelPath --predecessor-wheel $PredecessorWheelPath --home $HOME --uv $UvPath
+        if ($LASTEXITCODE -ne 0) { Fail "corrective transition failed" }
+        Write-Output "ProofLine corrective transition completed"
+        return
     }
 
     if ($Force) {

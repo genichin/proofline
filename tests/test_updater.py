@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import proofline.updater as updater
+from proofline import home_protocol
 from proofline.updater import (
     UpdateError,
     decide_update,
@@ -159,3 +160,92 @@ def test_uv_tool_ownership_uses_virtualenv_prefix_not_resolved_python(tmp_path: 
     prefix = tool_dir / "proofline"
     assert is_uv_tool_process(tool_dir, prefix=prefix)
     assert not is_uv_tool_process(tool_dir, prefix=tmp_path / "application-venv")
+
+
+def test_target_home_payload_uses_target_protocol_and_accepts_future_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wheel = tmp_path / "proofline-0.7.0-py3-none-any.whl"
+    wheel.write_bytes(b"verified wheel")
+    future_payload = {
+        "future-schema/data.bin": b"future\n",
+        "manifest.yaml": b"proofline_version: 0.7.0\n",
+    }
+    operations: list[str] = []
+    monkeypatch.setattr(
+        updater,
+        "_create_protocol_environment",
+        lambda uv, wheel, root, cwd: root / "target-env/bin/python",
+    )
+
+    def protocol(
+        python: Path,
+        value: dict[str, object],
+        *,
+        cwd: Path,
+        home: Path,
+    ) -> dict[str, object]:
+        operations.append(str(value["operation"]))
+        if value["operation"] == "generate":
+            payload_root = Path(str(value["payload_root"]))
+            for relative, content in future_payload.items():
+                path = payload_root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+            _, digest, count = home_protocol.read_safe_tree(payload_root)
+            return {
+                **value,
+                "manifest_version": "0.7.0",
+                "payload_digest": digest,
+                "file_count": count,
+            }
+        return value
+
+    monkeypatch.setattr(updater, "_run_home_protocol", protocol)
+    monkeypatch.setattr(
+        updater.home_writer,
+        "payload_from_wheel",
+        lambda *args: (_ for _ in ()).throw(AssertionError("predecessor parser used")),
+    )
+
+    observed = updater._target_home_payload("uv", wheel, "0.7.0", tmp_path)
+
+    assert observed.payload == future_payload
+    assert operations == ["generate", "verify"]
+
+
+def test_target_home_payload_rejects_response_identity_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    wheel = tmp_path / "proofline-0.7.0-py3-none-any.whl"
+    wheel.write_bytes(b"verified wheel")
+    monkeypatch.setattr(
+        updater,
+        "_create_protocol_environment",
+        lambda uv, wheel, root, cwd: root / "target-env/bin/python",
+    )
+
+    def mismatched(*args, **kwargs) -> dict[str, object]:
+        value = dict(args[1])
+        return {
+            **value,
+            "nonce": "f" * 64,
+            "manifest_version": "0.7.0",
+            "payload_digest": "0" * 64,
+            "file_count": 1,
+        }
+
+    monkeypatch.setattr(updater, "_run_home_protocol", mismatched)
+
+    with pytest.raises(UpdateError, match="nonce mismatch"):
+        updater._target_home_payload("uv", wheel, "0.7.0", tmp_path)
+
+
+@pytest.mark.parametrize("current", ["0.6.0", "0.6.1", "0.6.2"])
+def test_unsupported_predecessor_requires_corrective_installer(current: str) -> None:
+    with pytest.raises(UpdateError, match="corrective exact-tag installer"):
+        updater._require_supported_predecessor(current, "0.7.0")
+
+
+def test_supported_predecessor_can_use_target_protocol() -> None:
+    updater._require_supported_predecessor("0.7.0", "0.8.0")

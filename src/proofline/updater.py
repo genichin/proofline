@@ -4,8 +4,10 @@ from dataclasses import dataclass
 import hashlib
 from importlib import metadata
 import json
+import os
 from pathlib import Path
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -14,7 +16,7 @@ from typing import Any, Protocol
 from urllib import request
 from urllib.parse import unquote, urlparse
 
-from proofline import home_writer
+from proofline import home_protocol, home_writer
 
 
 REPOSITORY = "genichin/proofline"
@@ -44,6 +46,18 @@ class UpdateResult:
     status: str
     exit_code: int
     mutate: bool
+
+
+@dataclass(frozen=True)
+class StagedTargetHome:
+    payload: dict[str, bytes]
+    python: Path
+    protocol_home: Path
+    wheel_sha256: str
+    wheel_path: Path
+    manifest_version: str
+    payload_digest: str
+    file_count: int
 
 
 class DistributionLike(Protocol):
@@ -210,7 +224,7 @@ def _install(uv: str, artifact: Path, *, cwd: Path) -> None:
 
 
 def _verify_install(version: str, expected_env: Path, executable: Path, *, cwd: Path) -> None:
-    tool_python = expected_env / "bin" / "python"
+    tool_python = expected_env / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
     probe = _run(
         [
             str(tool_python),
@@ -229,9 +243,175 @@ def _verify_install(version: str, expected_env: Path, executable: Path, *, cwd: 
         raise UpdateError("installed console post-verification failed")
 
 
+def _create_protocol_environment(uv: str, wheel: Path, root: Path, *, cwd: Path) -> Path:
+    environment = root / "target-env"
+    created = _run(
+        [uv, "venv", "--no-config", "--python", sys.executable, str(environment)],
+        cwd=cwd,
+    )
+    python = environment / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
+    if created.returncode:
+        raise UpdateError("target protocol environment creation failed")
+    installed = _run(
+        [uv, "pip", "install", "--no-config", "--python", str(python), str(wheel)],
+        cwd=cwd,
+    )
+    if installed.returncode:
+        raise UpdateError("target protocol installation failed")
+    return python
+
+
+def _run_home_protocol(python: Path, value: dict[str, Any], *, cwd: Path, home: Path) -> dict[str, Any]:
+    environment = {
+        "HOME": str(home),
+        "USERPROFILE": str(home),
+        "PATH": os.defpath,
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONIOENCODING": "utf-8",
+    }
+    for name in ("SystemRoot", "WINDIR", "COMSPEC", "PATHEXT"):
+        if name in os.environ:
+            environment[name] = os.environ[name]
+    try:
+        completed = subprocess.run(
+            [str(python), "-I", "-m", "proofline.home_protocol"],
+            cwd=cwd,
+            env=environment,
+            input=json.dumps(value, sort_keys=True, separators=(",", ":")),
+            text=True,
+            capture_output=True,
+            check=False,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise UpdateError("target HOME protocol timed out") from exc
+    if len(completed.stdout.encode()) + len(completed.stderr.encode()) > 262144:
+        raise UpdateError("target HOME protocol output exceeds limit")
+    if completed.returncode or completed.stderr or not completed.stdout.endswith("\n"):
+        raise UpdateError("target HOME protocol execution failed")
+    try:
+        response = home_protocol.load_closed_json(completed.stdout)
+    except home_protocol.HomeProtocolError as exc:
+        raise UpdateError("target HOME protocol response is malformed") from exc
+    canonical = json.dumps(response, sort_keys=True, separators=(",", ":")) + "\n"
+    if completed.stdout != canonical:
+        raise UpdateError("target HOME protocol response is malformed")
+    return response
+
+
+def _validate_protocol_response(response: dict[str, Any], request_value: dict[str, Any]) -> None:
+    if set(response) != home_protocol.PROTOCOL_KEYS:
+        raise UpdateError("target HOME protocol response fields are invalid")
+    if type(response.get("schema_version")) is not int:
+        raise UpdateError("target HOME protocol schema_version mismatch")
+    for key in (
+        "schema_version",
+        "operation",
+        "nonce",
+        "target_version",
+        "wheel_sha256",
+        "wheel_path",
+        "payload_root",
+    ):
+        if response.get(key) != request_value[key]:
+            raise UpdateError(f"target HOME protocol {key} mismatch")
+    if response.get("manifest_version") != request_value["target_version"]:
+        raise UpdateError("target HOME protocol manifest version mismatch")
+    digest = response.get("payload_digest")
+    if not isinstance(digest, str) or _SHA256.fullmatch(digest) is None:
+        raise UpdateError("target HOME protocol payload digest is invalid")
+    if type(response.get("file_count")) is not int or response["file_count"] <= 0:
+        raise UpdateError("target HOME protocol file count is invalid")
+
+
+def _target_home_payload(uv: str, wheel: Path, version: str, root: Path) -> StagedTargetHome:
+    wheel_digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    protocol_home = root / "protocol-home"
+    protocol_home.mkdir()
+    payload_root = root / "target-home"
+    payload_root.mkdir()
+    python = _create_protocol_environment(uv, wheel, root, cwd=root)
+    base: dict[str, Any] = {
+        "schema_version": home_protocol.SCHEMA_VERSION,
+        "operation": "generate",
+        "nonce": secrets.token_hex(32),
+        "target_version": version,
+        "wheel_sha256": wheel_digest,
+        "wheel_path": str(wheel.absolute()),
+        "payload_root": str(payload_root.absolute()),
+        "manifest_version": None,
+        "payload_digest": None,
+        "file_count": None,
+    }
+    generated = _run_home_protocol(python, base, cwd=root, home=protocol_home)
+    _validate_protocol_response(generated, base)
+    try:
+        payload, digest, file_count = home_protocol.read_safe_tree(payload_root)
+    except home_protocol.HomeProtocolError as exc:
+        raise UpdateError(f"target HOME payload is unsafe: {exc}") from exc
+    if digest != generated["payload_digest"] or file_count != generated["file_count"]:
+        raise UpdateError("target HOME generated payload mismatch")
+
+    verify_request = {**generated, "operation": "verify", "nonce": secrets.token_hex(32)}
+    verified = _run_home_protocol(python, verify_request, cwd=root, home=protocol_home)
+    _validate_protocol_response(verified, verify_request)
+    if verified != verify_request:
+        raise UpdateError("target HOME verify response mismatch")
+    return StagedTargetHome(
+        payload,
+        python,
+        protocol_home,
+        wheel_digest,
+        wheel,
+        generated["manifest_version"],
+        generated["payload_digest"],
+        generated["file_count"],
+    )
+
+
+def _verify_target_home(target: StagedTargetHome, root: Path, *, cwd: Path) -> None:
+    request_value: dict[str, Any] = {
+        "schema_version": home_protocol.SCHEMA_VERSION,
+        "operation": "verify",
+        "nonce": secrets.token_hex(32),
+        "target_version": target.manifest_version,
+        "wheel_sha256": target.wheel_sha256,
+        "wheel_path": str(target.wheel_path.absolute()),
+        "payload_root": str(root.absolute()),
+        "manifest_version": target.manifest_version,
+        "payload_digest": target.payload_digest,
+        "file_count": target.file_count,
+    }
+    response = _run_home_protocol(
+        target.python, request_value, cwd=cwd, home=target.protocol_home
+    )
+    _validate_protocol_response(response, request_value)
+    if response != request_value:
+        raise UpdateError("target HOME live verify response mismatch")
+    _, digest, file_count = home_protocol.read_safe_tree(root)
+    if digest != target.payload_digest or file_count != target.file_count:
+        raise UpdateError("target HOME live payload mismatch")
+
+
+def _verify_home_readback(payload: dict[str, bytes] | None) -> None:
+    if payload is None:
+        target = Path.home() / ".proofline"
+        if target.exists() or target.is_symlink():
+            raise UpdateError("HOME absence post-verification failed")
+        return
+    home_writer.verify_home(payload)
+
+
 def is_uv_tool_process(tool_dir: Path, *, prefix: Path | None = None) -> bool:
     active_prefix = Path(sys.prefix) if prefix is None else prefix
     return active_prefix.absolute() == (tool_dir / "proofline").absolute()
+
+
+def _require_supported_predecessor(current: str, target: str) -> None:
+    if current in {"0.6.0", "0.6.1", "0.6.2"} and current != target:
+        raise UpdateError(
+            "current version requires the next corrective exact-tag installer; self-update is unsupported"
+        )
 
 
 def run_update(*, check: bool = False, version: str | None = None, adopt: bool = False) -> UpdateResult:
@@ -249,6 +429,7 @@ def run_update(*, check: bool = False, version: str | None = None, adopt: bool =
                 return exact_decision
     release = discover_release(version)
     decision = decide_update(current, release.version, provenance, check=check, adopt=adopt)
+    _require_supported_predecessor(current, release.version)
     current_payload = packaged_home_payload()
     try:
         home_state = home_writer.preflight_home(current_payload)
@@ -293,11 +474,7 @@ def run_update(*, check: bool = False, version: str | None = None, adopt: bool =
 
         wheel = _download_verified(release, temp)
         try:
-            target_payload = home_writer.payload_from_wheel(wheel, release.version)
-            transaction = home_writer.prepare_home_update(
-                target_payload,
-                current_payload=None if home_state == "absent" else current_payload,
-            )
+            staged_target = _target_home_payload(uv, wheel, release.version, temp)
         except home_writer.HomeInitError as exc:
             raise UpdateError(f"target home preparation failed: {exc}") from exc
 
@@ -307,14 +484,25 @@ def run_update(*, check: bool = False, version: str | None = None, adopt: bool =
         else:
             rollback_artifact = _source_rollback_path(distribution)
 
-        executable = bin_dir / "proofline"
-        target_installed = False
+        target_payload = staged_target.payload
         try:
+            transaction = home_writer.prepare_home_update(
+                target_payload,
+                current_payload=None if home_state == "absent" else current_payload,
+            )
+        except home_writer.HomeInitError as exc:
+            raise UpdateError(f"target home preparation failed: {exc}") from exc
+
+        executable = bin_dir / ("proofline.exe" if sys.platform == "win32" else "proofline")
+        package_install_attempted = False
+        try:
+            package_install_attempted = True
             _install(uv, wheel, cwd=temp)
-            target_installed = True
             _verify_install(release.version, expected_env, executable, cwd=temp)
             transaction.commit()
-            home_writer.verify_home(target_payload)
+            _verify_install(release.version, expected_env, executable, cwd=temp)
+            _verify_home_readback(target_payload)
+            _verify_target_home(staged_target, Path.home() / ".proofline", cwd=temp)
         except Exception as exc:
             failures: list[str] = []
             home_rolled_back = False
@@ -323,16 +511,88 @@ def run_update(*, check: bool = False, version: str | None = None, adopt: bool =
                 home_rolled_back = True
             except Exception as rollback_exc:
                 failures.append(f"home rollback failed: {rollback_exc}")
-            if target_installed and home_rolled_back:
+            if package_install_attempted and home_rolled_back:
+                package_restored = False
                 try:
-                    _install(uv, rollback_artifact, cwd=temp)
-                    _verify_install(current, expected_env, executable, cwd=temp)
+                    if provenance == "source":
+                        _install(uv, rollback_artifact, cwd=temp)
+                        _verify_install(current, expected_env, executable, cwd=temp)
+                    else:
+                        try:
+                            _verify_install(current, expected_env, executable, cwd=temp)
+                        except Exception:
+                            _install(uv, rollback_artifact, cwd=temp)
+                            _verify_install(current, expected_env, executable, cwd=temp)
+                    package_restored = True
                 except Exception as rollback_exc:
                     failures.append(f"package rollback failed: {rollback_exc}")
-            elif target_installed:
+                    recovery: home_writer.HomeUpdateTransaction | None = None
+                    target_recovered = False
+                    try:
+                        _install(uv, wheel, cwd=temp)
+                        _verify_install(
+                            release.version, expected_env, executable, cwd=temp
+                        )
+                        recovery = home_writer.prepare_home_update(
+                            target_payload,
+                            current_payload=(
+                                None if home_state == "absent" else current_payload
+                            ),
+                        )
+                        recovery.commit()
+                        _verify_home_readback(target_payload)
+                        _verify_target_home(
+                            staged_target, Path.home() / ".proofline", cwd=temp
+                        )
+                        target_recovered = True
+                    except Exception as coherence_exc:
+                        failures.append(
+                            f"target coherence recovery failed: {coherence_exc}"
+                        )
+                        if recovery is not None:
+                            try:
+                                recovery.rollback()
+                            except Exception as recovery_rollback_exc:
+                                failures.append(
+                                    "target HOME recovery rollback failed: "
+                                    f"{recovery_rollback_exc}"
+                                )
+                        try:
+                            _install(uv, rollback_artifact, cwd=temp)
+                            _verify_install(
+                                current, expected_env, executable, cwd=temp
+                            )
+                            _verify_home_readback(
+                                None if home_state == "absent" else current_payload
+                            )
+                        except Exception as retry_exc:
+                            failures.append(
+                                f"previous coherence retry failed: {retry_exc}"
+                            )
+                    if target_recovered and recovery is not None:
+                        try:
+                            recovery.finalize()
+                        except Exception as finalize_exc:
+                            failures.append(
+                                "target recovered but old HOME cleanup failed: "
+                                f"{finalize_exc}"
+                            )
+                if package_restored:
+                    try:
+                        _verify_home_readback(
+                            None if home_state == "absent" else current_payload
+                        )
+                    except Exception as coherence_exc:
+                        failures.append(
+                            f"previous coherence verification failed: {coherence_exc}"
+                        )
+            elif package_install_attempted:
                 try:
                     _verify_install(release.version, expected_env, executable, cwd=temp)
-                    home_writer.verify_home(target_payload)
+                    _verify_home_readback(target_payload)
+                    _verify_target_home(
+                        staged_target, Path.home() / ".proofline", cwd=temp
+                    )
                 except Exception as coherence_exc:
                     failures.append(f"target coherence verification failed: {coherence_exc}")
             detail = f"update transaction failed: {exc}"

@@ -19,7 +19,7 @@ ProofLine은 PyPI가 아니라 [GitHub Releases](https://github.com/genichin/pro
 curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.6.2/install.sh | sh
 ```
 
-기존 ProofLine installation을 verified v0.6.2 wheel로 명시적으로 교체하려면 `--force`를 전달합니다.
+기존 ProofLine installation을 verified v0.6.2 wheel로 명시적으로 교체하려면 `--force`를 전달합니다. 이는 package-only 교체이며 아래 v0.6.0 corrective transition이 아닙니다.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.6.2/install.sh | sh -s -- --force
@@ -64,6 +64,28 @@ proofline validate
 ```
 
 Installer는 application project의 `.venv`, `pyproject.toml`, lockfile, Git state 또는 `.proofline/`을 변경하지 않습니다.
+
+### v0.6.0 corrective transition
+
+Public `v0.6.0` executable의 기존 `proofline update`는 `v0.6.1`, `v0.6.2` 또는 future corrective release로 가는 지원 경로가 아닙니다. `v0.6.1`과 `v0.6.2`도 corrective transition target이 아닙니다. 다음 corrective release가 게시되기 전에는 현재 installer의 `--corrective-transition`과 `-CorrectiveTransition`이 다운로드나 mutation 전에 중단됩니다.
+
+Publication과 public read-back이 완료되면 아래 `<CORRECTIVE_EXACT_TAG>`를 게시된 immutable exact tag로 치환한 단일 명령만 사용합니다.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/genichin/proofline/<CORRECTIVE_EXACT_TAG>/install.sh | sh -s -- --corrective-transition
+```
+
+```powershell
+$InstallerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("proofline-transition-" + [guid]::NewGuid().ToString("N") + ".ps1")
+try {
+    Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/genichin/proofline/<CORRECTIVE_EXACT_TAG>/install.ps1" -OutFile $InstallerPath
+    & $InstallerPath -CorrectiveTransition
+} finally {
+    if (Test-Path -LiteralPath $InstallerPath) { Remove-Item -LiteralPath $InstallerPath -Force }
+}
+```
+
+이 경로는 target wheel을 격리 staging environment에 설치하고 target package의 `proofline.installer_transition`을 실행합니다. Core는 official `v0.6.0` archive identity와 exact legacy `~/.proofline` inventory, hash, path type을 먼저 검증하고 기존 backup이 없을 때만 `~/.proofline.backup-v0.6.0`을 만듭니다. Backup collision, modified·symlink·unexpected HOME, package/HOME commit 또는 post-verification failure는 overwrite 없이 중단하거나 predecessor package와 HOME으로 rollback합니다. Application project와 Git은 대상이 아닙니다.
 
 ### 수동 strict verification
 
@@ -136,7 +158,7 @@ ProofLine 0.3.0 이상에서는 위 설치 확인 순서의 `proofline init --dr
 
 ## 업데이트
 
-v0.2.1 이상에서는 다음 명령으로 최신 stable official wheel을 확인하거나 설치할 수 있습니다. v0.4.0 이상 updater는 verified CLI/package와 `~/.proofline/` manifest, contracts, templates, skills, agent context를 같은 target version으로 함께 갱신합니다. Existing harness가 manifest checksum과 다르거나 unexpected entry·symlink를 포함하면 CLI 설치 전에 실패합니다. v0.4.1부터 `~/.proofline` 교체로 현재 shell의 working directory가 제거된 상태에서도 `proofline update`가 current project path를 요구하지 않고 동작합니다.
+v0.2.1 이상에서는 다음 명령으로 최신 stable official wheel을 확인하거나 설치할 수 있습니다. 단, public `v0.6.0`은 위 exact-tag corrective installer 경계를 사용해야 하며 아래 update 예시를 bootstrap 증거로 사용하지 않습니다. v0.4.0 이상 updater는 verified CLI/package와 `~/.proofline/` manifest, contracts, templates, skills, agent context를 같은 target version으로 함께 갱신합니다. Existing harness가 manifest checksum과 다르거나 unexpected entry·symlink를 포함하면 CLI 설치 전에 실패합니다. v0.4.1부터 `~/.proofline` 교체로 현재 shell의 working directory가 제거된 상태에서도 `proofline update`가 current project path를 요구하지 않고 동작합니다.
 
 v0.3.0 updater에서 v0.4.0 이상으로 처음 전환할 때는 기존 updater가 새 executable을 post-verify하는 `proofline --version` 경계에서 clean existing harness를 한 번 reconcile합니다. `~/.proofline/`이 없는 fresh installation은 자동 생성하지 않으며 계속 명시적 `proofline init`을 사용합니다.
 

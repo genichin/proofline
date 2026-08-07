@@ -80,6 +80,24 @@ def test_windows_installer_errors_do_not_exit_the_calling_powershell_host() -> N
     assert not re.search(r"catch\s*\{[^}]*exit\s+1", text, re.DOTALL)
 
 
+def test_corrective_transition_has_posix_windows_staging_parity() -> None:
+    windows = WINDOWS_INSTALLER.read_text(encoding="utf-8")
+    posix = POSIX_INSTALLER.read_text(encoding="utf-8")
+    assert _constant(windows, "CORRECTIVE_VERSION", powershell=True) == _constant(
+        posix, "CORRECTIVE_VERSION", powershell=False
+    ) == "FUTURE_EXACT_TAG"
+    assert _constant(windows, "PREDECESSOR_VERSION", powershell=True) == _constant(
+        posix, "PREDECESSOR_VERSION", powershell=False
+    ) == "0.6.0"
+    for text in (windows, posix):
+        assert "proofline.installer_transition" in text
+        assert "target-stage" in text
+        assert "FUTURE_EXACT_TAG" in text
+        assert ".proofline.backup-v0.6.0" not in text
+    assert "CorrectiveTransition" in windows
+    assert "--corrective-transition" in posix
+
+
 def test_readme_documents_immutable_tagged_windows_install_from_a_temporary_file() -> None:
     text = README.read_text(encoding="utf-8")
     installer_url = "https://raw.githubusercontent.com/genichin/proofline/v0.6.2/install.ps1"

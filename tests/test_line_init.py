@@ -76,6 +76,50 @@ def test_line_init_dry_run_uses_same_plan_under_lock_without_mutation(tmp_path: 
     assert actual.line_id == dry.line_id and actual.paths == dry.paths
 
 
+def test_line_candidate_preserves_preexisting_history_context_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = make_project(tmp_path)
+    real = line_writer.validate_project
+    history_only = ValidationError(
+        ".proofline/lines/line-0099/req-0099.md",
+        "reference.inactive",
+        "candidate에는 원본 Git history context가 없습니다.",
+    )
+
+    def validate(path: Path):
+        if path != root:
+            return [history_only]
+        return real(path)
+
+    monkeypatch.setattr(line_writer, "validate_project", validate)
+    result = initialize_line(root, "History context", dry_run=True)
+
+    assert result.line_id == "line-0001"
+    assert real(root) == []
+
+
+def test_line_candidate_rejects_non_history_baseline_diagnostic(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = make_project(tmp_path)
+    real = line_writer.validate_project
+    candidate_error = ValidationError(
+        ".proofline",
+        "topology.unavailable",
+        "candidate topology를 검사할 수 없습니다.",
+    )
+
+    def validate(path: Path):
+        if path != root:
+            return [candidate_error]
+        return real(path)
+
+    monkeypatch.setattr(line_writer, "validate_project", validate)
+    with pytest.raises(LineInitError, match="candidate.invalid"):
+        initialize_line(root, "Invalid candidate", dry_run=True)
+
+
 @pytest.mark.parametrize("checkout", ["topic", "detached"])
 def test_line_init_is_branch_independent(tmp_path: Path, checkout: str) -> None:
     root = make_project(tmp_path)
@@ -197,7 +241,7 @@ def test_line_rollback_preserves_replaced_target_and_advanced_allocator(
     def replace_on_post_validation(path: Path):
         nonlocal calls
         calls += 1
-        if calls == 3:
+        if calls == 4:
             shutil.rmtree(target)
             target.mkdir()
             (target / "external").write_bytes(b"sentinel")
@@ -222,7 +266,7 @@ def test_line_rollback_preserves_externally_replaced_allocator(
     def replace_allocator_on_post(path: Path):
         nonlocal calls
         calls += 1
-        if calls == 3:
+        if calls == 4:
             data = allocator.read_bytes()
             allocator.unlink()
             allocator.write_bytes(data)

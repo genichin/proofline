@@ -10,6 +10,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from dataclasses import dataclass
 from importlib.resources import files
 from pathlib import Path
@@ -265,13 +266,20 @@ def _validate_candidate(
             raise LineInitError("candidate.source.unreadable", "proofline.yaml", "project config를 읽을 수 없습니다.") from exc
         for base in (".proofline/lines", ".proofline/criteria"):
             _copy_candidate_tree(root, candidate, base)
+        (candidate / ".proofline/identities.json").write_bytes(allocator)
+        baseline_errors = Counter(
+            error
+            for error in validate_project(candidate)
+            if error.code == "reference.inactive"
+        )
         suffix = line_id.removeprefix("line-")
         target = candidate / ".proofline/lines" / line_id
         target.mkdir()
         (target / f"{line_id}.md").write_text(line_text, encoding="utf-8")
         (target / f"dcy-{suffix}.md").write_text(discovery_text, encoding="utf-8")
-        (candidate / ".proofline/identities.json").write_bytes(allocator)
-        diagnostics = validate_project(candidate)
+        diagnostics = list(
+            (Counter(validate_project(candidate)) - baseline_errors).elements()
+        )
         if diagnostics:
             first = diagnostics[0]
             raise LineInitError("candidate.invalid", first.path, f"{first.code}: {first.message}")

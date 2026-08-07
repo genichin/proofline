@@ -75,9 +75,15 @@ def make_wheel(
 
 
 class Dist:
+    def __init__(self, direct_url: dict[str, object] | None = None) -> None:
+        self.direct_url = direct_url or {
+            "url": "https://example.invalid/proofline.whl",
+            "archive_info": {},
+        }
+
     def read_text(self, filename: str) -> str:
         assert filename == "direct_url.json"
-        return json.dumps({"url": "https://example.invalid/proofline.whl", "archive_info": {}})
+        return json.dumps(self.direct_url)
 
 
 def configure_update(
@@ -87,6 +93,7 @@ def configure_update(
     current: str = "0.6.0",
     target: str = "0.6.2",
     home_present: bool = True,
+    provenance: str = "archive",
 ) -> tuple[Path, dict[str, bytes], dict[str, bytes], list[str]]:
     home = tmp_path / "home"
     home.mkdir()
@@ -108,7 +115,13 @@ def configure_update(
         target: Release(target, new_wheel.name, f"asset:{new_wheel}", f"asset:{new_sum}"),
     }
     monkeypatch.setattr(updater.metadata, "version", lambda name: current)
-    monkeypatch.setattr(updater.metadata, "distribution", lambda name: Dist())
+    source = tmp_path / "source-checkout"
+    if provenance == "source":
+        source.mkdir()
+        distribution = Dist({"url": source.resolve().as_uri(), "dir_info": {}})
+    else:
+        distribution = Dist()
+    monkeypatch.setattr(updater.metadata, "distribution", lambda name: distribution)
     monkeypatch.setattr(updater, "packaged_home_payload", lambda: old_payload)
     monkeypatch.setattr(updater, "discover_release", lambda version: releases[target if version is None else version])
     monkeypatch.setattr(updater.shutil, "which", lambda name: "/fake/uv")
@@ -118,6 +131,22 @@ def configure_update(
     bin_dir.mkdir()
     monkeypatch.setattr(updater, "_uv_tool_paths", lambda uv, cwd: (tool_dir, bin_dir))
     monkeypatch.setattr(updater, "is_uv_tool_process", lambda tool_dir: True)
+    monkeypatch.setattr(updater, "_require_supported_predecessor", lambda current, target: None)
+    monkeypatch.setattr(
+        updater,
+        "_target_home_payload",
+        lambda uv, wheel, version, root: updater.StagedTargetHome(
+            new_payload,
+            root / "target-python",
+            root / "protocol-home",
+            "a" * 64,
+            root / f"proofline-{target}-py3-none-any.whl",
+            target,
+            "b" * 64,
+            len(new_payload),
+        ),
+    )
+    monkeypatch.setattr(updater, "_verify_target_home", lambda *args, **kwargs: None)
 
     def download(url: str, destination: Path) -> None:
         destination.write_bytes(Path(url.removeprefix("asset:")).read_bytes())
@@ -128,9 +157,14 @@ def configure_update(
 
     def run(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
         if command[:3] == ["/fake/uv", "tool", "install"]:
-            version = Path(command[-1]).name.removeprefix("proofline-").removesuffix("-py3-none-any.whl")
+            artifact = Path(command[-1])
+            version = (
+                current
+                if artifact.is_dir()
+                else artifact.name.removeprefix("proofline-").removesuffix("-py3-none-any.whl")
+            )
             installed["version"] = version
-            installs.append(version)
+            installs.append(artifact.name if artifact.is_dir() else version)
             return subprocess.CompletedProcess(command, 0, "", "")
         if command[0].endswith("/python"):
             out = f"{installed['version']}\n/tmp/site-packages/proofline/__init__.py\n"
@@ -196,6 +230,31 @@ def test_home_commit_failure_rolls_back_package_and_harness(tmp_path: Path, monk
         updater.run_update()
 
     assert installs == ["0.6.2", "0.6.0"]
+    for relative, content in old_payload.items():
+        assert (home / ".proofline" / relative).read_bytes() == content
+
+
+def test_same_version_source_adoption_restores_source_provenance_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home, old_payload, _, installs = configure_update(
+        tmp_path,
+        monkeypatch,
+        current="0.7.0",
+        target="0.7.0",
+        provenance="source",
+    )
+    original = home_writer.HomeUpdateTransaction.commit
+
+    def fail_after_exchange(transaction: home_writer.HomeUpdateTransaction) -> None:
+        original(transaction)
+        raise home_writer.HomeInitError("injected source adoption failure")
+
+    monkeypatch.setattr(home_writer.HomeUpdateTransaction, "commit", fail_after_exchange)
+    with pytest.raises(UpdateError, match="source adoption failure"):
+        updater.run_update(adopt=True)
+
+    assert installs == ["0.7.0", "source-checkout"]
     for relative, content in old_payload.items():
         assert (home / ".proofline" / relative).read_bytes() == content
 

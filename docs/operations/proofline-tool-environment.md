@@ -99,3 +99,17 @@ Source checkout installation은 기본 update에서 `adoption-required`로 중�
 `v0.1.0` executable에는 update command가 없고 `v0.2.0` updater에는 uv-tool ownership defect가 있다. 두 version에서는 `v0.2.1` wheel·`SHA256SUMS`를 직접 download·strict verify한 뒤 한 번만 `uv tool install --force <verified-v0.2.1-wheel>`를 실행한다. 이후에는 `proofline update`를 사용한다. Published `v0.2.0` objects는 보존하며 사용을 권장하지 않는다.
 
 Update는 application cwd를 install cwd로 사용하지 않고 `.venv`, `pyproject.toml`, lockfile, Git state와 `.proofline/`을 변경하지 않는다. Background update, automatic rollback과 PyPI는 이 계약에 포함하지 않는다.
+
+## v0.6.0 corrective installer 경계
+
+Public `v0.6.0` executable의 `proofline update`는 `v0.6.1`, `v0.6.2` 또는 다음 corrective release로 전환하는 지원 경로가 아니다. `v0.6.1`과 `v0.6.2`도 corrective target으로 재지정하지 않는다. Future corrective exact tag의 publication과 unauthenticated read-back 전까지 installer의 corrective option은 fail-closed placeholder다.
+
+Publication 후에는 `<CORRECTIVE_EXACT_TAG>`를 published immutable tag로 치환한 다음 경로만 사용한다.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/genichin/proofline/<CORRECTIVE_EXACT_TAG>/install.sh | sh -s -- --corrective-transition
+```
+
+Windows에서는 같은 tagged `install.ps1`을 native temporary file로 내려받아 `-CorrectiveTransition`으로 실행한다. Fresh install과 package-only `--force`/`-Force`는 이 transition과 별도 interface다.
+
+Corrective installer는 target package를 격리 staging한 뒤 target-owned internal module에 transaction을 위임한다. Module은 checksum-bound official `v0.6.0` archive installation 및 exact legacy HOME을 mutation 전에 확인하고 deterministic no-overwrite `~/.proofline.backup-v0.6.0`을 만든 뒤 target-owned HOME으로 수렴시킨다. Backup collision이나 legacy HOME drift, symlink, unexpected entry/path type은 package install 전에 거부한다. Install, HOME commit 또는 read-back 실패에서는 predecessor package/HOME rollback과 coherence verification을 수행하며 application cwd의 dependency, environment, `.proofline/`과 Git state는 변경하지 않는다.

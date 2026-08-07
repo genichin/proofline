@@ -122,11 +122,51 @@ def test_installer_wrong_checksum_never_invokes_uv(tmp_path: Path) -> None:
     assert not any(Path(env["TMPDIR"]).iterdir())
 
 
+def test_installer_rejects_extra_checksum_records(tmp_path: Path) -> None:
+    assets, fake_bin = make_fixture(tmp_path)
+    checksums = assets / "SHA256SUMS"
+    checksums.write_text(checksums.read_text() * 2)
+    env = installer_env(tmp_path, fake_bin, assets)
+    completed = subprocess.run(
+        ["sh", str(INSTALLER)], cwd=tmp_path, env=env, text=True, capture_output=True
+    )
+    assert completed.returncode != 0
+    assert not Path(env["FAKE_UV_LOG"]).exists()
+
+
 def test_installer_rejects_unknown_option(tmp_path: Path) -> None:
     completed, env = run_installer(tmp_path, "--unknown")
     assert completed.returncode != 0
     assert "Usage:" in completed.stderr
     assert not Path(env["FAKE_UV_LOG"]).exists()
+
+
+def test_corrective_transition_is_distinct_and_unpublished_placeholder_fails_before_download(
+    tmp_path: Path,
+) -> None:
+    assets, fake_bin = make_fixture(tmp_path)
+    env = installer_env(tmp_path, fake_bin, assets)
+    completed = subprocess.run(
+        ["sh", str(INSTALLER), "--corrective-transition"],
+        cwd=tmp_path,
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    assert completed.returncode != 0
+    assert "future exact release tag" in completed.stderr
+    assert not Path(env["FAKE_UV_LOG"]).exists()
+    assert not any(Path(env["TMPDIR"]).iterdir())
+
+
+def test_corrective_path_delegates_to_target_staged_module() -> None:
+    text = INSTALLER.read_text()
+    assert 'CORRECTIVE_VERSION="FUTURE_EXACT_TAG"' in text
+    assert 'PREDECESSOR_VERSION="0.6.0"' in text
+    assert "uv venv --no-config" in text
+    assert "uv pip install --no-config --python" in text
+    assert "-I -m proofline.installer_transition" in text
+    assert ".proofline.backup-v0.6.0" not in text
 
 
 def test_installer_fails_before_download_when_uv_is_missing(tmp_path: Path) -> None:
