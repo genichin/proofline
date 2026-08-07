@@ -152,6 +152,7 @@ jobs:
           digest=$(sha256sum "$WHEEL" | cut -d ' ' -f1)
           digest=${digest,,}
           cd "$GITHUB_WORKSPACE"
+          git fetch --no-tags origin +refs/heads/main:refs/heads/main
           export PROOFLINE_HOSTED_CANDIDATE_MODE=1
           export PROOFLINE_INSTALLED_EXECUTABLE="$RUNNER_TEMP/proofline-wheel-env/bin/proofline"
           export PROOFLINE_HOSTED_CANDIDATE_WHEEL="$WHEEL"

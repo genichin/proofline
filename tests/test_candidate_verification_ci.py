@@ -124,6 +124,7 @@ def test_ubuntu_and_windows_independently_verify_same_wheel_and_required_regress
     assert "PROOFLINE_INSTALLED_EXECUTABLE" in text
     assert text.count("CANDIDATE_PROVENANCE.json") >= 3
     assert 'cd "$GITHUB_WORKSPACE"' in text
+    assert "git fetch --no-tags origin +refs/heads/main:refs/heads/main" in text
     assert 'uv pip install --python "$env:RUNNER_TEMP\\proofline-wheel-env\\Scripts\\python.exe"' in text
     assert '$env:PROOFLINE_INSTALLED_EXECUTABLE = "$env:RUNNER_TEMP\\proofline-wheel-env\\Scripts\\proofline.exe"' in text
     assert "python -m compileall -q src tests" in text
@@ -331,6 +332,7 @@ def test_windows_gate_pins_operations_inventory_bytes_and_manifest_hashes() -> N
         "operation path set mismatch",
         "operation bytes mismatch",
         "operation manifest mismatch",
+        "Path(sys.argv[2]) / '.proofline'",
     ):
         assert marker in text
     workflow = WORKFLOW.read_text(encoding="utf-8")

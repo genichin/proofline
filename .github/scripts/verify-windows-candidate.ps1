@@ -235,23 +235,23 @@ try {
 import hashlib, sys, zipfile
 from pathlib import Path
 import yaml
-wheel, home, repo = Path(sys.argv[1]), Path(sys.argv[2]) / ".proofline", Path(sys.argv[3])
+wheel, home, repo = Path(sys.argv[1]), Path(sys.argv[2]) / '.proofline', Path(sys.argv[3])
 with zipfile.ZipFile(wheel) as archive:
     wheel_operations = {
-        name.removeprefix("proofline_home/operations/"): archive.read(name)
+        name.removeprefix('proofline_home/operations/'): archive.read(name)
         for name in archive.namelist()
-        if name.startswith("proofline_home/operations/") and not name.endswith("/")
+        if name.startswith('proofline_home/operations/') and not name.endswith('/')
     }
-source_operations = {path.name: path.read_bytes() for path in sorted((repo / "docs/operations").glob("*.md"))}  # docs/operations/*.md
-home_operations = {path.name: path.read_bytes() for path in sorted((home / "operations").glob("*.md"))}
-assert set(wheel_operations) == set(source_operations) == set(home_operations), "operation path set mismatch"
-assert wheel_operations == source_operations == home_operations, "operation bytes mismatch"
-manifest = yaml.safe_load((home / "manifest.yaml").read_text(encoding="utf-8"))
+source_operations = {path.name: path.read_bytes() for path in sorted((repo / 'docs/operations').glob('*.md'))}  # docs/operations/*.md
+home_operations = {path.name: path.read_bytes() for path in sorted((home / 'operations').glob('*.md'))}
+assert set(wheel_operations) == set(source_operations) == set(home_operations), 'operation path set mismatch'
+assert wheel_operations == source_operations == home_operations, 'operation bytes mismatch'
+manifest = yaml.safe_load((home / 'manifest.yaml').read_text(encoding='utf-8'))
 records = {
-    item["path"].removeprefix("operations/"): item["sha256"]
-    for item in manifest["managed_files"] if item["path"].startswith("operations/")
+    item['path'].removeprefix('operations/'): item['sha256']
+    for item in manifest['managed_files'] if item['path'].startswith('operations/')
 }
-assert records == {name: hashlib.sha256(content).hexdigest() for name, content in source_operations.items()}, "operation manifest mismatch"
+assert records == {name: hashlib.sha256(content).hexdigest() for name, content in source_operations.items()}, 'operation manifest mismatch'
 '@
         & $ToolPython -I -c $OperationsProbe $WheelPath $DirectUser $RepoRoot
         Assert-True ($LASTEXITCODE -eq 0) "operations inventory/bytes/manifest SHA256 verification failed"
