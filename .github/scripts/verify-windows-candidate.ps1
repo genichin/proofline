@@ -9,10 +9,10 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# Shared clean-runner plan markers. This tracked Windows surface is contract-only;
-# native runtime PASS remains owned by the hosted windows-python311 job.
+# Project-local clean-runner plan markers. This tracked Windows surface is contract-only;
+# native runtime PASS remains owned by this repository's windows-python311 job.
 $CleanRunnerPlanId = "candidate-clean-runner-v1"
-$CleanRunnerPlanResource = "skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json"
+$CleanRunnerPlanResource = ".github/resources/candidate-clean-runner-plan-v1.json"
 $CleanRunnerPlanOutcome = "contract_only"
 $CleanRunnerEndpoint = "https://pypi.org/simple"
 $CleanRunnerVersionSource = "uv.lock"

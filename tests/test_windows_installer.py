@@ -10,7 +10,7 @@ POSIX_INSTALLER = ROOT / "install.sh"
 WINDOWS_INSTALLER = ROOT / "install.ps1"
 README = ROOT / "README.md"
 WINDOWS_GATE = ROOT / ".github/scripts/verify-windows-candidate.ps1"
-PLAN = ROOT / "skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json"
+PLAN = ROOT / ".github/resources/candidate-clean-runner-plan-v1.json"
 
 
 def _constant(text: str, name: str, *, powershell: bool) -> str:
@@ -125,12 +125,13 @@ def test_readme_install_verification_sections_use_initialized_approved_order() -
 
 def test_windows_candidate_gate_declares_contract_only_shared_plan() -> None:
     text = WINDOWS_GATE.read_text(encoding="utf-8")
+    assert PLAN.is_file()
     plan = json.loads(PLAN.read_text(encoding="utf-8"))
     windows_steps = plan["platforms"]["windows-python311"]["steps"]
 
     assert '$CleanRunnerPlanId = "candidate-clean-runner-v1"' in text
     assert (
-        '$CleanRunnerPlanResource = "skills/proofline-run-dqc/resources/'
+        '$CleanRunnerPlanResource = ".github/resources/'
         'candidate-clean-runner-plan-v1.json"'
     ) in text
     assert '$CleanRunnerPlanOutcome = "contract_only"' in text
@@ -153,3 +154,5 @@ def test_windows_candidate_gate_declares_contract_only_shared_plan() -> None:
     assert "hosted_result" not in text.lower()
     assert "dqc_result" not in text.lower()
     assert "hosted_pass" not in text.lower()
+    assert "proofline_home/skills/proofline-run-dqc" not in text
+    assert "ProofLine DQC" not in text

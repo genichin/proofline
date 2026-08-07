@@ -129,24 +129,9 @@ DQC는 다음 Line-level 신호를 candidate마다 확인한다.
 5. 통합 대상 main의 ancestor·fast-forward 가능성
 6. DQC candidate 이후 제품 source 불변
 
-7. mandatory hosted candidate gate의 exact candidate SHA, terminal run attempt, required job 결과, 동일 artifact·provenance·wheel SHA-256 read-back
-
 이 검사는 여러 구현 단위가 합쳐진 candidate와 main integration readiness를 판정하므로 IQC evidence만으로 생략할 수 없다.
 
-Hosted candidate gate는 `.github/workflows/candidate-verification.yml`의 `candidate/**` push만 대상으로 하며, `build-candidate`, `ubuntu-python311`, `windows-python311`의 terminal success와 attempt-qualified artifact를 `.github/scripts/verify-candidate-evidence.py`로 검증한다. Evidence가 누락·실패·identity drift·artifact ambiguity·stale이면 DQC PASS를 금지한다. 이 판단과 remote identity는 DQC Checks에 기록하고 main integration이나 release authority를 부여하지 않는다. same-`V` retry는 허용하지 않는다.
-
-Remote candidate ref handoff 전에는 exact `V`와 이미 build된 single wheel에 대해 non-authoritative local contract gate를 다음 순서로 수행한다.
-
-```bash
-python3 skills/proofline-run-dqc/scripts/preflight_clean_runner.py \
-  --repo "$PWD" --candidate "$V" \
-  --wheel "$WHEEL" --provenance "$PREFLIGHT_PROVENANCE" \
-  --network-mode online
-```
-
-Offline mode는 `--network-mode offline --wheelhouse "$WHEELHOUSE"`를 사용한다. 이 helper는 shared `candidate-clean-runner-v1` plan의 exact wheel-before-check order, declared endpoint, `uv.lock` version source, online/offline network mode와 `publication_prerequisite: none`을 검사한다. Windows plan 판정은 `contract_only`이며 native Windows 또는 hosted PASS가 아니다. Helper는 remote push·workflow dispatch를 수행하지 않고 hosted result field나 DQC result를 만들지 않으며 mandatory hosted authority를 대체하지 않는다.
-
-운영 순서는 (1) `preflight_clean_runner.py` pre-push PASS, (2) 별도 handoff의 `candidate/{line_id}` ref push, (3) mandatory hosted `build-candidate`, `ubuntu-python311`, `windows-python311` 세 job, (4) `.github/scripts/verify-candidate-evidence.py`의 exact attempt evidence read-back, (5) 별도 mandatory Line-level evidence를 포함한 DQC 판정이다. Local PASS와 hosted 세 job/evidence/DQC는 각각 독립 gate다.
+GitHub Actions를 포함한 외부 CI는 각 repository가 선택해 운영하는 project-local 검증이다. 외부 CI 결과는 ProofLine DQC PASS를 생성하거나 여섯 필수 신호와 네 conditional trigger를 대체하거나 승격할 수 없으며, main 통합 authority도 부여하지 않는다.
 
 ### IQC evidence 재사용과 조건부 재검사
 
@@ -268,7 +253,7 @@ line_head: "<exact Q>"
 
 #### Pre-admission mutable gate와 post-integration immutable chronology
 
-Candidate 생성부터 hosted evidence admission, DQC PASS와 main fast-forward 직전까지의 **pre-integration** operational gate는 mutable refs를 직접 확인한다. Exact current `refs/heads/main == M`, canonical clean Line ref/head `== Q`, clean/collision-safe candidate worktree와 exact two-parent/manifest binding이 필요하다. Main이 old `V`를 포함하지 않은 채 진행하면 old `V`는 stale이다. 같은 exact `Q`를 rewrite하지 않고 fresh latest main에서 fresh `V`, manifest, hosted evidence와 DQC를 만든다. `Q`가 진행한 경우에도 fresh verification head와 fresh `V`가 필요하다.
+Candidate 생성부터 DQC PASS와 main fast-forward 직전까지의 **pre-integration** operational gate는 mutable refs를 직접 확인한다. Exact current `refs/heads/main == M`, canonical clean Line ref/head `== Q`, clean/collision-safe candidate worktree와 exact two-parent/manifest binding이 필요하다. Main이 old `V`를 포함하지 않은 채 진행하면 old `V`는 stale이다. 같은 exact `Q`를 rewrite하지 않고 fresh latest main에서 fresh `V`, manifest와 DQC를 만든다. `Q`가 진행한 경우에도 fresh verification head와 fresh `V`가 필요하다.
 
 Main이 DQC PASS descendant로 fast-forward된 뒤의 **post-integration** historical validation은 current refs equality를 요구하지 않는다. Immutable Git object인 `V`, actual parents, contained manifest, DQC `candidate_commit: V`, main first-parent의 연속된 `M → V → DQC PASS → delivery`와 designated Line first-parent spine을 검증한다. Clean worktree cleanup이나 후속 unrelated main commit 뒤에도 이 chronology는 유효하다.
 
@@ -294,7 +279,7 @@ Line verification 또는 delivery까지 해소하기로 한 deferred Open Questi
 - REQ의 대상 AC 집합과 각 AC lifecycle이 승인 baseline에 일치해야 한다.
 - `Exit Condition`이 Line verification 또는 delivery를 가리키는 deferred Open Question은 DQC PASS 전에 해소하고 답을 canonical owner section에 반영해야 한다.
 - DQC PASS를 기록한 뒤 main 통합 전까지 제품 source, test, build 또는 runtime configuration을 변경할 수 없다. 변경하면 새 `candidate_commit`을 고정하고 영향받는 IQC와 DQC를 다시 수행한다.
-- Main 통합은 commit identity를 바꾸지 않고 exact `V`의 DQC PASS descendant로 fast-forward하는 방식만 허용한다. Main이 `M`에서 진행해 old candidate로 fast-forward할 수 없으면 Line branch나 `Q`를 rewrite·merge·rebase하지 않고 fresh latest main에서 같은 exact `Q`를 designated second parent로 하는 fresh `V`, hosted evidence와 DQC를 다시 수행한다.
+- Main 통합은 commit identity를 바꾸지 않고 exact `V`의 DQC PASS descendant로 fast-forward하는 방식만 허용한다. Main이 `M`에서 진행해 old candidate로 fast-forward할 수 없으면 Line branch나 `Q`를 rewrite·merge·rebase하지 않고 fresh latest main에서 같은 exact `Q`를 designated second parent로 하는 fresh `V`와 DQC를 다시 수행한다.
 - Squash, cherry-pick 또는 commit을 다시 작성하는 통합은 기존 IQC와 DQC binding을 무효화하므로 허용하지 않는다.
 
 ### Line delivery 판정

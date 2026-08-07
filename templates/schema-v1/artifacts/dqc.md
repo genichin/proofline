@@ -30,19 +30,6 @@ result: draft
 | `main_fast_forward` | {{TODO: main ancestor와 fast-forward 검사}} | {{TODO: exit code 또는 PASS/FAIL}} | {{TODO: integration readiness}} | {{NEEDS_EVIDENCE: exact main과 candidate commit}} |
 | `post_candidate_source_immutability` | {{TODO: candidate 이후 제품 source diff 검사}} | {{TODO: exit code 또는 PASS/FAIL}} | {{TODO: DQC 기록 외 제품 source 불변 결과}} | {{NEEDS_EVIDENCE: candidate 대비 diff}} |
 
-### Mandatory Hosted Candidate Gate
-
-| 항목 | 기록 |
-| --- | --- |
-| Candidate V | {{NEEDS_EVIDENCE: exact candidate SHA}} |
-| Run ID / attempt | {{NEEDS_EVIDENCE: terminal hosted run identity}} |
-| Required jobs | `build-candidate`, `ubuntu-python311`, `windows-python311` — {{TODO: conclusion}} |
-| Artifact ID / name / expiry | {{NEEDS_EVIDENCE: attempt-qualified artifact read-back}} |
-| Wheel filename / SHA-256 | {{NEEDS_EVIDENCE: independent wheel digest}} |
-| Provenance / checksum | `CANDIDATE_PROVENANCE.json`, `SHA256SUMS` |
-| Evidence helper | `.github/scripts/verify-candidate-evidence.py` |
-| DQC admission | {{TODO: non-PASS·누락·stale이면 block_dqc; same-`V` retry forbidden}} |
-
 ### Conditional Component Checks
 
 | Trigger | Observed | Decision | 검사·결과 | Exact IQC binding | Skip 또는 실행 rationale |

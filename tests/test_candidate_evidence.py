@@ -124,7 +124,7 @@ def _validate(tmp_path: Path, payload: dict, archive: bytes) -> dict:
         {"artifacts": payload["artifacts"]},
         archive,
         ref_sha=SHA,
-        changed_paths=[".proofline/lines/line-0019/dqc-0019.md"],
+        changed_paths=[],
     )
 
 
@@ -245,7 +245,7 @@ def test_helper_rejects_malformed_or_extra_artifact_content(
         _validate(tmp_path, payload, _archive(entries))
 
 
-def test_helper_rejects_ref_drift_and_non_dqc_changes(tmp_path: Path) -> None:
+def test_helper_rejects_ref_drift_and_any_post_candidate_changes(tmp_path: Path) -> None:
     module = _module()
     payload, archive = _fixture()
     args = _args(tmp_path)
@@ -260,6 +260,13 @@ def test_helper_rejects_ref_drift_and_non_dqc_changes(tmp_path: Path) -> None:
             args, payload["run"], {"jobs": payload["jobs"]},
             {"artifacts": payload["artifacts"]}, archive,
             ref_sha=SHA, changed_paths=["src/proofline/cli.py"],
+        )
+    with pytest.raises(module.EvidenceError, match="post-candidate changes"):
+        module._validate_payload(
+            args, payload["run"], {"jobs": payload["jobs"]},
+            {"artifacts": payload["artifacts"]}, archive,
+            ref_sha=SHA,
+            changed_paths=[".proofline/lines/line-0019/dqc-0019.md"],
         )
 
 
@@ -409,10 +416,10 @@ def test_git_staleness_collects_staged_unstaged_and_untracked_paths(
     ]
 
 
-def test_helper_binds_dqc_path_to_candidate_line_identity(tmp_path: Path) -> None:
+def test_helper_rejects_dqc_path_delta_for_exact_candidate(tmp_path: Path) -> None:
     module = _module()
     payload, archive = _fixture()
-    with pytest.raises(module.EvidenceError, match="DQC-only"):
+    with pytest.raises(module.EvidenceError, match="post-candidate changes"):
         module._validate_payload(
             _args(tmp_path), payload["run"], {"jobs": payload["jobs"]},
             {"artifacts": payload["artifacts"]}, archive,

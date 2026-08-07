@@ -1,7 +1,7 @@
 ---
 name: proofline-run-dqc
 description: Use when verifying a ProofLine integration candidate at DQC without repeating exact-bound component IQC checks unless a documented trigger requires them.
-version: 1.4.0
+version: 1.5.0
 author: ProofLine
 license: MIT
 metadata:
@@ -32,6 +32,8 @@ DQC를 main-first exact integration candidate `V`의 Line-level verification으�
 ## Authority Boundary
 
 DQC `result`와 main 통합은 사용자나 지정 governance authority가 결정한다. Hermes는 실제 candidate, command output, canonical artifact와 Git state를 조사해 판정 근거를 작성하지만 evidence가 없는 결과를 만들지 않는다.
+
+GitHub Actions를 포함한 외부 CI는 각 repository가 선택해 운영하는 project-local 검증이다. 외부 CI 결과는 ProofLine DQC PASS를 생성하거나 여섯 필수 신호와 네 conditional trigger를 대체하거나 승격할 수 없으며, main 통합 authority도 부여하지 않는다.
 
 ProofLine CLI는 artifact validation만 수행한다. Git branch, commit, merge 또는 push, test 실행과 lifecycle transition은 CLI 책임이 아니다.
 
@@ -66,21 +68,6 @@ conditional_triggers:
   explicit_line_level_requirement:
     action: run_explicit_line_checks
     result_required_before_pass: true
-hosted_candidate_gate:
-  mandatory: true
-  provider: github-actions
-  workflow_path: .github/workflows/candidate-verification.yml
-  candidate_branch: candidate/{line_id}
-  required_jobs:
-    - build-candidate
-    - ubuntu-python311
-    - windows-python311
-  artifact_name: proofline-candidate-{run_id}-{run_attempt}
-  provenance_filename: CANDIDATE_PROVENANCE.json
-  checksum_filename: SHA256SUMS
-  evidence_helper: .github/scripts/verify-candidate-evidence.py
-  non_pass_action: block_dqc
-  same_v_retry: forbidden
 ```
 
 `compileall`, lock, wheel, package, skill metadata와 설치 검사는 `required_line_checks`가 아니다. 해당 검사가 IQC에서 exact-bound passed evidence로 남고 trigger가 없으면 재사용한다.
@@ -91,7 +78,7 @@ hosted_candidate_gate:
 
 모든 Micro-SPEC 구현, corresponding IQC와 `execution_status: verifying`를 포함한 clean Line head를 `Q`로 고정한다. Latest main을 `M`으로 고정하고 별도 collision-safe candidate branch/worktree에서 `Q`를 `--no-ff` merge해 exactly two-parent `V`를 만든다. Parent order는 `V.parent[0]=M`, `V.parent[1]=Q`다. `V`는 `.proofline/lines/line-NNNN/integration-NNNN.md` 하나를 새로 포함하며 manifest의 `line_id`, `main_parent`, `line_head`가 target Line, `M`, `Q`와 exact하게 일치해야 한다. Manifest 외 merge-only 제품 변경이나 conflict resolution은 candidate admission 실패다.
 
-Pre-integration에는 mutable ref equality가 gate다. Candidate 생성·hosted evidence·DQC PASS·main fast-forward 직전까지 current main ref가 exact `M`, canonical clean Line ref/head가 exact `Q`여야 한다. 다음 read-only helper를 clean candidate `V` worktree에서 실행한다.
+Pre-integration에는 mutable ref equality가 gate다. Candidate 생성·DQC PASS·main fast-forward 직전까지 current main ref가 exact `M`, canonical clean Line ref/head가 exact `Q`여야 한다. 다음 read-only helper를 clean candidate `V` worktree에서 실행한다.
 
 ```bash
 python3 ~/.proofline/skills/proofline-run-dqc/scripts/preflight_integration_candidate.py \
@@ -100,7 +87,7 @@ python3 ~/.proofline/skills/proofline-run-dqc/scripts/preflight_integration_cand
   --main-parent "$M" --line-head "$Q" --candidate "$V"
 ```
 
-Helper는 exact refs, clean/collision-safe state, `HEAD=V`, ordered exactly two parents와 frontmatter-only manifest binding뿐 아니라 designated `Q` 자체를 읽기만 한다. `Q`는 canonical target Line의 exact `in_progress → verifying` first-parent quality transition이어야 하고 그 commit의 변경은 target Line과 허용된 target Micro-SPEC/IQC path로 제한된다. 모든 non-withdrawn Micro-SPEC은 `approved`·`implemented`이고 canonical passed IQC가 exact approved specification, fresh persisted `in_progress`, non-governance implementation과 quality boundary를 bind해야 한다. Missing·failed·stale·identity-mismatched IQC, unrelated/multi-Line path 또는 arbitrary self-consistent second parent는 pre-admission에서 실패한다. Helper는 `V`를 생성하거나 file/index/ref/object/worktree를 변경하지 않으며 approve, merge, push, publish도 하지 않는다. Stale `M`이면 same exact `Q`를 유지한 fresh `V`와 fresh hosted/DQC evidence를 만들고 old `V`를 merge/rebase/retry하지 않는다. Stale `Q`도 fresh verification head와 fresh `V`가 필요하다.
+Helper는 exact refs, clean/collision-safe state, `HEAD=V`, ordered exactly two parents와 frontmatter-only manifest binding뿐 아니라 designated `Q` 자체를 읽기만 한다. `Q`는 canonical target Line의 exact `in_progress → verifying` first-parent quality transition이어야 하고 그 commit의 변경은 target Line과 허용된 target Micro-SPEC/IQC path로 제한된다. 모든 non-withdrawn Micro-SPEC은 `approved`·`implemented`이고 canonical passed IQC가 exact approved specification, fresh persisted `in_progress`, non-governance implementation과 quality boundary를 bind해야 한다. Missing·failed·stale·identity-mismatched IQC, unrelated/multi-Line path 또는 arbitrary self-consistent second parent는 pre-admission에서 실패한다. Helper는 `V`를 생성하거나 file/index/ref/object/worktree를 변경하지 않으며 approve, merge, push, publish도 하지 않는다. Stale `M`이면 same exact `Q`를 유지한 fresh `V`와 fresh DQC evidence를 만들고 old `V`를 merge/rebase하지 않는다. Stale `Q`도 fresh verification head와 fresh `V`가 필요하다.
 
 ### 2. Coverage와 IQC binding 확인
 
@@ -143,31 +130,6 @@ Canonical template를 사용해 다음을 남긴다.
 - 네 conditional trigger의 observed 여부, reuse·rerun·blocked decision과 rationale
 - 모든 대상 AC의 종합 판정
 
-### Mandatory Hosted Candidate Gate
-
-Hosted candidate ref를 push하기 전에 exact `V`와 이미 build된 single wheel에 대해 다음 non-authoritative clean-runner preflight를 먼저 실행한다.
-
-```bash
-python3 skills/proofline-run-dqc/scripts/preflight_clean_runner.py \
-  --repo "$PWD" --candidate "$V" \
-  --wheel "$WHEEL" --provenance "$PREFLIGHT_PROVENANCE" \
-  --network-mode online
-```
-
-Offline 실행은 같은 argv에 `--network-mode offline --wheelhouse "$WHEELHOUSE"`를 사용한다. Helper는 shared `candidate-clean-runner-v1` plan과 exact wheel/provenance, endpoint, `uv.lock` version source, network mode 및 `publication_prerequisite: none` 계약만 판정한다. Windows plan 결과는 `contract_only`이며 native Windows 또는 hosted PASS가 아니다. Helper PASS 자체는 remote push·workflow dispatch를 수행하지 않고 hosted run/job/artifact evidence나 IQC·DQC result를 만들지 않으며 mandatory hosted gate를 대체하지 않는다.
-
-순서는 분리해서 유지한다.
-
-1. `preflight_clean_runner.py` local pre-push contract PASS를 확인한다.
-2. 별도 governance handoff로 exact `V`를 `candidate/{line_id}` ref에 push한다.
-3. Mandatory hosted `build-candidate`, `ubuntu-python311`, `windows-python311` 세 job의 terminal success를 확인한다.
-4. `.github/scripts/verify-candidate-evidence.py`로 exact attempt의 artifact·provenance·checksum evidence를 read-back한다.
-5. 위 hosted evidence와 기존 mandatory Line-level checks를 별도로 기록한 뒤에만 DQC를 판정한다.
-
-`hosted_candidate_gate`는 mandatory이며, exact candidate를 `candidate/{line_id}` remote ref로 push하고 선언된 workflow·세 job·run attempt·artifact·provenance·wheel digest를 `.github/scripts/verify-candidate-evidence.py`로 read-back한다. Helper는 remote ref의 Line identity와 허용된 단일 canonical DQC path를 결속한다. Hosted run, required job, artifact 또는 exact candidate identity가 누락·실패·stale이면 원인과 관계없이 DQC를 blocked로 유지한다. Evidence read-back 이후 DQC commit까지 제품 source, test, build 또는 runtime configuration 변경은 stale이다. same-`V` retry는 허용하지 않는다.
-
-원격 identity와 wheel identity는 DQC Checks에 기록하며, 이 gate는 main integration이나 release authority를 부여하지 않는다.
-
 실행하지 않은 검사를 PASS라고 쓰지 않는다. `reuse` 또는 `not applicable`과 근거를 쓴다.
 
 ### 6. Main integration handoff
@@ -181,7 +143,7 @@ Main이 DQC PASS descendant로 fast-forward된 post-integration 단계에서는 
 - Mandatory check 실패: DQC `failed` 또는 실제 blocker에 따라 `blocked`
 - Required conditional result 부재: `passed` 금지
 - Candidate 이후 제품 source 변경: 새 candidate 고정 후 영향받은 IQC·DQC 재검증
-- Pre-integration main drift: same exact `Q`를 designated second parent로 하는 fresh main-first `V`, hosted evidence와 DQC 수행
+- Pre-integration main drift: same exact `Q`를 designated second parent로 하는 fresh main-first `V`와 DQC 수행
 - Pre-integration Line drift: fresh `Q` verification head와 fresh `V` 수행
 
 ## Verification Checklist
@@ -195,5 +157,4 @@ Main이 DQC PASS descendant로 fast-forward된 post-integration 단계에서는 
 - [ ] DQC 이후 candidate 대비 제품 source 불변을 확인했다.
 - [ ] Main fast-forward 가능성을 확인했다.
 - [ ] 사용자의 통합 authority를 보존했다.
-- [ ] Mandatory hosted candidate gate의 Candidate V, run attempt, required jobs, artifact와 wheel SHA-256을 DQC Checks에 기록했다.
-- [ ] Hosted non-PASS·누락·stale evidence에서 DQC PASS를 차단했고 same-`V` retry를 사용하지 않았다.
+- [ ] 외부 CI 결과를 ProofLine DQC PASS 또는 통합 authority로 대체·승격하지 않았다.
