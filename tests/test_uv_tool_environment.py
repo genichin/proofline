@@ -25,9 +25,9 @@ def test_uv_tool_install_is_isolated_from_application_environment(tmp_path: Path
     app = tmp_path / "application"
     app.mkdir()
 
-    shutil.copy2(ROOT / "proofline.yaml", app / "proofline.yaml")
-    shutil.copytree(ROOT / ".proofline", app / ".proofline")
-    (app / ".proofline/line-identities.json").unlink()
+    fixture = ROOT / "tests/fixtures/valid-minimal"
+    shutil.copy2(fixture / "proofline.yaml", app / "proofline.yaml")
+    shutil.copytree(fixture / ".proofline", app / ".proofline")
     pyproject = app / "pyproject.toml"
     lockfile = app / "uv.lock"
     pyproject.write_text("[project]\nname = 'application-fixture'\nversion = '0.0.0'\n")
@@ -68,7 +68,6 @@ def test_uv_tool_install_is_isolated_from_application_environment(tmp_path: Path
     assert not installed_module.is_relative_to(ROOT)
 
     validated = run(str(executable), "validate", cwd=app, env=env)
-    assert validated.returncode == 1, validated.stderr
-    assert "history.unavailable" in validated.stderr
+    assert validated.returncode == 0, validated.stderr
     assert not (app / ".venv").exists()
     assert {path.name: path.read_bytes() for path in (pyproject, lockfile)} == before

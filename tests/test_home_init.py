@@ -250,7 +250,7 @@ def test_windows_replacement_is_rejected_before_staging_or_mutation(
         {
             "agent-context.md": b"old\n",
             "contracts/a.md": b"old\n",
-            "operations/legacy-nonterminal-history-migration.md": b"old\n",
+            "operations/example-operation.md": b"old\n",
             "operations/official-wheel-release.md": b"old\n",
             "operations/proofline-tool-environment.md": b"old\n",
             "templates/a.md": b"old\n",
@@ -262,7 +262,7 @@ def test_windows_replacement_is_rejected_before_staging_or_mutation(
         {
             "agent-context.md": b"new\n",
             "contracts/a.md": b"new\n",
-            "operations/legacy-nonterminal-history-migration.md": b"new\n",
+            "operations/example-operation.md": b"new\n",
             "operations/official-wheel-release.md": b"new\n",
             "operations/proofline-tool-environment.md": b"new\n",
             "templates/a.md": b"new\n",

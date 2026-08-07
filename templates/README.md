@@ -11,11 +11,7 @@ templates/
     │   ├── line.md
     │   ├── discovery.md
     │   ├── requirement.md
-    │   ├── acceptance-criterion.md
-    │   ├── micro-spec.md
-    │   ├── iqc.md
-    │   ├── dqc.md
-    │   └── integration.md
+    │   └── acceptance-criterion.md
     └── derived/
         └── requirements.md
 ```
@@ -32,7 +28,8 @@ templates/
 - 필요하지 않은 선택 section과 예시 행은 생성할 때 제거한다. 필수 H1·H2 section은 제거하지 않는다.
 - 템플릿은 lifecycle 권한을 부여하지 않는다. 상태 전환과 판정은 canonical artifact와 Git history가 소유한다.
 - 생성 결과는 `docs/contracts/`의 해당 artifact contract와 validator를 통과해야 한다.
-- `integration.md`는 pre-admission candidate의 exact main parent와 Line head를 결속하는 frontmatter-only manifest다.
+- 신규 canonical artifact는 Line, Discovery, Requirement, Acceptance Criterion 네 종류다.
+- 기존 프로젝트의 canonical legacy 경로에 남은 Micro-SPEC, IQC, DQC, integration 및 legacy migration 파일은 opaque retained data이며 신규 생성하거나 템플릿으로 제공하지 않는다.
 
 ## 파생 요구사항 문서 렌더링
 
@@ -61,7 +58,5 @@ AC의 Verification 내용
 
 - Discovery에서 사용자 문제, 확인된 근거, 범위·비범위, 위험·가정 및 구조화된 Open Question을 구분한다.
 - AC는 관찰 가능한 성공 조건뿐 아니라 실패·경계 조건과 직접 검증 방법을 분명히 한다.
-- Micro-SPEC은 담당 범위, 제외 범위, 기준·의존성, 변경 위치, rollback·containment와 검증 evidence를 명시한다.
-- IQC와 DQC는 실제 검사 방법, exit code 또는 판정, 결과 요약과 안정적인 evidence 참조를 기록한다.
 
 참고 프로젝트의 추가 metadata, 별도 lifecycle 권한, index, review checklist 및 중복 상태는 ProofLine schema에 포함하지 않았다.

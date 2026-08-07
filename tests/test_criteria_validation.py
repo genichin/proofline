@@ -15,7 +15,6 @@ from proofline.validator import _validate_schema_candidate, validate_project
 FIXTURE = Path(__file__).parent / "fixtures" / "valid-minimal"
 ROOT = Path(__file__).resolve().parents[1]
 REQ = ".proofline/lines/line-0001/req-0001.md"
-MS = ".proofline/lines/line-0001/micro-specs/ms-0001-001.md"
 
 
 def _hosted_candidate_wheel() -> Path | None:
@@ -92,8 +91,7 @@ def git(project: Path, *args: str) -> str:
 
 
 def initialize_main(project: Path) -> None:
-    # Criteria-history fixtures predate implementation-history enforcement. Keep
-    # their unrelated Lines as provable pre-adoption delivered legacy.
+    # Keep unrelated fixture Lines terminal during criteria-history tests.
     for line in (project / ".proofline/lines").glob("line-*/line-*.md"):
         text = line.read_text(encoding="utf-8")
         line.write_text(
@@ -115,8 +113,7 @@ def add_update_owner(project: Path, number: int = 2, status: str = "draft") -> s
     line_id = f"line-{number:04d}"
     req_id = f"req-{number:04d}"
     line = project / ".proofline/lines" / line_id
-    specs = line / "micro-specs"
-    specs.mkdir(parents=True)
+    line.mkdir(parents=True)
     (line / f"{line_id}.md").write_text(
         f'---\nid: "{line_id}"\nexecution_status: not_started\n---\n',
         encoding="utf-8",
@@ -174,32 +171,6 @@ Scope.
 ## Non-Goals
 
 None.
-''',
-        encoding="utf-8",
-    )
-    (specs / f"ms-{number:04d}-001.md").write_text(
-        f'''---
-id: "ms-{number:04d}-001"
-parent_req: "{req_id}"
-criteria:
-  - "ac-0003"
-spec_status: draft
-implementation_status: not_started
----
-
-# Update spec
-
-## Scope
-
-Scope.
-
-## Implementation
-
-Implementation.
-
-## Verification
-
-Verification.
 ''',
         encoding="utf-8",
     )
@@ -579,66 +550,16 @@ def test_satisfy_rejects_retired_ac(tmp_path: Path) -> None:
     assert "ac-0003" in status_errors[0].message
 
 
-def test_micro_spec_rejects_ac_outside_parent_req_scope(tmp_path: Path) -> None:
+def test_approved_satisfy_keeps_binding_after_later_retirement(tmp_path: Path) -> None:
     project = copy_valid_project(tmp_path)
-    req = project / REQ
-    replace(req, "    - ac-0003\n  update: []", "  update: []")
+    make_satisfy_binding(project)
+    initialize_main(project)
+    retirement_req = project / add_update_owner(project, status="approved")
+    replace(retirement_req, "  update:\n    - ac-0003", "  update: []")
+    replace(retirement_req, "  retire: []", "  retire:\n    - ac-0003")
+    replace(project / ".proofline/criteria/ac-0003.md", "status: active", "status: retired")
 
-    scope_errors = [
-        error for error in errors_for(project, MS) if error.code == "criteria.out-of-scope"
-    ]
-    assert scope_errors
-    assert "ac-0003" in scope_errors[0].message
-
-
-@pytest.mark.parametrize("line_status", ["not_started", "in_progress"])
-def test_req_allows_partial_coverage_while_every_micro_spec_is_not_started(
-    tmp_path: Path, line_status: str
-) -> None:
-    project = copy_valid_project(tmp_path)
-    line = project / ".proofline/lines/line-0001/line-0001.md"
-    ms = project / MS
-    replace(line, "execution_status: verifying", f"execution_status: {line_status}")
-    replace(ms, "implementation_status: implemented", "implementation_status: not_started")
-    replace(ms, "  - ac-0003\n", "")
-
-    assert not any(error.code == "criteria.uncovered" for error in errors_for(project, REQ))
-
-
-@pytest.mark.parametrize(
-    ("line_status", "implementation_status"),
-    [
-        ("not_started", "in_progress"),
-        ("in_progress", "in_progress"),
-        ("in_progress", "implemented"),
-        ("verifying", "not_started"),
-        ("delivered", "not_started"),
-        ("cancelled", "not_started"),
-    ],
-)
-def test_req_requires_full_coverage_outside_unstarted_drafting_state(
-    tmp_path: Path, line_status: str, implementation_status: str
-) -> None:
-    project = copy_valid_project(tmp_path)
-    line = project / ".proofline/lines/line-0001/line-0001.md"
-    ms = project / MS
-    replace(line, "execution_status: verifying", f"execution_status: {line_status}")
-    replace(ms, "implementation_status: implemented", f"implementation_status: {implementation_status}")
-    replace(ms, "  - ac-0003\n", "")
-
-    coverage_errors = [
-        error for error in errors_for(project, REQ) if error.code == "criteria.uncovered"
-    ]
-    assert coverage_errors
-    assert "ac-0003" in coverage_errors[0].message
-
-
-def test_withdrawn_micro_spec_does_not_supply_required_coverage(tmp_path: Path) -> None:
-    project = copy_valid_project(tmp_path)
-    ms = project / MS
-    replace(ms, "spec_status: approved", "spec_status: withdrawn")
-
-    assert any(error.code == "criteria.uncovered" for error in errors_for(project, REQ))
+    assert inactive_errors(project) == []
 
 
 def test_withdrawn_req_still_rejects_inactive_satisfy_target(tmp_path: Path) -> None:
@@ -651,12 +572,3 @@ def test_withdrawn_req_still_rejects_inactive_satisfy_target(tmp_path: Path) -> 
     replace(ac, "status: active", "status: retired")
 
     assert any(error.code == "reference.inactive" for error in errors_for(project, REQ))
-
-
-def test_withdrawn_req_still_limits_non_withdrawn_micro_spec_scope(tmp_path: Path) -> None:
-    project = copy_valid_project(tmp_path)
-    req = project / REQ
-    replace(req, "status: approved", "status: withdrawn")
-    replace(req, "    - ac-0003\n  update: []", "  update: []")
-
-    assert any(error.code == "criteria.out-of-scope" for error in errors_for(project, MS))

@@ -50,6 +50,6 @@ def test_cli_validates_minimal_fixture_without_modifying_inputs() -> None:
         for path in FIXTURE.rglob("*")
         if path.is_file()
     }
-    assert result.returncode == 1
-    assert "history.unavailable" in result.stderr
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == ""
     assert after == before

@@ -18,31 +18,19 @@ WORKFLOW = ROOT / ".github/workflows/candidate-verification.yml"
 WINDOWS_GATE = ROOT / ".github/scripts/verify-windows-candidate.ps1"
 HOME_INIT_TESTS = ROOT / "tests/test_home_init.py"
 WINDOWS_FIXTURE = ROOT / "tests/fixtures/valid-minimal"
-IMPLEMENTATION_HISTORY_TESTS = ROOT / "tests/test_implementation_history.py"
-WINDOWS_HISTORY_TESTS = ROOT / "tests/test_windows_history_runtime.py"
 LINE_INIT_TESTS = ROOT / "tests/test_line_init.py"
 PLAN = ROOT / ".github/resources/candidate-clean-runner-plan-v1.json"
-RUN_DQC_SKILL = ROOT / "skills/proofline-run-dqc/SKILL.md"
-DELIVERY_CONTRACT = ROOT / "docs/contracts/line-delivery.md"
 README = ROOT / "README.md"
 STORAGE_CONTRACT = ROOT / "docs/contracts/storage-and-retention.md"
 ARTIFACT_LAYOUT = ROOT / "docs/artifact-layout.md"
 AGENT_CONTEXT = ROOT / "src/proofline_home/agent-context.md"
 HOSTED_WHEEL_CONSUMERS = {
-    ROOT / "tests/helpers/line_0020_scenario_runner.py": ("execute_cross_artifact_registry",),
-    ROOT / "tests/test_start_implementation_skill.py": ("packaged_worktree_script",),
-    ROOT / "tests/test_implementation_history.py": ("installed_wheel_cli",),
-    ROOT / "tests/test_specification_approval_authority.py": (
-        "test_source_and_built_wheel_extracted_script_have_behavior_and_diagnostic_parity",
-    ),
     ROOT / "tests/test_criteria_validation.py": (
         "test_installed_wheel_cli_accepts_committed_update_draft_lifecycle",
     ),
     ROOT / "tests/test_wheel_package.py": (
         "test_built_wheel_contains_and_reads_canonical_schema_templates",
         "test_built_wheel_operations_match_source_inventory_and_payload_bytes",
-        "test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workflow",
-        "test_source_and_isolated_wheel_share_real_git_migration_registry",
     ),
 }
 JOBS = {"build-candidate", "ubuntu-python311", "windows-python311"}
@@ -122,17 +110,16 @@ def test_ubuntu_and_windows_independently_verify_same_wheel_and_required_regress
     assert "PROOFLINE_HOSTED_CANDIDATE_WHEEL" in text
     assert "uv run pytest -q -m candidate_build_only" in text
     assert text.count('uv run pytest -q -m "not candidate_build_only"') == 1
-    assert "tests/test_windows_history_runtime.py" in text
-    assert "tests/test_start_implementation_windows_runtime.py" in text
-    assert "tests/test_implementation_history.py" in text
+    assert "tests/test_line_init.py" in text
+    assert "tests/test_artifact_validation.py" in text
+    assert "tests/test_cli.py" in text
     windows_runs = "\n".join(
         step.get("run", "") for step in workflow["jobs"]["windows-python311"]["steps"]
     )
     assert 'uv run pytest -q -m "not candidate_build_only"' not in windows_runs
     assert (
-        "uv run pytest -q tests/test_windows_history_runtime.py "
-        "tests/test_start_implementation_windows_runtime.py "
-        "tests/test_implementation_history.py"
+        "uv run pytest -q tests/test_line_init.py "
+        "tests/test_artifact_validation.py tests/test_cli.py"
     ) in windows_runs
     assert "PROOFLINE_INSTALLED_EXECUTABLE" in text
     assert text.count("CANDIDATE_PROVENANCE.json") >= 3
@@ -147,14 +134,14 @@ def test_ubuntu_and_windows_independently_verify_same_wheel_and_required_regress
 
 
 def test_operations_bearing_home_topology_and_update_contract_is_documented() -> None:
-    topology = "~/.proofline/operations/"
     for path in (README, STORAGE_CONTRACT, ARTIFACT_LAYOUT, AGENT_CONTEXT):
         text = path.read_text(encoding="utf-8")
-        assert topology in text, path
+        assert "~/.proofline/" in text, path
+        assert "operations" in text, path
+    for path in (README, STORAGE_CONTRACT, AGENT_CONTEXT):
+        text = path.read_text(encoding="utf-8")
         assert "docs/operations/*.md" in text, path
-        assert "managed" in text.lower(), path
         assert "manifest" in text.lower(), path
-        assert "update --check" in text, path
 
 
 def test_each_hosted_job_contains_repository_external_command_state_and_no_mutation_checks() -> None:
@@ -211,7 +198,7 @@ def test_verified_absolute_wheel_is_exported_to_each_hosted_consumer_suite() -> 
     consumer_index = next(
         index
         for index, step in enumerate(windows_steps)
-        if step.get("name") == "Verify source history and installed wheel regressions"
+        if step.get("name") == "Verify source and installed wheel regressions"
     )
     assert checksum_index < consumer_index
     windows = windows_steps[consumer_index]["run"]
@@ -224,7 +211,7 @@ def test_verified_absolute_wheel_is_exported_to_each_hosted_consumer_suite() -> 
     )
     assert windows.index("candidate provenance mismatch") < windows.index(
         "$env:PROOFLINE_HOSTED_CANDIDATE_WHEEL = $wheel[0].FullName"
-    ) < windows.index("uv run pytest -q tests/test_windows_history_runtime.py")
+    ) < windows.index("uv run pytest -q tests/test_line_init.py")
 
     controls = (
         "PROOFLINE_HOSTED_CANDIDATE_MODE",
@@ -269,17 +256,7 @@ def test_hosted_wheel_consumers_validate_exact_file_and_bypass_local_build(
     assert "hexdigest" in helper_source
 
     provenance_source = helper_source
-    if path == IMPLEMENTATION_HISTORY_TESTS:
-        provenance_source = ast.unparse(
-            next(
-                node
-                for node in ast.walk(tree)
-                if isinstance(node, ast.FunctionDef) and node.name == "installed_wheel_cli"
-            )
-        )
-        return_statement = "return executable"
-    else:
-        return_statement = "return wheel"
+    return_statement = "return wheel"
     for required in (
         "python.exe",
         "-I",
@@ -321,25 +298,6 @@ def test_hosted_wheel_consumers_validate_exact_file_and_bypass_local_build(
             and "wheel is not None" in ast.unparse(node.test)
         )
         assert not contains_uv_build(candidate_branch.body)
-
-
-def test_installed_executable_precedence_is_bound_to_candidate_install_provenance() -> None:
-    tree = ast.parse(IMPLEMENTATION_HISTORY_TESTS.read_text(encoding="utf-8"))
-    function = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "installed_wheel_cli"
-    )
-    source = ast.unparse(function)
-    helper = next(
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == "_hosted_candidate_wheel"
-    )
-    helper_source = ast.unparse(helper)
-    assert "_hosted_candidate_wheel()" in source
-    assert "direct_url.json" in source
-    assert "PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256" in helper_source
 
 
 def test_windows_gate_exercises_exact_wheel_and_full_fresh_install_sequence() -> None:
@@ -422,16 +380,8 @@ def test_workflow_and_gate_preserve_governance_and_home_boundaries() -> None:
     assert 'monkeypatch.setenv("USERPROFILE", str(home))' in home
 
 
-def test_windows_consumer_history_harness_is_platform_neutral() -> None:
-    implementation = IMPLEMENTATION_HISTORY_TESTS.read_text(encoding="utf-8")
-    windows_runtime = WINDOWS_HISTORY_TESTS.read_text(encoding="utf-8")
+def test_windows_consumer_suite_keeps_platform_specific_tests_skippable() -> None:
     line_init = LINE_INIT_TESTS.read_text(encoding="utf-8")
-    assert 'git(path, "config", "core.autocrlf", "false")' in implementation
-    assert 'if extra_env is None and os.name != "nt":' in implementation
-    assert "path.chmod(path.stat().st_mode | stat.S_IWRITE)" in implementation
-    assert "shutil.rmtree(git_dir, onerror=remove_readonly)" in implementation
-    assert "sys.stdout.buffer.write" in windows_runtime
-    assert "print('ok')" not in windows_runtime
     assert 'fcntl = pytest.importorskip("fcntl")' in line_init
 
 
@@ -474,15 +424,3 @@ def test_hosted_workflow_declares_shared_clean_runner_plan_contract() -> None:
     workflow_text = WORKFLOW.read_text(encoding="utf-8")
     assert "PROOFLINE_CLEAN_RUNNER_PACKAGED_PLAN_RESOURCE" not in workflow_text
     assert "proofline_home/skills/proofline-run-dqc/resources" not in workflow_text
-
-
-def test_external_ci_is_project_local_and_outside_dqc_authority() -> None:
-    for path in (RUN_DQC_SKILL, DELIVERY_CONTRACT):
-        text = path.read_text(encoding="utf-8")
-        assert "외부 CI" in text
-        assert "project-local" in text
-        assert "ProofLine DQC PASS" in text
-        assert "통합 authority" in text
-        assert "preflight_clean_runner.py" not in text
-        assert "verify-candidate-evidence.py" not in text
-        assert "hosted evidence" not in text

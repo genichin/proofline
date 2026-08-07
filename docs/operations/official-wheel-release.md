@@ -8,7 +8,7 @@ ProofLine official GitHub Release의 wheel을 exact source commit·version·chec
 prepare → publication approval → publish → remote read-back verification
 ```
 
-Package publication은 적용 project의 deployment나 `.proofline/` schema migration이 아니다.
+Package publication은 적용 project의 deployment나 `.proofline/` schema 변경이 아니다.
 
 ## Release Identity
 
@@ -117,24 +117,7 @@ gh release download v0.1.0 \
 5. Fresh non-editable installation의 provenance, `proofline --version`, resource byte parity와 representative CLI가 통과한다.
 6. Remote tag의 peeled commit이 approved candidate commit과 일치한다.
 
-DQC evidence는 tag, Release URL, candidate commit, remote asset digest와 verification 결과를 기록한다.
-
-## v0.6.1 Legacy Migration Hotfix Candidate
-
-`v0.6.1` candidate는 legacy non-terminal history migration validator, canonical template와 packaged 운영 절차를 포함한다.
-
-```text
-Tag:      v0.6.1
-Wheel:    proofline-0.6.1-py3-none-any.whl
-Checksum: SHA256SUMS
-Assets:   wheel + SHA256SUMS only
-```
-
-Prepare 단계에서는 source/full regression, exact candidate에서 fresh wheel 1회 build, strict checksum, checkout 밖 isolated install, distribution/CLI version `0.6.1`, migration template·contract·operation resource의 exact source↔wheel byte parity를 확인한다. 이 candidate 문서와 installer version 동기화는 publication authority가 아니다. IQC/DQC와 별도 사용자 approval 전에는 tag 생성·push, Release 생성 또는 asset upload를 수행하지 않으며 기존 `v0.6.0` object를 변경하지 않는다.
-
-## v0.6.2 Operations Resource Corrective Candidate
-
-`v0.6.2` corrective candidate는 clean candidate에서 fresh wheel을 한 번만 build하고 strict checksum과 checkout 밖 isolated install을 검증한다. Source의 전체 `docs/operations/*.md` inventory와 bytes가 managed resource 및 packaged wheel payload와 정확히 일치해야 하며 distribution/CLI version은 `0.6.2`여야 한다. 이 candidate 동기화는 publication authority가 아니므로 IQC/DQC와 별도 사용자 approval 전에는 tag 생성·push, Release 생성 또는 asset upload를 수행하지 않는다.
+Release 기록에는 tag, Release URL, candidate commit, remote asset digest와 verification 결과를 남긴다.
 
 ## Partial Failure와 Retry
 
@@ -154,9 +137,13 @@ Remote publication은 local rollback으로 원상복구할 수 없다.
 - rollback command
 - Hosted CI와 Python matrix
 - License 선택, signing, SBOM
-- Application dependency 또는 canonical artifact migration
+- Application dependency 또는 canonical artifact 변환
 
-## v0.2.0 Update Release와 v0.2.1 Corrective Release
+## 과거 릴리스 기록
+
+다음 내용은 현재 운영 지침이나 chronology gate가 아니라 이미 계획·수행된 릴리스의 역사 기록이다.
+
+### v0.2.0과 v0.2.1
 
 `v0.2.0`은 동일한 prepare·approval·publish·remote read-back 절차를 사용한다.
 
@@ -176,4 +163,21 @@ Wheel:    proofline-0.2.1-py3-none-any.whl
 Checksum: SHA256SUMS
 ```
 
-v0.2.1 DQC는 source-provenance uv tool에서 public release를 대상으로 `update --adopt-official`을 실제 실행하고 후속 `update --check`가 `already-current`인지 확인한다.
+v0.2.1에서는 source-provenance uv tool에서 public release를 대상으로 `update --adopt-official`을 실행하고 후속 `update --check`가 `already-current`인지 확인했다.
+
+### v0.6.1
+
+`v0.6.1`은 당시 history compatibility 변경을 포함한 hotfix candidate였다.
+
+```text
+Tag:      v0.6.1
+Wheel:    proofline-0.6.1-py3-none-any.whl
+Checksum: SHA256SUMS
+Assets:   wheel + SHA256SUMS only
+```
+
+당시 release는 source/full regression, strict checksum, isolated install과 version `0.6.1`을 확인하고 기존 `v0.6.0` remote object를 변경하지 않는 조건으로 기록됐다.
+
+### v0.6.2
+
+`v0.6.2`는 operations resource parity를 교정한 release candidate였다. 당시 source inventory, packaged payload, strict checksum, isolated install과 version `0.6.2` 일치를 확인하도록 기록됐다.

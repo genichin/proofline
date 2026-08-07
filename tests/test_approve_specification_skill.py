@@ -224,7 +224,7 @@ def test_approval_skill_has_valid_metadata_and_minimal_gate_policy() -> None:
     metadata = yaml.safe_load(frontmatter)
     assert metadata["name"] == "proofline-approve-specification"
     assert metadata["description"].startswith("Use when ")
-    assert metadata["version"] == "1.4.0"
+    assert metadata["version"] == "2.0.0"
     assert "~/.proofline/skills/proofline-approve-specification/" in body
     for required in [
         "## When to Use",
@@ -232,16 +232,13 @@ def test_approval_skill_has_valid_metadata_and_minimal_gate_policy() -> None:
         "direct approval",
         "recorded",
         "not recorded",
-        "차단하지 않는다",
         "사용자",
-        "no-mutation",
         "사용자만",
-        "S0",
-        "S=A",
-        "proofline.independent-review/v1",
-        "proofline.user-approval/v1",
-        "audit_approval_authority.py",
-        "cryptographically authenticate",
+        "criteria.satisfy",
+        "audit_transition.py",
+        "approval authority",
+        "current canonical validation",
+        "변경하지 않는다",
     ]:
         assert required in body
 
@@ -251,8 +248,8 @@ def test_contract_accepts_exact_direct_approval_as_baseline() -> None:
     for required in [
         "권장 감사 경로",
         "direct approval",
-        "transition evidence",
-        "implementation을 차단하지 않는다",
+        "필수 chronology는 아니다",
+        "validator는 그 chronology를 보증하지 않는다",
     ]:
         assert required in text
     assert "implementation branch는 `approved` transition을 기록한 exact main commit에서만" not in text
@@ -262,22 +259,8 @@ def test_contract_separates_durable_acceptance_from_release_evidence() -> None:
     text = CONTRACT.read_text(encoding="utf-8")
     for required in [
         "version-independent product behavior",
-        "새 version publication만으로 새 AC를 만들지 않는다",
-        "Micro-SPEC implementation parameter와 IQC·DQC·release evidence",
-    ]:
-        assert required in text
-
-
-def test_contract_defines_external_exact_evidence_authority_gate() -> None:
-    text = CONTRACT.read_text(encoding="utf-8")
-    for required in [
-        "proofline.independent-review/v1",
-        "proofline.user-approval/v1",
-        "review_evidence_sha256",
-        "mutation_performed",
-        "operational identity label",
-        "암호학적으로 인증하지 않는다",
-        "read-only",
+        "특정 release version",
+        "release 기록에 남긴다",
     ]:
         assert required in text
 

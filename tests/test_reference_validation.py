@@ -14,10 +14,6 @@ FIXTURE = Path(__file__).parent / "fixtures" / "valid-minimal"
     [
         (".proofline/lines/line-0001/req-0001.md", "discovery: dcy-0001", "discovery: dcy-9999"),
         (".proofline/lines/line-0001/req-0001.md", "    - ac-0001", "    - ac-9999"),
-        (".proofline/lines/line-0001/micro-specs/ms-0001-001.md", "parent_req: req-0001", "parent_req: req-9999"),
-        (".proofline/lines/line-0001/micro-specs/ms-0001-001.md", "  - ac-0001", "  - ac-9999"),
-        (".proofline/lines/line-0001/micro-specs/iqc-0001-001.md", "micro_spec: ms-0001-001", "micro_spec: ms-0001-999"),
-        (".proofline/lines/line-0001/dqc-0001.md", "line: line-0001", "line: line-9999"),
     ],
 )
 def test_missing_direct_reference_is_rejected(

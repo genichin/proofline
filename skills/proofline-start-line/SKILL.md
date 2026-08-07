@@ -25,7 +25,7 @@ metadata:
 다음에는 사용하지 않는다.
 
 - 이미 존재하는 Discovery를 확인 없이 다시 생성할 때
-- REQ 승인, implementation, IQC/DQC 또는 delivery를 자동화할 때
+- REQ·AC 승인이나 Line 작업·검증·완료를 자동화할 때
 - ProofLine이 아닌 일반적인 아이디어 메모를 작성할 때
 
 ## Preconditions

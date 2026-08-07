@@ -142,37 +142,3 @@ def test_unrecognized_project_support_file_is_rejected(tmp_path: Path) -> None:
         ".proofline/criteria/README.txt",
         "topology.support.unsupported",
     ) in pairs(project)
-
-
-@pytest.mark.parametrize(
-    ("frontmatter", "code"),
-    [
-        (
-            'id: "legacy-migration-0001"\nline: "line-0001"\n'
-            'pre_migration_parent: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"\n'
-            'evidence:\n  - path: "x"\n    path: "y"\n    blob_oid: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"\n',
-            "migration.schema.yaml",
-        ),
-        (
-            'id: "legacy-migration-0001"\nline: "line-0001"\n'
-            'pre_migration_parent: 123\nevidence: []\n',
-            "migration.schema.type",
-        ),
-        (
-            'id: "legacy-migration-0001"\nline: "line-0001"\n'
-            'pre_migration_parent: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"\n'
-            'evidence: []\nunknown: true\n',
-            "migration.schema.fields",
-        ),
-    ],
-)
-def test_legacy_migration_frontmatter_only_schema_is_strict(
-    tmp_path: Path, frontmatter: str, code: str
-) -> None:
-    project = make_minimal(tmp_path)
-    directory = project / ".proofline/lines/line-0001"
-    directory.mkdir()
-    artifact = directory / "legacy-migration-0001.md"
-    artifact.write_text(f"---\n{frontmatter}---\n", encoding="utf-8")
-
-    assert (artifact.relative_to(project).as_posix(), code) in pairs(project)

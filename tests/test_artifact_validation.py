@@ -24,7 +24,14 @@ def test_public_project_validation_has_no_history_opt_out() -> None:
     assert "check_history" not in inspect.signature(validate_project).parameters
 
 
-def test_line_accepts_first_parent_implementation_history_policy(tmp_path: Path) -> None:
+def test_line_accepts_canonical_minimal_schema(tmp_path: Path) -> None:
+    project = copy_valid_project(tmp_path)
+    artifact = project / ".proofline/lines/line-0001/line-0001.md"
+
+    assert _validate_schema_candidate(project) == []
+
+
+def test_line_accepts_retained_implementation_history_field(tmp_path: Path) -> None:
     project = copy_valid_project(tmp_path)
     artifact = project / ".proofline/lines/line-0001/line-0001.md"
     artifact.write_text(
@@ -38,18 +45,37 @@ def test_line_accepts_first_parent_implementation_history_policy(tmp_path: Path)
     assert _validate_schema_candidate(project) == []
 
 
-def test_line_rejects_unknown_implementation_history_policy(tmp_path: Path) -> None:
+def test_line_rejects_noncanonical_field(tmp_path: Path) -> None:
     project = copy_valid_project(tmp_path)
     artifact = project / ".proofline/lines/line-0001/line-0001.md"
     artifact.write_text(
         artifact.read_text(encoding="utf-8").replace(
             "execution_status: verifying",
-            "execution_status: verifying\nimplementation_history: all_parents",
+            "execution_status: verifying\nowner: team",
         ),
         encoding="utf-8",
     )
 
-    assert_error(project, artifact, "artifact.policy")
+    assert_error(project, artifact, "artifact.unknown-field")
+
+
+def test_retained_legacy_canonical_paths_are_opaque(tmp_path: Path) -> None:
+    project = copy_valid_project(tmp_path)
+    retained = (
+        ".proofline/lines/line-0001/micro-specs/ms-0001-001.md",
+        ".proofline/lines/line-0001/micro-specs/iqc-0001-001.md",
+        ".proofline/lines/line-0001/dqc-0001.md",
+        ".proofline/lines/line-0001/integration-0001.md",
+        ".proofline/lines/line-0001/legacy-migration-0001.md",
+    )
+    for relative in retained:
+        artifact = project / relative
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_bytes(b"\xffnot yaml or utf-8")
+
+    errors = validate_project(project)
+
+    assert not [error for error in errors if error.path in retained]
 
 
 def test_unknown_artifact_frontmatter_field_is_rejected(tmp_path: Path) -> None:

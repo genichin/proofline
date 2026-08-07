@@ -7,7 +7,6 @@ from pathlib import Path
 import yaml
 
 from .identity_ledger import LEDGER_PATH, validate_ledger
-from .implementation_history import validate_implementation_history
 from .project_schema import REQUIRED_DIRECTORIES, SUPPORT_MARKERS
 from .yaml_strict import safe_load_unique
 
@@ -24,20 +23,9 @@ ARTIFACT_FIELDS = {
     "dcy": {"id", "status"},
     "req": {"id", "status", "discovery", "criteria"},
     "ac": {"id", "status"},
-    "ms": {"id", "parent_req", "criteria", "spec_status", "implementation_status"},
-    "iqc": {
-        "id",
-        "micro_spec",
-        "micro_spec_commit",
-        "implementation_commit",
-        "result",
-    },
-    "dqc": {"id", "line", "candidate_commit", "result"},
-    "integration": {"id", "line_id", "main_parent", "line_head"},
-    "legacy-migration": {"id", "line", "pre_migration_parent", "evidence"},
 }
 
-ARTIFACT_OPTIONAL_FIELDS = {
+LEGACY_OPTIONAL_FIELDS = {
     "line": {"implementation_history"},
 }
 
@@ -54,23 +42,12 @@ ARTIFACT_STATUSES = {
     "dcy": {"status": {"draft", "confirmed", "withdrawn"}},
     "req": {"status": {"draft", "approved", "withdrawn"}},
     "ac": {"status": {"draft", "active", "retired"}},
-    "ms": {
-        "spec_status": {"draft", "approved", "withdrawn"},
-        "implementation_status": {"not_started", "in_progress", "implemented"},
-    },
-    "iqc": {"result": {"draft", "passed", "failed", "blocked"}},
-    "dqc": {"result": {"draft", "passed", "failed", "blocked"}},
-    "integration": {},
-    "legacy-migration": {},
 }
 
 REQUIRED_H2 = {
     "dcy": ("Problem", "Evidence", "Scope", "Out of Scope"),
     "req": ("Objective", "Scope", "Non-Goals"),
     "ac": ("Criterion", "Verification"),
-    "ms": ("Scope", "Implementation", "Verification"),
-    "iqc": ("Target", "Checks", "Criteria Results", "Result"),
-    "dqc": ("Target", "IQC Results", "Checks", "Criteria Results", "Result"),
 }
 
 PLACEHOLDER = re.compile(
@@ -83,20 +60,19 @@ ARTIFACT_PATHS = {
     "dcy": re.compile(r"^\.proofline/lines/line-(\d{4})/dcy-\1\.md$"),
     "req": re.compile(r"^\.proofline/lines/line-(\d{4})/req-\1\.md$"),
     "ac": re.compile(r"^\.proofline/criteria/ac-\d{4}\.md$"),
-    "ms": re.compile(
+}
+
+LEGACY_RETAINED_PATHS = (
+    re.compile(
         r"^\.proofline/lines/line-(\d{4})/micro-specs/ms-\1-\d{3}\.md$"
     ),
-    "iqc": re.compile(
+    re.compile(
         r"^\.proofline/lines/line-(\d{4})/micro-specs/iqc-\1-\d{3}\.md$"
     ),
-    "dqc": re.compile(r"^\.proofline/lines/line-(\d{4})/dqc-\1\.md$"),
-    "integration": re.compile(
-        r"^\.proofline/lines/line-(\d{4})/integration-\1\.md$"
-    ),
-    "legacy-migration": re.compile(
-        r"^\.proofline/lines/line-(\d{4})/legacy-migration-\1\.md$"
-    ),
-}
+    re.compile(r"^\.proofline/lines/line-(\d{4})/dqc-\1\.md$"),
+    re.compile(r"^\.proofline/lines/line-(\d{4})/integration-\1\.md$"),
+    re.compile(r"^\.proofline/lines/line-(\d{4})/legacy-migration-\1\.md$"),
+)
 
 LEGACY_CRITERIA_KEYS = {"create", "update", "retire"}
 CURRENT_CRITERIA_KEYS = LEGACY_CRITERIA_KEYS | {"satisfy"}
@@ -108,6 +84,10 @@ def _artifact_kind(path: Path) -> str | None:
         if stem.startswith(f"{kind}-"):
             return kind
     return None
+
+
+def _is_legacy_retained_path(relative: str) -> bool:
+    return any(pattern.fullmatch(relative) for pattern in LEGACY_RETAINED_PATHS)
 
 
 def _headings(body: str) -> tuple[list[str], list[str]]:
@@ -128,7 +108,7 @@ def _headings(body: str) -> tuple[list[str], list[str]]:
 
 
 def _headings_are_valid(kind: str, body: str) -> bool:
-    if kind in {"line", "integration", "legacy-migration"}:
+    if kind == "line":
         return not body.strip()
     h1, h2 = _headings(body)
     if len(h1) != 1:
@@ -144,10 +124,6 @@ def _headings_are_valid(kind: str, body: str) -> bool:
 def _is_draft(kind: str, frontmatter: dict[str, object]) -> bool:
     if kind in {"dcy", "req", "ac"}:
         return frontmatter.get("status") == "draft"
-    if kind == "ms":
-        return frontmatter.get("spec_status") == "draft"
-    if kind in {"iqc", "dqc"}:
-        return frontmatter.get("result") == "draft"
     return False
 
 
@@ -197,30 +173,6 @@ def _reference_targets(
                     add(value, r"ac-\d{4}", ".proofline/criteria/{value}.md")
         elif "criteria" in frontmatter:
             valid = False
-    elif kind == "ms" and line_id:
-        if "parent_req" in frontmatter:
-            add(
-                frontmatter["parent_req"],
-                r"req-\d{4}",
-                f".proofline/lines/{line_id}/{{value}}.md",
-            )
-        criteria = frontmatter.get("criteria")
-        if isinstance(criteria, list):
-            for value in criteria:
-                add(value, r"ac-\d{4}", ".proofline/criteria/{value}.md")
-        elif "criteria" in frontmatter:
-            valid = False
-    elif kind == "iqc" and line_id:
-        if "micro_spec" in frontmatter:
-            add(
-                frontmatter["micro_spec"],
-                r"ms-\d{4}-\d{3}",
-                f".proofline/lines/{line_id}/micro-specs/{{value}}.md",
-            )
-    elif kind == "dqc":
-        if "line" in frontmatter:
-            line = frontmatter["line"]
-            add(line, r"line-\d{4}", ".proofline/lines/{value}/{value}.md")
     return targets, valid
 
 
@@ -390,6 +342,7 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
             )
         ]
     for path in artifact_paths:
+        relative = path.relative_to(root).as_posix()
         try:
             candidate_state = path.stat(follow_symlinks=False)
         except OSError:
@@ -398,9 +351,10 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
             candidate_state.st_mode
         ):
             continue
+        if _is_legacy_retained_path(relative):
+            continue
         kind = _artifact_kind(path)
         if kind is None:
-            relative = path.relative_to(root).as_posix()
             errors.append(
                 ValidationError(
                     relative,
@@ -409,7 +363,6 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
                 )
             )
             continue
-        relative = path.relative_to(root).as_posix()
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
         except (OSError, UnicodeError):
@@ -446,9 +399,7 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
             errors.append(
                 ValidationError(
                     relative,
-                    "migration.schema.yaml"
-                    if kind == "legacy-migration"
-                    else "artifact.frontmatter",
+                    "artifact.frontmatter",
                     "YAML 머리말을 해석할 수 없습니다.",
                 )
             )
@@ -464,75 +415,6 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
             continue
         artifacts[relative] = (kind, frontmatter)
         body = "\n".join(lines[closing + 1 :])
-        if kind == "legacy-migration":
-            expected = ARTIFACT_FIELDS[kind]
-            if set(frontmatter) != expected:
-                errors.append(
-                    ValidationError(
-                        relative,
-                        "migration.schema.fields",
-                        "migration artifact는 exact canonical field set만 가져야 합니다.",
-                    )
-                )
-            line_match = ARTIFACT_PATHS[kind].fullmatch(relative)
-            number = line_match.group(1) if line_match else None
-            scalar_values = (
-                frontmatter.get("id"),
-                frontmatter.get("line"),
-                frontmatter.get("pre_migration_parent"),
-            )
-            evidence = frontmatter.get("evidence")
-            entries_are_typed = isinstance(evidence, list) and bool(evidence)
-            if entries_are_typed:
-                entries_are_typed = all(
-                    isinstance(entry, dict)
-                    and set(entry) == {"path", "blob_oid"}
-                    and isinstance(entry.get("path"), str)
-                    and isinstance(entry.get("blob_oid"), str)
-                    for entry in evidence
-                )
-            if not all(isinstance(value, str) for value in scalar_values) or not entries_are_typed:
-                errors.append(
-                    ValidationError(
-                        relative,
-                        "migration.schema.type",
-                        "migration scalar와 evidence entry는 nonempty canonical string/list/mapping type이어야 합니다.",
-                    )
-                )
-            elif number is not None:
-                parent = frontmatter["pre_migration_parent"]
-                paths = [entry["path"] for entry in evidence]
-                oids = [entry["blob_oid"] for entry in evidence]
-                if (
-                    frontmatter["id"] != f"legacy-migration-{number}"
-                    or frontmatter["line"] != f"line-{number}"
-                ):
-                    errors.append(
-                        ValidationError(
-                            relative,
-                            "migration.path.identity",
-                            "migration path, id와 Line identity가 일치해야 합니다.",
-                        )
-                    )
-                if re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", parent) is None or any(
-                    re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", oid) is None
-                    for oid in oids
-                ):
-                    errors.append(
-                        ValidationError(
-                            relative,
-                            "migration.schema.oid",
-                            "commit/blob OID는 repository-native lowercase hex여야 합니다.",
-                        )
-                    )
-                if paths != sorted(paths) or len(paths) != len(set(paths)):
-                    errors.append(
-                        ValidationError(
-                            relative,
-                            "migration.inventory.order",
-                            "migration evidence path는 unique lexicographic order여야 합니다.",
-                        )
-                    )
         missing = ARTIFACT_FIELDS[kind] - set(frontmatter)
         if missing:
             errors.append(
@@ -542,25 +424,13 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
                     f"필수 YAML 머리말 항목이 없습니다: {', '.join(sorted(missing))}",
                 )
             )
-        allowed_fields = ARTIFACT_FIELDS[kind] | ARTIFACT_OPTIONAL_FIELDS.get(kind, set())
+        allowed_fields = ARTIFACT_FIELDS[kind] | LEGACY_OPTIONAL_FIELDS.get(kind, set())
         if set(frontmatter) - allowed_fields:
             errors.append(
                 ValidationError(
                     relative,
                     "artifact.unknown-field",
                     "정의되지 않은 YAML 머리말 항목이 있습니다.",
-                )
-            )
-        if (
-            kind == "line"
-            and "implementation_history" in frontmatter
-            and frontmatter["implementation_history"] != "first_parent"
-        ):
-            errors.append(
-                ValidationError(
-                    relative,
-                    "artifact.policy",
-                    "implementation_history 값은 first_parent여야 합니다.",
                 )
             )
         if kind == "req" and "criteria" in frontmatter:
@@ -756,18 +626,48 @@ def _draft_satisfy_uses_last_active_binding(
     return historical_req is not None and historical_req == current_req
 
 
+def _retired_satisfy_uses_historical_active_binding(
+    root: Path, req_path: str, ac_id: str
+) -> bool:
+    try:
+        current_req = (root / req_path).read_bytes()
+    except OSError:
+        return False
+    history = _git_output(root, "rev-list", "--first-parent", "refs/heads/main")
+    if history is None:
+        return False
+    try:
+        commits = history.decode("ascii").splitlines()
+    except UnicodeError:
+        return False
+    ac_path = f".proofline/criteria/{ac_id}.md"
+    return any(
+        _historical_status(_git_file(root, commit, ac_path) or b"") == "active"
+        and _git_file(root, commit, req_path) == current_req
+        for commit in commits
+    )
+
+
 def _validate_criteria_bindings(
     root: Path,
     artifacts: dict[str, tuple[str, dict[str, object]]],
 ) -> list[ValidationError]:
     errors: list[ValidationError] = []
+    retirement_owners: dict[str, int] = {}
+    for kind, candidate in artifacts.values():
+        if kind != "req" or candidate.get("status") != "approved":
+            continue
+        criteria = _criteria_lists(candidate.get("criteria"))
+        if criteria is None:
+            continue
+        for ac_id in set(criteria.get("retire", [])):
+            retirement_owners[ac_id] = retirement_owners.get(ac_id, 0) + 1
     for req_path, (kind, req) in artifacts.items():
         if kind != "req":
             continue
         criteria = _criteria_lists(req.get("criteria"))
         if criteria is None:
             continue
-        targets = {item for items in criteria.values() for item in items}
         for ac_id in criteria.get("satisfy", []):
             ac_path = f".proofline/criteria/{ac_id}.md"
             target = artifacts.get(ac_path)
@@ -775,57 +675,29 @@ def _validate_criteria_bindings(
             allowed_draft = target_status == "draft" and _draft_satisfy_uses_last_active_binding(
                 root, artifacts, req_path, req, ac_id
             )
-            if target is not None and target_status != "active" and not allowed_draft:
+            allowed_retired = (
+                target_status == "retired"
+                and req.get("status") == "approved"
+                and retirement_owners.get(ac_id) == 1
+                and _retired_satisfy_uses_historical_active_binding(
+                    root, req_path, ac_id
+                )
+            )
+            if (
+                target is not None
+                and target_status != "active"
+                and not allowed_draft
+                and not allowed_retired
+            ):
                 errors.append(
                     ValidationError(
                         req_path,
                         "reference.inactive",
-                        "criteria.satisfy 대상은 active AC 또는 입증된 update-in-progress last-active binding이어야 합니다: "
+                        "criteria.satisfy 대상은 active AC 또는 입증된 historical active binding이어야 합니다: "
                         f"{ac_id}",
                     )
                 )
 
-        line_dir = req_path.rsplit("/", 1)[0]
-        line_path = f"{line_dir}/{line_dir.rsplit('/', 1)[-1]}.md"
-        line = artifacts.get(line_path)
-        line_status = line[1].get("execution_status") if line is not None else None
-        covered: set[str] = set()
-        implementation_statuses: list[object] = []
-        for ms_path, (ms_kind, ms) in artifacts.items():
-            if (
-                ms_kind != "ms"
-                or not ms_path.startswith(f"{line_dir}/micro-specs/")
-                or ms.get("parent_req") != req.get("id")
-                or ms.get("spec_status") == "withdrawn"
-            ):
-                continue
-            implementation_statuses.append(ms.get("implementation_status"))
-            ms_criteria = ms.get("criteria")
-            if not isinstance(ms_criteria, list):
-                continue
-            ms_ids = {item for item in ms_criteria if isinstance(item, str)}
-            outside = sorted(ms_ids - targets)
-            if outside:
-                errors.append(
-                    ValidationError(
-                        ms_path,
-                        "criteria.out-of-scope",
-                        f"Micro-SPEC criteria가 parent REQ 범위를 벗어났습니다: {', '.join(outside)}",
-                    )
-                )
-            covered.update(ms_ids & targets)
-        uncovered = sorted(targets - covered)
-        drafting_state = line_status in {"not_started", "in_progress"} and all(
-            status == "not_started" for status in implementation_statuses
-        )
-        if req.get("status") != "withdrawn" and uncovered and not drafting_state:
-            errors.append(
-                ValidationError(
-                    req_path,
-                    "criteria.uncovered",
-                    f"REQ 대상 AC가 non-withdrawn Micro-SPEC에 배정되지 않았습니다: {', '.join(uncovered)}",
-                )
-            )
     return errors
 
 
@@ -924,12 +796,6 @@ def _validate_project(
     errors.extend(_validate_artifacts(root))
     errors.extend(
         ValidationError(error.path, error.code, error.message)
-        for error in validate_implementation_history(
-            root, excluded_line_path=excluded_line_path
-        )
-    )
-    errors.extend(
-        ValidationError(error.path, error.code, error.message)
         for error in validate_ledger(root)
     )
     return sorted(errors)
@@ -948,6 +814,4 @@ def _validate_schema_candidate(root: Path) -> list[ValidationError]:
     )
     if len(candidate) != 1:
         return _validate_project(root, excluded_line_path=None)
-    # The candidate is intentionally isolated from the repository and has no
-    # persisted history. All callers must preflight the real project first.
     return _validate_project(root, excluded_line_path=candidate[0])

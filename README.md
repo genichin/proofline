@@ -1,6 +1,6 @@
 # ProofLine
 
-ProofLine은 프로젝트의 Discovery, Requirement, Acceptance Criterion, Micro-SPEC, IQC 및 DQC artifact를 검증하는 CLI입니다.
+ProofLine은 프로젝트의 Line, Discovery, Requirement 및 Acceptance Criterion artifact를 검증하는 CLI입니다.
 
 ## 요구 사항
 

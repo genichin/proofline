@@ -1,107 +1,54 @@
 ---
 name: proofline-approve-specification
-description: Use when presenting, approving, or auditing a ProofLine REQ and newly created AC specification without turning optional transition evidence into an implementation gate.
-version: 1.4.0
+description: Use when presenting, approving, or optionally auditing a ProofLine REQ and its AC specification.
+version: 2.0.0
 author: ProofLine
 license: MIT
 metadata:
   hermes:
-    tags: [proofline, approval, governance, audit]
-    related_skills: [proofline-start-implementation]
+    tags: [proofline, approval, governance, req, ac]
+    related_skills: []
 ---
 
 # Approve a ProofLine Specification
 
 ## Overview
 
-사용자가 검토한 REQ·AC와 해당되는 Micro-SPEC을 승인하고 exact specification baseline을 보존한다. **사용자만** approval authority를 가지며 independent reviewer는 read-only recommendation, governance lead는 status-only recorder다. Draft→status-only approval은 권장 감사 경로이지만 direct approval도 유효하다. Transition evidence가 `not recorded`여도 approval이나 implementation을 차단하지 않는다.
+사용자가 검토한 REQ와 대상 AC를 승인하고 exact specification baseline을 기록한다. **사용자만** approval authority를 가지며 agent는 내용을 제시하고 명시적인 결정을 기다린다. Draft에서 status만 바꾸는 approval commit은 권장 감사 경로지만 prior draft transition이 없는 direct approval도 유효하다.
 
 ## When to Use
 
-- Confirmed Discovery에서 신규 REQ와 `criteria.create` AC를 승인할 때
-- `criteria.update`, `criteria.retire` 또는 `criteria.satisfy`가 포함된 REQ exact bytes를 승인할 때
-- 승인 commit에 draft transition evidence가 있는지 선택적으로 확인할 때
-- Exact approved commit을 implementation worktree에 전달하기 전에 specification 상태를 요약할 때
+- Confirmed Discovery에 연결된 REQ와 `criteria.create` AC를 승인할 때
+- `criteria.update`, `criteria.retire` 또는 `criteria.satisfy` 집합을 승인할 때
+- Approval commit에 optional draft transition evidence가 있는지 확인할 때
 
 다음 목적으로 사용하지 않는다.
 
 - 사용자를 대신한 approval 결정
-- Prior draft history를 mandatory gate로 강제
-- Active AC update·retirement lifecycle
-- ProofLine CLI의 Git 작업 자동화
+- Line 이외의 작업·검증·배포 artifact 승인
+- Git implementation 또는 delivery chronology 검사
+- ProofLine CLI의 commit, branch, merge나 push 자동화
 
 ## Authority Boundary
 
-Hermes는 REQ objective·scope·non-goals와 AC criterion·verification을 사용자에게 보여주고 명시적 approval을 기다린다. 사용자의 승인 없이 REQ를 `approved` 또는 AC를 `active`로 전환하지 않는다.
+REQ의 Objective·Scope·Non-Goals와 대상 AC의 Criterion·Verification을 사용자에게 보여주고 명시적인 approval을 기다린다. 승인 없이 REQ를 `approved`, AC를 `active` 또는 `retired`로 전환하지 않는다.
 
-Micro-SPEC도 사용자만 exact reviewed bytes를 승인한다. Draft author의 self-approval, independent specification reviewer의 mutation·approval, governance lead의 단독 approval은 금지한다. Reviewer는 exact clean commit을 read-only로 검토해 PASS 또는 correction recommendation만 제공한다. Recorder는 사용자 approval 뒤 status-only transition만 기록하며 substantive bytes를 고치지 않는다.
+`criteria.satisfy` 대상은 기존 active AC의 의미를 변경하지 않는 binding이다. Approval 전후에 AC 본문과 status를 변경하지 않는다. 의미 변경이 필요하면 `criteria.update`로 고쳐 다시 검토한다.
 
-`criteria.satisfy` 대상은 승인된 active AC의 의미를 변경하지 않는 binding이다. Approval 전후에 대상 AC body와 status를 변경하지 않으며 의미 변경이 필요하면 REQ를 `criteria.update`로 고쳐 다시 승인한다.
+## Approval Workflow
 
-Git commit, branch, worktree, merge와 push는 ProofLine CLI 책임이 아니다. Agent가 사용자의 결정 후 Git 명령을 실행하더라도 실제 상태와 exact commit을 보고한다.
+1. Confirmed Discovery, draft REQ와 대상 AC를 `proofline validate`로 확인한다.
+2. REQ의 AC 변경 집합과 각 대상 AC의 exact 내용을 사용자에게 제시한다.
+3. 사용자의 명시적인 approval 또는 correction을 기다린다.
+4. 권장 경로에서는 REQ `draft → approved`와 대상 AC의 계약상 status만 별도 commit에 기록한다.
+5. Direct approval을 선택한 경우 prior draft commit 없이 approved REQ와 대상 AC를 처음 기록할 수 있다.
+6. Approval 뒤 current canonical tree를 다시 검증하고 exact commit을 보고한다.
 
-## Approval Paths
-
-### Normal Micro-SPEC: `S0 → S`
-
-1. 구현 에이전트가 Line worktree에 clean exact draft commit `S0`를 만들고 mutation을 멈춘다.
-2. 독립 specification reviewer가 exact `S0`의 Micro-SPEC bytes, REQ·AC 범위와 coverage를 read-only로 검토한다. Correction에는 fresh `S0`와 fresh review가 필요하다.
-3. Review PASS 뒤 사용자만 exact `S0`를 승인한다.
-4. Governance lead는 worktree가 clean이고 HEAD가 `S0`임을 확인한 뒤 `spec_status: draft → approved`만 바꾼 status-only `S`를 기록한다.
-5. `S.parent=S0`, substantive bytes 불변을 read-back한 뒤 exact `S`를 구현 에이전트에게 handback한다.
-
-### Line 0020 bootstrap exception: `S=A`
-
-Line 0020은 current-validator migration이므로 REQ·AC·bootstrap Micro-SPEC combined exact draft를 independent read-only review하고 사용자가 함께 승인한다. Governance lead는 main에서 lifecycle status만 바꾼 combined approval `S=A`를 기록한다. 이후 chronology는 `S=A < H < P < I < Q`이며 post-H `S0/S`를 다시 만들지 않는다. 이 exception을 후속 Line에 재사용하지 않는다. 후속 Line은 `A < H < S0 < S < P < I < Q`를 따른다.
-
-## Exact-Evidence Authority Audit
-
-`audit_approval_authority.py`는 외부에서 공급된 review와 user approval evidence를 **읽기만** 하여 normal `S0 → S` 또는 Line 0020 bootstrap `pre-A → A`가 exact authority·status-only 조건을 만족하는지 검사한다. Evidence를 만들거나 보완하지 않으며 commit, file, ref, approval, lifecycle transition을 생성·수정·삭제하지 않는다. Tool이나 governance recorder는 user evidence를 mint하거나 대신할 수 없다.
-
-Evidence는 canonical `.proofline/` 밖의 strict JSON file로 공급한다. 최소 versioned envelope는 다음과 같고 key 추가·누락은 fail-closed다.
-
-```json
-{"schema":"proofline.independent-review/v1","target_commit":"<S0-or-pre-A>","target_tree":"<exact-tree>","result":"PASS","reviewer_actor_id":"reviewer-1","mutation_performed":false}
-```
-
-```json
-{"schema":"proofline.user-approval/v1","target_commit":"<S0-or-pre-A>","target_tree":"<exact-tree>","decision":"approved","user_actor_id":"user-1","actor_role":"user","review_evidence_sha256":"<sha256-of-exact-review-file-bytes>"}
-```
-
-모든 actor ID는 비어 있지 않은 operational identity label이다. Draft author, independent reviewer, user, governance recorder는 서로 달라야 한다. 이 검사는 supplied authority evidence의 exact binding과 역할 분리를 검증할 뿐 사람을 cryptographically authenticate하지 않으며 secret·signature claim을 하지 않는다.
-
-```bash
-python3 ~/.proofline/skills/proofline-approve-specification/scripts/audit_approval_authority.py \
-  --repo "$PWD" --mode normal --line-id line-NNNN \
-  --target-commit "$S0" --target-tree "$S0_TREE" \
-  --approval-commit "$S" --approval-tree "$S_TREE" \
-  --review-evidence "$REVIEW_JSON" \
-  --user-approval-evidence "$USER_APPROVAL_JSON" \
-  --draft-author-actor-id "$AUTHOR_ID" \
-  --governance-recorder-actor-id "$RECORDER_ID"
-```
-
-Bootstrap에서는 `--mode bootstrap`, target=`pre-A`, approval=`A`를 사용한다. 성공하려면 repository가 clean이고 HEAD가 exact approval commit이어야 하며 approval은 target의 direct non-merge child여야 한다. Normal approval은 Micro-SPEC `spec_status: draft → approved`만 허용한다. Bootstrap approval은 REQ, target create/update/retire AC, bootstrap Micro-SPEC의 계약상 lifecycle status transition만 허용한다. Body 변경, unrelated/concurrent path, stale commit/tree/review digest, review FAIL·mutation, missing/denied user approval은 stable `approval-authority[SCENARIO_ID]` diagnostic과 exit `2`로 거부한다.
-
-### 권장: Draft transition 기록
-
-1. REQ와 신규 AC를 `draft`로 작성·검증하고 commit한다.
-2. 사용자에게 specification을 요약하고 approval을 받는다.
-3. Approval 전에 의미가 바뀌면 draft 상태에서 먼저 별도 commit한다.
-4. REQ `draft→approved`, 신규 AC `draft→active`만 변경한 status-only commit을 만든다.
-5. 그 exact commit을 implementation baseline으로 사용한다.
-
-이 경로의 optional audit 결과는 `transition: recorded`이다.
-
-### 허용: Direct approval
-
-사용자가 명시적으로 specification을 승인하면 prior draft commit 없이 REQ `approved`와 신규 AC `active`를 처음 기록한 exact commit도 유효한 baseline이다.
-
-이 경로의 optional audit 결과는 `transition: not recorded`이다. 이는 audit evidence가 없다는 진단일 뿐 approval 실패가 아니며 implementation worktree 생성을 차단하지 않는다.
+Approval commit에 본문 변경을 섞지 않는 것이 권장되지만 ProofLine validator는 Git chronology나 사람의 identity를 인증하지 않는다.
 
 ## Optional Read-Only Audit
 
-Repository root에서 full approval SHA를 지정한다.
+`audit_transition.py`는 지정한 approval commit과 immediate parent에서 REQ와 `criteria.create` AC의 status-only transition이 기록됐는지만 읽는다.
 
 ```bash
 python3 ~/.proofline/skills/proofline-approve-specification/scripts/audit_transition.py \
@@ -110,41 +57,27 @@ python3 ~/.proofline/skills/proofline-approve-specification/scripts/audit_transi
   --approval-commit "$APPROVAL_COMMIT"
 ```
 
-Script는 지정 commit과 immediate parent의 REQ·`criteria.create` AC bytes만 읽는다.
-
 ```text
 transition: recorded
 transition: not recorded
 ```
 
-두 결과 모두 정상 exit code `0`이다. 지정 commit이 없거나 REQ가 `approved`가 아니거나 신규 AC가 `active`가 아니면 audit target 자체가 유효하지 않으므로 non-zero diagnostic을 반환한다.
-
-Audit는 no-mutation이다. Canonical artifact, working tree, index, ref, branch, worktree registration을 생성·수정·삭제하지 않는다.
-
-## Implementation Handoff
-
-Worktree preflight에는 full exact approval commit `A`를 전달한다. Preflight는 `A`의 Discovery `confirmed`, REQ `approved`, target AC approval과 Line `not_started`, current main HEAD의 direct status-only handoff `H` 및 Git·filesystem collision을 확인한다. Draft transition history는 요구하지 않는다.
-
-```text
-recorded approval → implementation 허용
-not recorded approval → implementation 허용
-unapproved current state → implementation 중단
-```
+두 결과 모두 유효하다. 이 helper는 REQ와 신규 AC만 다루며 approval authority, implementation gate 또는 chronology validator가 아니다. Canonical artifact, worktree, index와 ref를 변경하지 않는다. Update·retire·satisfy approval은 helper 결과가 아니라 사용자의 결정과 current canonical validation으로 확인한다.
 
 ## Common Pitfalls
 
-1. **Audit 결과를 approval authority로 해석함.** `recorded`는 사용자의 승인 자체를 증명하거나 대신하지 않는다.
-2. **`not recorded`를 실패로 처리함.** 이 결과는 허용된 direct approval 경로이다.
-3. **Approval commit에서 본문도 함께 수정함.** 권장 경로의 audit 결과가 `not recorded`가 될 수 있지만 implementation gate는 아니다.
-4. **일반 validation에 Git history 검사를 추가함.** `proofline validate`는 current canonical tree만 검사한다.
-5. **Agent가 자동 승인함.** Lifecycle 결정은 사용자 authority에 남는다.
+1. **Audit를 사용자 approval로 해석함.** `recorded`는 status transition 모양만 설명한다.
+2. **`not recorded`를 실패로 처리함.** Direct approval은 허용된다.
+3. **Agent가 자동 승인함.** Specification 결정은 사용자 authority다.
+4. **REQ에 AC 내용을 복제함.** AC 상세 내용은 각 AC 파일이 소유한다.
+5. **Validator가 Git chronology를 보증한다고 가정함.** `proofline validate`는 현재 canonical tree를 검사한다.
 
 ## Verification Checklist
 
 - [ ] Discovery가 confirmed이다.
-- [ ] REQ와 대상 AC 내용을 사용자에게 제시했다.
+- [ ] REQ와 대상 AC exact 내용을 사용자에게 제시했다.
 - [ ] 사용자의 명시적 approval을 받았다.
-- [ ] Exact approved commit을 기록했다.
-- [ ] Optional audit 결과를 gate로 사용하지 않았다.
-- [ ] Worktree preflight에 transition requirement를 추가하지 않았다.
-- [ ] Audit 실행 전후 repository가 no-mutation이다.
+- [ ] REQ와 AC의 계약상 status만 전환했다.
+- [ ] Current canonical validation이 통과한다.
+- [ ] Exact approval commit을 보고했다.
+- [ ] Optional audit 결과를 approval 또는 작업 gate로 사용하지 않았다.

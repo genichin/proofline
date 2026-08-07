@@ -17,15 +17,10 @@ def test_contract_preserves_legacy_req_and_defines_satisfy() -> None:
     contract = read("docs/contracts/requirements-and-criteria.md")
 
     assert "criteria.satisfy" in contract
-    assert "create ∪ update ∪ retire ∪ satisfy" in contract
-    assert "legacy" in contract
+    for key in ("create", "update", "retire", "satisfy"):
+        assert f"`{key}`" in contract
+    assert "과거 REQ" in contract
     assert "active" in contract
-
-
-def test_micro_spec_contract_includes_satisfy_in_coverage_union() -> None:
-    contract = read("docs/contracts/micro-spec-and-iqc.md")
-
-    assert "create`, `update`, `retire`, `satisfy" in contract
 
 
 def test_start_line_skill_requires_admission_classification() -> None:
@@ -44,20 +39,11 @@ def test_start_line_skill_requires_admission_classification() -> None:
     assert "Open Question" in skill
 
 
-def test_approval_and_implementation_skills_preserve_satisfy_ac() -> None:
+def test_approval_skill_preserves_satisfy_ac() -> None:
     approval = read("skills/proofline-approve-specification/SKILL.md")
-    implementation = read("skills/proofline-start-implementation/SKILL.md")
 
     assert "criteria.satisfy" in approval
     assert "status를 변경하지" in approval
-    assert "criteria.satisfy" in implementation
-    assert "active" in implementation
-
-
-def test_dqc_skill_covers_satisfy_targets() -> None:
-    skill = read("skills/proofline-run-dqc/SKILL.md")
-
-    assert "create·update·retire·satisfy" in skill
 
 
 def test_release_specific_text_is_review_warning_not_validator_error() -> None:
@@ -65,4 +51,5 @@ def test_release_specific_text_is_review_warning_not_validator_error() -> None:
     contract = read("docs/contracts/requirements-and-criteria.md")
 
     assert "review warning" in start
-    assert "hard error" in contract
+    assert "release version" in contract
+    assert "AC가 아니다" in contract

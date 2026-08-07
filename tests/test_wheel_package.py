@@ -15,12 +15,6 @@ import yaml
 from proofline.identity_ledger import decode_ledger, encode_ledger
 from proofline.home_writer import payload_from_wheel
 from proofline.line_writer import _render
-from test_implementation_history import (
-    MIGRATION_SCENARIO_IDS,
-    build_migration_scenario,
-    repository_snapshot,
-)
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -148,8 +142,7 @@ def test_source_checkout_line_init_fresh_and_legacy_e2e(tmp_path: Path) -> None:
             capture_output=True,
             check=False,
         )
-        assert validated.returncode == 1, validated.stderr
-        assert "history.unavailable" in validated.stderr
+        assert validated.returncode == 0, validated.stderr
         assert not list(project.glob(".line-*"))
         assert not list(project.glob(".proofline-ledger-*"))
 
@@ -386,37 +379,40 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(
         names = set(archive.namelist())
         assert "proofline_schema_v1_templates/artifacts/line.md" in names
         assert "proofline_schema_v1_templates/artifacts/discovery.md" in names
-        assert "proofline_schema_v1_templates/artifacts/dqc.md" in names
-        assert "proofline_schema_v1_templates/artifacts/integration.md" in names
-        assert "proofline_schema_v1_templates/artifacts/legacy-migration.md" in names
+        assert "proofline_schema_v1_templates/artifacts/requirement.md" in names
+        assert "proofline_schema_v1_templates/artifacts/acceptance-criterion.md" in names
         assert "proofline_schema_v1_templates/project/proofline.yaml" in names
         assert "proofline_schema_v1_templates/project/lines.gitkeep" in names
         assert "proofline_schema_v1_templates/project/criteria.gitkeep" in names
         assert "proofline_home/contracts/storage-and-retention.md" in names
         assert "proofline_home/templates/schema-v1/artifacts/line.md" in names
-        assert "proofline_home/templates/schema-v1/artifacts/integration.md" in names
-        assert (
-            "proofline_home/templates/schema-v1/artifacts/legacy-migration.md" in names
-        )
-        assert (
-            "proofline_home/operations/legacy-nonterminal-history-migration.md" in names
-        )
         assert "proofline_home/skills/proofline-start-line/SKILL.md" in names
-        run_iqc = "proofline_home/skills/proofline-run-iqc/SKILL.md"
-        assert run_iqc in names
-        assert (
-            archive.read(run_iqc)
-            == (ROOT / "skills/proofline-run-iqc/SKILL.md").read_bytes()
-        )
         changed_resources = {
-            "proofline_home/skills/proofline-run-dqc/SKILL.md": ROOT / "skills/proofline-run-dqc/SKILL.md",
-            "proofline_home/templates/schema-v1/artifacts/dqc.md": ROOT / "templates/schema-v1/artifacts/dqc.md",
+            "proofline_home/skills/proofline-approve-specification/SKILL.md": ROOT / "skills/proofline-approve-specification/SKILL.md",
+            "proofline_home/templates/schema-v1/artifacts/requirement.md": ROOT / "templates/schema-v1/artifacts/requirement.md",
             "proofline_home/contracts/line-delivery.md": ROOT / "docs/contracts/line-delivery.md",
         }
         for packaged, source in changed_resources.items():
             assert archive.read(packaged) == source.read_bytes()
-        assert "proofline_home/skills/proofline-run-dqc/scripts/preflight_clean_runner.py" not in names
-        assert "proofline_home/skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json" not in names
+        removed = {
+            "proofline/implementation_history.py",
+            "proofline_schema_v1_templates/artifacts/micro-spec.md",
+            "proofline_schema_v1_templates/artifacts/iqc.md",
+            "proofline_schema_v1_templates/artifacts/dqc.md",
+            "proofline_schema_v1_templates/artifacts/integration.md",
+            "proofline_schema_v1_templates/artifacts/legacy-migration.md",
+            "proofline_home/contracts/micro-spec-and-iqc.md",
+            "proofline_home/templates/schema-v1/artifacts/micro-spec.md",
+            "proofline_home/templates/schema-v1/artifacts/iqc.md",
+            "proofline_home/templates/schema-v1/artifacts/dqc.md",
+            "proofline_home/templates/schema-v1/artifacts/integration.md",
+            "proofline_home/templates/schema-v1/artifacts/legacy-migration.md",
+            "proofline_home/skills/proofline-start-implementation/SKILL.md",
+            "proofline_home/skills/proofline-run-iqc/SKILL.md",
+            "proofline_home/skills/proofline-run-dqc/SKILL.md",
+            "proofline_home/operations/legacy-nonterminal-history-migration.md",
+        }
+        assert names.isdisjoint(removed)
         assert not any(name.startswith(".github/") for name in names)
         assert "proofline_home/agent-context.md" in names
         unpacked = tmp_path / "wheel"
@@ -432,7 +428,7 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(
                 "from proofline.line_writer import _read_template; "
                 "assert '{{LINE_ID}}' in _read_template('line.md'); "
                 "assert '{{DISCOVERY_ID}}' in _read_template('discovery.md'); "
-                "assert 'Mandatory Line-Level Checks' in _read_template('dqc.md')"
+                "assert '{{REQ_ID}}' in _read_template('requirement.md')"
             ),
         ],
         cwd=tmp_path,
@@ -522,20 +518,16 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(
     assert (isolated_home / ".proofline/templates").is_dir()
     assert (isolated_home / ".proofline/skills").is_dir()
     assert (
-        isolated_home / ".proofline/skills/proofline-run-dqc/SKILL.md"
-    ).read_bytes() == (ROOT / "skills/proofline-run-dqc/SKILL.md").read_bytes()
+        isolated_home / ".proofline/skills/proofline-approve-specification/SKILL.md"
+    ).read_bytes() == (ROOT / "skills/proofline-approve-specification/SKILL.md").read_bytes()
     assert (
-        isolated_home / ".proofline/templates/schema-v1/artifacts/dqc.md"
-    ).read_bytes() == (ROOT / "templates/schema-v1/artifacts/dqc.md").read_bytes()
+        isolated_home / ".proofline/templates/schema-v1/artifacts/requirement.md"
+    ).read_bytes() == (ROOT / "templates/schema-v1/artifacts/requirement.md").read_bytes()
     assert (
         isolated_home / ".proofline/contracts/line-delivery.md"
     ).read_bytes() == (ROOT / "docs/contracts/line-delivery.md").read_bytes()
-    assert not (
-        isolated_home / ".proofline/skills/proofline-run-dqc/scripts/preflight_clean_runner.py"
-    ).exists()
-    assert not (
-        isolated_home / ".proofline/skills/proofline-run-dqc/resources/candidate-clean-runner-plan-v1.json"
-    ).exists()
+    assert not (isolated_home / ".proofline/skills/proofline-run-dqc").exists()
+    assert not (isolated_home / ".proofline/templates/schema-v1/artifacts/dqc.md").exists()
     assert marker.read_text(encoding="utf-8") == "canonical\n"
 
     project_home = tmp_path / "project-home"
@@ -914,8 +906,7 @@ print(diagnostic, end='', file=sys.stderr)
         capture_output=True,
         check=False,
     )
-    assert legacy_validate.returncode == 1, legacy_validate.stderr
-    assert "history.unavailable" in legacy_validate.stderr
+    assert legacy_validate.returncode == 0, legacy_validate.stderr
     assert not list(legacy_project.glob(".line-*"))
     assert not list(legacy_project.glob(".proofline-ledger-*"))
 
@@ -1046,130 +1037,3 @@ def test_built_wheel_operations_match_source_inventory_and_payload_bytes(
         path.relative_to(home): path.read_bytes()
         for path in home.rglob("*") if path.is_file()
     } == before
-
-
-def test_wheel_changed_resources_are_exact_source_bytes_and_keep_p_then_b_workflow(
-    tmp_path: Path,
-) -> None:
-    wheel = _hosted_candidate_wheel()
-    if wheel is not None:
-        pass
-    else:
-        dist = tmp_path / "dist"
-        build = subprocess.run(
-            ["uv", "build", "--refresh", "--wheel", "--out-dir", str(dist)],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert build.returncode == 0, build.stderr
-        wheel = next(dist.glob("proofline-*.whl"))
-    resources = {
-        "src/proofline_home/agent-context.md": "proofline_home/agent-context.md",
-        "docs/contracts/line-delivery.md": "proofline_home/contracts/line-delivery.md",
-        "docs/contracts/micro-spec-and-iqc.md": "proofline_home/contracts/micro-spec-and-iqc.md",
-        "docs/contracts/requirements-and-criteria.md": "proofline_home/contracts/requirements-and-criteria.md",
-        "skills/proofline-approve-specification/SKILL.md": "proofline_home/skills/proofline-approve-specification/SKILL.md",
-        "skills/proofline-approve-specification/scripts/audit_approval_authority.py": "proofline_home/skills/proofline-approve-specification/scripts/audit_approval_authority.py",
-        "skills/proofline-start-implementation/SKILL.md": "proofline_home/skills/proofline-start-implementation/SKILL.md",
-        "skills/proofline-start-implementation/scripts/create_worktree.py": "proofline_home/skills/proofline-start-implementation/scripts/create_worktree.py",
-        "skills/proofline-run-iqc/SKILL.md": "proofline_home/skills/proofline-run-iqc/SKILL.md",
-        "skills/proofline-run-dqc/SKILL.md": "proofline_home/skills/proofline-run-dqc/SKILL.md",
-        "skills/proofline-run-dqc/scripts/preflight_integration_candidate.py": "proofline_home/skills/proofline-run-dqc/scripts/preflight_integration_candidate.py",
-        "templates/schema-v1/artifacts/dqc.md": "proofline_home/templates/schema-v1/artifacts/dqc.md",
-        "templates/schema-v1/artifacts/integration.md": "proofline_home/templates/schema-v1/artifacts/integration.md",
-        "templates/schema-v1/artifacts/legacy-migration.md": "proofline_home/templates/schema-v1/artifacts/legacy-migration.md",
-        "docs/operations/legacy-nonterminal-history-migration.md": "proofline_home/operations/legacy-nonterminal-history-migration.md",
-    }
-    with zipfile.ZipFile(wheel) as archive:
-        for source, packaged in resources.items():
-            assert archive.read(packaged) == (ROOT / source).read_bytes()
-        skill = archive.read(
-            resources["skills/proofline-start-implementation/SKILL.md"]
-        ).decode()
-        assert "별도 lifecycle-only `in_progress` commit `P`" in skill
-        assert (
-            "그 다음 `implementation_history: first_parent`만 추가한 별도 commit `B`"
-            in skill
-        )
-        script = archive.read(
-            resources[
-                "skills/proofline-start-implementation/scripts/create_worktree.py"
-            ]
-        )
-        assert b"approval_commit" in script
-
-
-@pytest.mark.candidate_build_only
-def test_source_and_isolated_wheel_share_real_git_migration_registry(
-    tmp_path: Path,
-) -> None:
-    wheel = _hosted_candidate_wheel()
-    if wheel is not None:
-        pass
-    else:
-        dist = tmp_path / "dist"
-        build = subprocess.run(
-            ["uv", "build", "--wheel", "--out-dir", str(dist)],
-            cwd=ROOT,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert build.returncode == 0, build.stderr
-        wheel = next(dist.glob("proofline-0.6.2-*.whl"))
-
-    venv = tmp_path / "migration-wheel-env"
-    create = subprocess.run(
-        ["uv", "venv", "--python", sys.executable, str(venv)],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert create.returncode == 0, create.stderr
-    python = venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
-    proofline = venv / ("Scripts/proofline.exe" if os.name == "nt" else "bin/proofline")
-    install = subprocess.run(
-        ["uv", "pip", "install", "--python", str(python), str(wheel)],
-        text=True,
-        capture_output=True,
-        check=False,
-    )
-    assert install.returncode == 0, install.stderr
-
-    source_env = os.environ.copy()
-    source_env["PYTHONPATH"] = str(ROOT / "src")
-    source_command = [
-        sys.executable,
-        "-c",
-        "from proofline.cli import main; raise SystemExit(main())",
-        "validate",
-    ]
-    for scenario_id in MIGRATION_SCENARIO_IDS:
-        repo = build_migration_scenario(
-            tmp_path / f"scenario-{scenario_id}", scenario_id
-        )
-        before = repository_snapshot(repo.path)
-        source = subprocess.run(
-            source_command,
-            cwd=repo.path,
-            env=source_env,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert repository_snapshot(repo.path) == before
-        installed = subprocess.run(
-            [str(proofline), "validate"],
-            cwd=repo.path,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        assert repository_snapshot(repo.path) == before
-        assert (installed.returncode, installed.stdout, installed.stderr) == (
-            source.returncode,
-            source.stdout,
-            source.stderr,
-        )

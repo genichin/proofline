@@ -84,7 +84,7 @@ proofline line init line-NNNN --title "TITLE" --dry-run
 
 공용 설치와 validation은 application dependency를 변경하지 않는 no-mutation 작업이어야 한다.
 
-## Explicit update와 v0.1.0·v0.2.0 migration
+## Explicit update와 v0.1.0·v0.2.0 전환
 
 Official `v0.2.1` 이상에서는 다음 명령을 사용한다.
 

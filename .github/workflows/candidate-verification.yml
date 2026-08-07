@@ -1,7 +1,5 @@
 name: Candidate verification
 
-# Optional project-local CI. Its results do not create or substitute ProofLine DQC authority.
-
 on:
   push:
     branches:
@@ -215,7 +213,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           if ((& git status --short --untracked-files=all | Out-String) -cne $TrackedBefore) { throw "tracked repository mutation" }
           if ((& git status --short --ignored --untracked-files=all | Out-String) -cne $IgnoredBefore) { throw "ignored repository mutation" }
-      - name: Verify source history and installed wheel regressions
+      - name: Verify source and installed wheel regressions
         shell: pwsh
         run: |
           $Containment = Join-Path $env:RUNNER_TEMP "proofline-windows-regression-state"
@@ -249,7 +247,7 @@ jobs:
           $env:PROOFLINE_INSTALLED_EXECUTABLE = "$env:RUNNER_TEMP\proofline-wheel-env\Scripts\proofline.exe"
           $env:PROOFLINE_HOSTED_CANDIDATE_WHEEL = $wheel[0].FullName
           $env:PROOFLINE_HOSTED_CANDIDATE_WHEEL_SHA256 = $digest.ToLowerInvariant()
-          uv run pytest -q tests/test_windows_history_runtime.py tests/test_start_implementation_windows_runtime.py tests/test_implementation_history.py --basetemp (Join-Path $Containment "basetemp") -p no:cacheprovider
+          uv run pytest -q tests/test_line_init.py tests/test_artifact_validation.py tests/test_cli.py --basetemp (Join-Path $Containment "basetemp") -p no:cacheprovider
           python -m compileall -q src tests
           if ((& git status --short --untracked-files=all | Out-String) -cne $TrackedBefore) { throw "tracked repository mutation" }
           if ((& git status --short --ignored --untracked-files=all | Out-String) -cne $IgnoredBefore) { throw "ignored repository mutation" }

@@ -35,7 +35,6 @@ _PATHS = (
     "~/.proofline/agent-context.md",
 )
 _REQUIRED_OPERATIONS = {
-    "legacy-nonterminal-history-migration.md",
     "official-wheel-release.md",
     "proofline-tool-environment.md",
 }

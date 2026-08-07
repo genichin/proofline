@@ -15,7 +15,6 @@ fcntl = pytest.importorskip("fcntl")
 from proofline import line_writer
 from proofline.identity_ledger import decode_ledger, encode_ledger
 from proofline.line_writer import LineInitError, LineInitResult, initialize_line
-from proofline.validator import ValidationError
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -228,7 +227,6 @@ def test_line_init_creates_valid_line_and_discovery(tmp_path: Path) -> None:
     assert yaml.safe_load(line.read_text().split("---", 2)[1]) == {
         "id": "line-0007",
         "execution_status": "not_started",
-        "implementation_history": "first_parent",
     }
     text = discovery.read_text()
     assert 'id: "dcy-0007"' in text
@@ -238,24 +236,7 @@ def test_line_init_creates_valid_line_and_discovery(tmp_path: Path) -> None:
     assert "{{DISCOVERY_ID}}" not in text
     assert "{{TITLE}}" not in text
     validation = run("validate", cwd=project)
-    assert validation.returncode == 1
-    assert ".proofline/lines/line-0007/line-0007.md: history.unavailable:" in validation.stderr
-
-
-def test_line_init_refuses_unrelated_uncommitted_line_without_mutation(
-    tmp_path: Path,
-) -> None:
-    project = make_project(tmp_path)
-    unrelated = project / ".proofline/lines/line-0002/line-0002.md"
-    unrelated.parent.mkdir()
-    unrelated.write_text(
-        '---\nid: "line-0002"\nexecution_status: not_started\n---\n',
-        encoding="utf-8",
-    )
-    before = tree_snapshot(project)
-    with pytest.raises(LineInitError, match="history.line.policy.missing"):
-        initialize_line(project, "line-0007", "blocked by unrelated line")
-    assert tree_snapshot(project) == before
+    assert validation.returncode == 0, validation.stderr
 
 
 def test_line_init_cat_file_inspection_failure_refuses_without_mutation(
@@ -277,52 +258,22 @@ def test_line_init_cat_file_inspection_failure_refuses_without_mutation(
         initialize_line(project, "line-0007", "inspection failure")
     assert tree_snapshot(project) == before
 
-def test_line_init_refuses_when_preexisting_history_is_invalid(tmp_path: Path) -> None:
+def test_line_init_refuses_when_preexisting_project_is_invalid(tmp_path: Path) -> None:
     project = make_project(tmp_path)
     line_dir = project / ".proofline/lines/line-0001"
     line_dir.mkdir()
-    (line_dir / "line-0001.md").write_text(
-        '---\nid: "line-0001"\nexecution_status: in_progress\n---\n',
-        encoding="utf-8",
-    )
+    (line_dir / "unexpected.md").write_text("not canonical\n", encoding="utf-8")
     git("add", ".", cwd=project)
-    git("commit", "-qm", "invalid lifecycle", cwd=project)
+    git("commit", "-qm", "invalid artifact", cwd=project)
     before = tree_snapshot(project)
 
     with pytest.raises(LineInitError) as raised:
         initialize_line(project, "line-0007", "Blocked")
 
     assert raised.value.code == "project.invalid"
-    assert "history.line.policy.missing" in raised.value.message
+    assert "artifact.path" in raised.value.message
     assert tree_snapshot(project) == before
     assert not (project / ".proofline/lines/line-0007").exists()
-
-
-def test_line_init_allocated_sibling_history_unavailable_fails_closed_without_mutation(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    project = make_project(tmp_path)
-    sibling = project / ".proofline/lines/line-0002"
-    sibling.mkdir()
-    (sibling / "line-0002.md").write_text("persisted sibling", encoding="utf-8")
-    (sibling / "dcy-0002.md").write_text("persisted discovery", encoding="utf-8")
-    (project / ".proofline/line-identities.json").write_bytes(
-        encode_ledger({"line-0002"})
-    )
-    before = tree_snapshot(project)
-    injected = ValidationError(
-        ".proofline/lines/line-0002/line-0002.md",
-        "history.unavailable",
-        "injected shallow history",
-    )
-    monkeypatch.setattr(
-        line_writer, "_validate_project", lambda *args, **kwargs: [injected]
-    )
-
-    with pytest.raises(LineInitError, match="history.unavailable"):
-        initialize_line(project, "line-0007", "Blocked sibling history")
-
-    assert tree_snapshot(project) == before
 
 
 def test_line_init_fresh_bootstrap_commits_ledger_and_matching_pair(tmp_path: Path) -> None:
@@ -351,8 +302,7 @@ def test_line_init_appends_existing_ledger_without_losing_prior_allocation(tmp_p
         (project / ".proofline/line-identities.json").read_bytes()
     ).allocated_line_ids == ("line-0007",)
     validation = run("validate", cwd=project)
-    assert validation.returncode == 1
-    assert "history.unavailable" in validation.stderr
+    assert validation.returncode == 0, validation.stderr
 
 
 @pytest.mark.parametrize("legacy", [False, True], ids=["fresh", "existing-ledger"])

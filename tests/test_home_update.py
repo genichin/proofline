@@ -20,7 +20,7 @@ from proofline.home_writer import (
 
 
 OPERATIONS = {
-    "legacy-nonterminal-history-migration.md": b"migration operation\n",
+    "example-operation.md": b"example operation\n",
     "official-wheel-release.md": b"release operation\n",
     "proofline-tool-environment.md": b"environment operation\n",
 }
