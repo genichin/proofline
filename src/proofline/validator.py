@@ -19,26 +19,17 @@ class ValidationError:
 
 
 ARTIFACT_FIELDS = {
-    "line": {"id", "execution_status"},
+    "line": {"id"},
     "dcy": {"id", "status"},
     "req": {"id", "status", "discovery", "criteria"},
     "ac": {"id", "status"},
 }
 
 LEGACY_OPTIONAL_FIELDS = {
-    "line": {"implementation_history"},
+    "line": {"execution_status", "implementation_history"},
 }
 
 ARTIFACT_STATUSES = {
-    "line": {
-        "execution_status": {
-            "not_started",
-            "in_progress",
-            "verifying",
-            "delivered",
-            "cancelled",
-        }
-    },
     "dcy": {"status": {"draft", "confirmed", "withdrawn"}},
     "req": {"status": {"draft", "approved", "withdrawn"}},
     "ac": {"status": {"draft", "active", "retired"}},
@@ -466,7 +457,7 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
                             f"AC ID를 둘 이상의 criteria list에 중복 기록했습니다: {', '.join(duplicates)}",
                         )
                     )
-        for field, allowed in ARTIFACT_STATUSES[kind].items():
+        for field, allowed in ARTIFACT_STATUSES.get(kind, {}).items():
             if field in frontmatter and frontmatter[field] not in allowed:
                 errors.append(
                     ValidationError(

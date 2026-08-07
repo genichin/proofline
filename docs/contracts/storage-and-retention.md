@@ -24,19 +24,18 @@ Canonical tree에는 임시 파일, cache, 원시 대화·debug log, credential,
 
 ## 보존과 폐기
 
-Line, Discovery, REQ와 AC는 현재 tree에 마지막 canonical 상태를 보존한다. Terminal artifact를 archive로 이동하거나 lifecycle cleanup을 이유로 삭제하지 않는다.
+Line, Discovery, REQ와 AC는 현재 tree에 canonical 내용을 보존한다. Status-bearing artifact를 archive로 이동하거나 lifecycle cleanup을 이유로 삭제하지 않는다.
 
 ```text
-Line.execution_status: delivered | cancelled
 Discovery.status: withdrawn
 REQ.status: withdrawn
 AC.status: retired
 ```
 
-- Terminal Line directory, Discovery, REQ와 AC를 삭제하거나 이동하지 않는다.
+- 할당된 Line directory와 terminal Discovery, REQ 및 AC를 삭제하거나 이동하지 않는다.
 - 별도 `.proofline/archive/`를 만들지 않는다.
 - 승인된 적 없는 신규 draft나 잘못 생성되어 어디에서도 참조하지 않는 artifact만 dangling reference가 생기지 않는 범위에서 제거할 수 있다.
-- 유효한 Line을 중단할 때는 Discovery와 REQ를 `withdrawn`, Line을 `cancelled`로 전환한다.
+- 변경 논의를 중단할 때는 필요한 Discovery와 REQ를 `withdrawn`으로 전환한다. Line에는 상태 전환이 없다.
 - 한 번 사용한 canonical identity는 다른 의미로 재사용하지 않는다.
 
 `docs/requirements.md`, 임시 파일, cache, local log와 download artifact는 필요하면 재생성하거나 삭제할 수 있다.
@@ -49,6 +48,7 @@ AC.status: retired
 - Writer, validator, contract와 skill은 이를 새로 만들거나 현재 lifecycle 입력으로 해석하지 않는다.
 - 현재 schema로 소급 변환하거나 canonical path로 이동·병합하지 않는다.
 - 보존 자체는 과거 판정이나 구현·배포 완료를 현재 ProofLine이 보증한다는 뜻이 아니다.
+- 기존 Line의 `execution_status`와 `implementation_history`는 opaque retained metadata이며 현재 상태나 완료 증거로 해석하지 않는다.
 
 이 compatibility 경계에는 migration operation이 없다. Credential, 개인정보, 악성 binary 또는 법적으로 삭제해야 하는 데이터는 예외이며 프로젝트의 security incident와 history 정화 절차를 따른다.
 

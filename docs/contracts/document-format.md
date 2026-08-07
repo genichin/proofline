@@ -17,7 +17,7 @@ Canonical artifact는 UTF-8 Markdown과 YAML frontmatter를 사용한다.
 - Frontmatter는 첫 줄의 `---`로 시작하고 `---`로 종료한다.
 - 모든 artifact의 `id`는 파일명과 일치해야 한다.
 - Line 내부 artifact 번호는 상위 `line-<NNNN>/` 번호와 일치해야 한다.
-- Status와 reference는 각 artifact contract가 정의한 값과 canonical artifact만 사용한다.
+- Status-bearing artifact의 status와 reference는 각 artifact contract가 정의한 값과 canonical artifact만 사용한다. Line은 status를 갖지 않는다.
 - `created_at`, `updated_at`, `author`, `owner`, `branch` 등 Git 또는 외부 시스템이 소유하는 metadata는 추가하지 않는다.
 - 정의되지 않은 frontmatter key와 `x-*` extension은 금지한다.
 
@@ -31,7 +31,7 @@ Draft artifact도 H1과 필수 H2를 모두 가져야 한다. 미완성 section�
 
 | Artifact | Schema 소유 문서 |
 | --- | --- |
-| Line | [Line lifecycle 계약](line-delivery.md) |
+| Line | [Line identity 계약](line-delivery.md) |
 | Discovery | [Discovery 계약](discovery.md) |
 | REQ, AC | [REQ와 AC 계약](requirements-and-criteria.md) |
 

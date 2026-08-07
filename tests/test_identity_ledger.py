@@ -56,7 +56,7 @@ def add_pair(project: Path, line_id: str) -> None:
     target = project / ".proofline/lines" / line_id
     target.mkdir(parents=True)
     (target / f"{line_id}.md").write_text(
-        f'---\nid: "{line_id}"\nexecution_status: not_started\n---\n', encoding="utf-8"
+        f'---\nid: "{line_id}"\n---\n', encoding="utf-8"
     )
     (target / f"dcy-{suffix}.md").write_text(
         f'---\nid: "dcy-{suffix}"\nstatus: draft\n---\n\n# title\n\n## Problem\n\n{{{{TODO: x}}}}\n\n## Evidence\n\n{{{{NEEDS_EVIDENCE: x}}}}\n\n## Scope\n\n{{{{TODO: x}}}}\n\n## Out of Scope\n\n{{{{TODO: x}}}}\n',
@@ -425,7 +425,7 @@ def test_post_bootstrap_candidate_and_commit_require_matching_new_pair(
 @pytest.mark.parametrize(
     "frontmatter",
     [
-        'id: "line-0001"\nid: "line-9999"\nexecution_status: not_started\n',
+        'id: "line-0001"\nid: "line-9999"\n',
         'id: "line-0001"\ninvalid: [\n',
     ],
     ids=["conflicting-duplicate-id", "malformed-yaml"],
@@ -443,7 +443,7 @@ def test_allocation_history_rejects_invalid_identity_frontmatter_after_working_c
     commit_all(project, "allocate with invalid identity frontmatter")
 
     line.write_text(
-        '---\nid: "line-0001"\nexecution_status: not_started\n---\n', encoding="utf-8"
+        '---\nid: "line-0001"\n---\n', encoding="utf-8"
     )
 
     assert "ledger.orphan" in codes(project)
@@ -452,7 +452,12 @@ def test_allocation_history_rejects_invalid_identity_frontmatter_after_working_c
 @pytest.mark.parametrize(
     ("frontmatter", "expected"),
     [
-        ('id: "line-0001"\nexecution_status: not_started\n', True),
+        ('id: "line-0001"\n', True),
+        (
+            'id: "line-0001"\nexecution_status: historical-value\n'
+            'implementation_history: opaque\n',
+            True,
+        ),
         ('id: "line-0001"\nid: "line-0001"\n', False),
         ('id: "line-0001"\nid: "line-9999"\n', False),
         ('id: "line-0001"\ninvalid: [\n', False),
@@ -461,6 +466,7 @@ def test_allocation_history_rejects_invalid_identity_frontmatter_after_working_c
     ],
     ids=[
         "valid-mapping",
+        "deprecated-metadata",
         "duplicate-id",
         "conflicting-id",
         "malformed-yaml",

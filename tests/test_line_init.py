@@ -226,7 +226,6 @@ def test_line_init_creates_valid_line_and_discovery(tmp_path: Path) -> None:
     discovery = project / ".proofline/lines/line-0007/dcy-0007.md"
     assert yaml.safe_load(line.read_text().split("---", 2)[1]) == {
         "id": "line-0007",
-        "execution_status": "not_started",
     }
     text = discovery.read_text()
     assert 'id: "dcy-0007"' in text

@@ -338,23 +338,19 @@ def test_windows_gate_pins_operations_inventory_bytes_and_manifest_hashes() -> N
     assert "operations inventory/bytes/manifest SHA256" in workflow
 
 
-def test_windows_gate_fixture_is_persisted_as_valid_terminal_history(tmp_path: Path) -> None:
+def test_windows_gate_does_not_read_or_mutate_line_execution_status(tmp_path: Path) -> None:
     fixture_line = WINDOWS_FIXTURE / ".proofline/lines/line-0001/line-0001.md"
-    assert "execution_status: verifying" in fixture_line.read_text(encoding="utf-8")
+    fixture_line_text = fixture_line.read_text(encoding="utf-8")
+    assert "execution_status: verifying" in fixture_line_text
     gate = WINDOWS_GATE.read_text(encoding="utf-8")
-    assert '$FixtureLineText.Replace("execution_status: verifying", "execution_status: delivered")' in gate
+    assert "execution_status" not in gate
+    assert "FixtureLineText" not in gate
     disable_normalization = '& $GitPath -C $Application config core.autocrlf false'
     assert disable_normalization in gate
     assert gate.index(disable_normalization) < gate.index('& $GitPath -C $Application add -A')
     project = tmp_path / "windows-gate-fixture"
     shutil.copytree(WINDOWS_FIXTURE, project)
     copied_line = project / ".proofline/lines/line-0001/line-0001.md"
-    copied_line.write_text(
-        copied_line.read_text(encoding="utf-8").replace(
-            "execution_status: verifying", "execution_status: delivered"
-        ),
-        encoding="utf-8",
-    )
     subprocess.run(("git", "init", "-q", "-b", "main"), cwd=project, check=True)
     subprocess.run(("git", "config", "user.name", "ProofLine Gate"), cwd=project, check=True)
     subprocess.run(("git", "config", "user.email", "proofline@example.invalid"), cwd=project, check=True)
@@ -368,6 +364,7 @@ def test_windows_gate_fixture_is_persisted_as_valid_terminal_history(tmp_path: P
         cwd=project, env=environment, text=True, capture_output=True, check=False,
     )
     assert validated.returncode == 0, validated.stderr
+    assert copied_line.read_text(encoding="utf-8") == fixture_line_text
 
 
 def test_workflow_and_gate_preserve_governance_and_home_boundaries() -> None:

@@ -27,18 +27,30 @@ def test_public_project_validation_has_no_history_opt_out() -> None:
 def test_line_accepts_canonical_minimal_schema(tmp_path: Path) -> None:
     project = copy_valid_project(tmp_path)
     artifact = project / ".proofline/lines/line-0001/line-0001.md"
+    artifact.write_text('---\nid: "line-0001"\n---\n', encoding="utf-8")
 
     assert _validate_schema_candidate(project) == []
 
 
-def test_line_accepts_retained_implementation_history_field(tmp_path: Path) -> None:
+def test_line_accepts_implementation_history_without_execution_status(
+    tmp_path: Path,
+) -> None:
     project = copy_valid_project(tmp_path)
     artifact = project / ".proofline/lines/line-0001/line-0001.md"
     artifact.write_text(
-        artifact.read_text(encoding="utf-8").replace(
-            "execution_status: verifying",
-            "execution_status: verifying\nimplementation_history: first_parent",
-        ),
+        '---\nid: "line-0001"\nimplementation_history: first_parent\n---\n',
+        encoding="utf-8",
+    )
+
+    assert _validate_schema_candidate(project) == []
+
+
+def test_line_accepts_opaque_deprecated_metadata(tmp_path: Path) -> None:
+    project = copy_valid_project(tmp_path)
+    artifact = project / ".proofline/lines/line-0001/line-0001.md"
+    artifact.write_text(
+        '---\nid: "line-0001"\nexecution_status: arbitrary-value\n'
+        'implementation_history:\n  nested: [opaque, metadata]\n---\n',
         encoding="utf-8",
     )
 
@@ -49,10 +61,7 @@ def test_line_rejects_noncanonical_field(tmp_path: Path) -> None:
     project = copy_valid_project(tmp_path)
     artifact = project / ".proofline/lines/line-0001/line-0001.md"
     artifact.write_text(
-        artifact.read_text(encoding="utf-8").replace(
-            "execution_status: verifying",
-            "execution_status: verifying\nowner: team",
-        ),
+        '---\nid: "line-0001"\nowner: team\n---\n',
         encoding="utf-8",
     )
 

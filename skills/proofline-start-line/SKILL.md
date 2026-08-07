@@ -25,7 +25,7 @@ metadata:
 다음에는 사용하지 않는다.
 
 - 이미 존재하는 Discovery를 확인 없이 다시 생성할 때
-- REQ·AC 승인이나 Line 작업·검증·완료를 자동화할 때
+- REQ·AC 승인이나 구현·검증·delivery를 자동화할 때
 - ProofLine이 아닌 일반적인 아이디어 메모를 작성할 때
 
 ## Preconditions
@@ -61,7 +61,7 @@ proofline line init line-NNNN --title "TITLE"
 .proofline/line-identities.json  # 기존 ledger의 해당 Line entry 추가
 ```
 
-CLI는 Discovery의 실질적 내용을 판단하지 않는다. 생성 직후 `proofline validate`를 실행한다.
+Line artifact는 stable `id`만 가지며 Discovery는 `status: draft`로 생성된다. CLI는 Discovery의 실질적 내용을 판단하지 않는다. 생성 직후 `proofline validate`를 실행한다.
 
 ### 3. 직접 evidence를 먼저 조사한다
 
@@ -135,7 +135,7 @@ Version·tag·checksum 같은 release-specific 표현은 review warning으로 �
 4. `proofline validate`를 실행한다.
 5. Discovery는 `status: draft`로 유지한다.
 6. 사용자에게 scope, evidence, Open Question과 confirmation gate를 보고한다.
-7. 사용자의 명시적인 confirmation 또는 별도 governance authority 없이는 다음 lifecycle 단계로 진행하지 않는다.
+7. 사용자의 명시적인 confirmation 없이는 Discovery를 `confirmed`로 전환하거나 REQ 승인으로 진행하지 않는다.
 
 이 workflow는 repository-owned source만 작성하며 live Hermes profile을 변경하지 않는다. 설치와 registry publish는 별도 rollout이다.
 
@@ -153,6 +153,7 @@ Version·tag·checksum 같은 release-specific 표현은 review warning으로 �
 - [ ] 사용자가 Line ID와 제목을 명시했다.
 - [ ] Dry-run이 통과했다.
 - [ ] 두 canonical artifact가 생성되고 identity ledger만 함께 갱신됐다.
+- [ ] Line artifact는 `id`만 가진다.
 - [ ] 직접 evidence를 확인한 뒤 Discovery를 작성했다.
 - [ ] create/update/retire/satisfy/release evidence/housekeeping 분류와 가장 가까운 active AC를 검토했다.
 - [ ] 필수 section이 실질적 내용을 갖거나 허용된 draft placeholder를 사용한다.

@@ -172,10 +172,6 @@ try {
     [void](New-Item -ItemType Directory -Path $Root)
     $Application = Join-Path $Root "application with spaces"
     Copy-Item -LiteralPath (Join-Path $RepoRoot "tests\fixtures\valid-minimal") -Destination $Application -Recurse
-    $FixtureLine = Join-Path $Application ".proofline\lines\line-0001\line-0001.md"
-    $FixtureLineText = Get-Content -LiteralPath $FixtureLine -Raw
-    Assert-True ($FixtureLineText.Contains("execution_status: verifying")) "fixture Line status is unexpected"
-    Set-Content -LiteralPath $FixtureLine -Value $FixtureLineText.Replace("execution_status: verifying", "execution_status: delivered") -NoNewline
     Set-Content -LiteralPath (Join-Path $Application "pyproject.toml") -Value "[project]`nname='candidate-fixture'`nversion='0.0.0'`n" -NoNewline
     Set-Content -LiteralPath (Join-Path $Application "uv.lock") -Value "version = 1`nrevision = 1`n" -NoNewline
     & $GitPath -C $Application init -q -b main

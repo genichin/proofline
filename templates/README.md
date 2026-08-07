@@ -26,7 +26,7 @@ templates/
 - 생성 결과의 frontmatter에는 어떤 placeholder도 남기지 않는다.
 - 새 REQ의 `criteria`는 `create`, `update`, `retire`, `satisfy` 네 목록을 생성 전에 확정하며 합집합에 최소 하나의 AC를 넣는다. Historical schema-v1 REQ의 세 목록 형태는 계속 유효하다.
 - 필요하지 않은 선택 section과 예시 행은 생성할 때 제거한다. 필수 H1·H2 section은 제거하지 않는다.
-- 템플릿은 lifecycle 권한을 부여하지 않는다. 상태 전환과 판정은 canonical artifact와 Git history가 소유한다.
+- Line template은 stable `id`만 생성한다. Discovery, REQ와 AC의 상태 전환 권한은 각 contract가 소유한다.
 - 생성 결과는 `docs/contracts/`의 해당 artifact contract와 validator를 통과해야 한다.
 - 신규 canonical artifact는 Line, Discovery, Requirement, Acceptance Criterion 네 종류다.
 - 기존 프로젝트의 canonical legacy 경로에 남은 Micro-SPEC, IQC, DQC, integration 및 legacy migration 파일은 opaque retained data이며 신규 생성하거나 템플릿으로 제공하지 않는다.

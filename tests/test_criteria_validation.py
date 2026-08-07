@@ -1,7 +1,6 @@
 import hashlib
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -91,13 +90,6 @@ def git(project: Path, *args: str) -> str:
 
 
 def initialize_main(project: Path) -> None:
-    # Keep unrelated fixture Lines terminal during criteria-history tests.
-    for line in (project / ".proofline/lines").glob("line-*/line-*.md"):
-        text = line.read_text(encoding="utf-8")
-        line.write_text(
-            re.sub(r"^execution_status: \w+$", "execution_status: delivered", text, flags=re.M),
-            encoding="utf-8",
-        )
     git(project, "init", "-b", "main")
     git(project, "config", "user.name", "Criteria Test")
     git(project, "config", "user.email", "criteria@example.invalid")
@@ -115,7 +107,7 @@ def add_update_owner(project: Path, number: int = 2, status: str = "draft") -> s
     line = project / ".proofline/lines" / line_id
     line.mkdir(parents=True)
     (line / f"{line_id}.md").write_text(
-        f'---\nid: "{line_id}"\nexecution_status: not_started\n---\n',
+        f'---\nid: "{line_id}"\n---\n',
         encoding="utf-8",
     )
     (line / f"dcy-{number:04d}.md").write_text(

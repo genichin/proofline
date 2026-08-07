@@ -17,7 +17,7 @@
 | Artifact | 역할 | 소유하는 canonical 사실 |
 | --- | --- | --- |
 | Line identity ledger | 프로젝트 전역 Line allocation 기록 | canonical main에 예약된 `line-NNNN` 집합 |
-| Line | 독립적인 변경 단위 | Discovery와 REQ의 공통 identity 및 lifecycle 상태 |
+| Line | 독립적인 변경 단위 | Discovery와 REQ의 공통 stable identity |
 | Discovery | 변경이 필요한 이유와 범위 탐색 | 문제, 근거, 범위와 위험 |
 | REQ | 해당 Line에서 승인한 변경 계약 | 생성·수정·폐기·충족할 AC 집합과 Line-level scope |
 | AC | 독립적으로 검증 가능한 최소 사양 | 시스템이 만족해야 하는 하나의 criterion |
@@ -26,7 +26,7 @@
 Discovery = 왜 변경하는가
 REQ       = 이번 Line에서 무엇을 변경하는가
 AC        = 시스템이 만족해야 하는 최소 canonical 사양
-Line      = 위 artifact를 묶는 identity와 lifecycle
+Line      = 위 artifact를 묶는 identity
 ```
 
 REQ는 AC 상세 문장을 복제하지 않는다. AC 내용의 source of truth는 `.proofline/criteria/ac-<NNNN>.md`이며 REQ는 해당 Line의 AC 변경 집합만 소유한다.
@@ -88,7 +88,7 @@ AC는 특정 Line directory에 복사하거나 소유시키지 않는다. `.proo
 | --- | --- |
 | Discovery 작성·확인 | [Discovery 계약](contracts/discovery.md), [문서 형식과 완결성](contracts/document-format.md) |
 | REQ·AC 작성·승인 | [REQ와 AC 계약](contracts/requirements-and-criteria.md), [문서 형식과 완결성](contracts/document-format.md) |
-| Line lifecycle | [Line lifecycle 계약](contracts/line-delivery.md) |
+| Line identity | [Line identity 계약](contracts/line-delivery.md) |
 | 파생 문서·보존·프로젝트 설정 | [저장·파생 문서·보존 계약](contracts/storage-and-retention.md) |
 
-경로, ID와 cardinality는 이 문서가 소유한다. Artifact별 lifecycle과 schema는 위 표의 소유 문서가, 공통 frontmatter·Markdown과 placeholder 규칙은 `contracts/document-format.md`가 소유한다.
+경로, ID와 cardinality는 이 문서가 소유한다. Artifact별 schema와 status-bearing artifact의 lifecycle은 위 표의 소유 문서가, 공통 frontmatter·Markdown과 placeholder 규칙은 `contracts/document-format.md`가 소유한다.
