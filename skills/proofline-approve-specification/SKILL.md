@@ -1,7 +1,7 @@
 ---
 name: proofline-approve-specification
 description: Use when presenting and approving a ProofLine REQ and its AC specification through explicit user authority and current canonical validation.
-version: 3.1.0
+version: 3.2.0
 author: ProofLine
 license: MIT
 metadata:
@@ -46,6 +46,7 @@ REQ의 Objective·Scope·Non-Goals와 대상 AC의 Criterion·Verification을 �
 4. Approval 뒤 REQ를 `approved`, `criteria.create`·`criteria.update` AC를 `active`, `criteria.retire` AC를 `retired`로 전환한다. `criteria.satisfy` 대상의 본문과 status는 변경하지 않는다.
 5. `proofline validate`로 current canonical tree를 검증한다.
 6. 승인된 REQ·AC path와 status 및 validation 결과를 사용자에게 보고한다.
+7. 구현을 계속할 경우 `proofline-create-worktree`를 **optional next action**으로 제시한다. 사용자는 worktree 생성, main에서 직접 구현 또는 여기서 중단을 선택할 수 있으며 worktree를 approval·validator·QC·CI의 필수 gate로 만들지 않는다.
 
 Git commit은 승인된 specification revision을 일반 history로 보존할 수 있지만 approval authority 또는 approval transition validation 입력이 아니다. `criteria.satisfy`의 historical active binding은 contract의 별도 lifecycle 규칙을 따른다.
 

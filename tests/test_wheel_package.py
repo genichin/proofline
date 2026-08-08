@@ -63,7 +63,13 @@ def test_built_wheel_contains_and_reads_canonical_schema_templates(tmp_path: Pat
         assert "proofline_schema_v1_templates/artifacts/requirement.md" in names
         assert "proofline_home/skills/proofline-start-requirement/SKILL.md" in names
         assert "proofline_home/skills/proofline-approve-specification/SKILL.md" in names
+        assert "proofline_home/skills/proofline-create-worktree/SKILL.md" in names
+        assert (
+            "proofline_home/skills/proofline-create-worktree/scripts/"
+            "inspect_worktree_readiness.py"
+        ) in names
         assert not any(name.endswith("audit_transition.py") for name in names)
+        assert not any(name.endswith("/AGENTS.md") for name in names)
         assert archive.read("proofline_schema_v1_templates/project/identities.json") == (
             ROOT / "templates/schema-v1/project/identities.json"
         ).read_bytes()
@@ -94,11 +100,14 @@ def test_built_sdist_contains_allocator_and_requirement_resources(tmp_path: Path
     with tarfile.open(sdist, "r:gz") as archive:
         names = archive.getnames()
     assert not any(name.endswith("audit_transition.py") for name in names)
+    assert not any(name.endswith("/AGENTS.md") for name in names)
     for relative in (
         "templates/schema-v1/project/identities.json",
         "templates/schema-v1/artifacts/requirement.md",
         "templates/schema-v1/artifacts/acceptance-criterion.md",
         "skills/proofline-start-requirement/SKILL.md",
+        "skills/proofline-create-worktree/SKILL.md",
+        "skills/proofline-create-worktree/scripts/inspect_worktree_readiness.py",
     ):
         assert any(name.endswith(relative) for name in names)
 
@@ -139,6 +148,8 @@ def test_built_wheel_operations_match_source_inventory_and_payload_bytes(tmp_pat
         "skills/proofline-start-line/SKILL.md",
         "skills/proofline-start-requirement/SKILL.md",
         "skills/proofline-approve-specification/SKILL.md",
+        "skills/proofline-create-worktree/SKILL.md",
+        "skills/proofline-create-worktree/scripts/inspect_worktree_readiness.py",
     ):
         source = ROOT / (
             f"docs/{relative}" if relative.startswith("contracts/") else relative
@@ -166,3 +177,34 @@ def test_built_wheel_operations_match_source_inventory_and_payload_bytes(tmp_pat
     validated = subprocess.run([str(proofline), "validate"], cwd=project, env=env, text=True, capture_output=True)
     assert validated.returncode == 0, validated.stderr
     assert decode_allocator((project / ".proofline/identities.json").read_bytes()) == IdentityAllocator(2, 2)
+    subprocess.run(["git", "config", "user.name", "ProofLine Test"], cwd=project, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "proofline@example.invalid"],
+        cwd=project,
+        check=True,
+    )
+    subprocess.run(["git", "add", "-A"], cwd=project, check=True)
+    subprocess.run(["git", "commit", "-qm", "managed helper fixture"], cwd=project, check=True)
+    helper_env = env.copy()
+    helper_env["PATH"] = str(proofline.parent) + os.pathsep + helper_env.get("PATH", "")
+    helper = home / ".proofline/skills/proofline-create-worktree/scripts/inspect_worktree_readiness.py"
+    inspected = subprocess.run(
+        [
+            str(python),
+            str(helper),
+            "--repository",
+            str(project.resolve()),
+            "--line",
+            "line-0001",
+        ],
+        cwd=project,
+        env=helper_env,
+        text=True,
+        capture_output=True,
+    )
+    assert inspected.returncode == 0, inspected.stderr
+    payload = json.loads(inspected.stdout)
+    assert payload["advisory"] is True
+    assert payload["recommendation"] == "review"
+    assert "requirement-not-approved" in payload["reasons"]
+    assert "criterion-status-mismatch:ac-0001" in payload["reasons"]

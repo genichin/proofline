@@ -21,6 +21,7 @@ proofline = "proofline.cli:main"
 [dependency-groups]
 dev = [
   "pytest>=8.0",
+  "ruff>=0.12.0",
 ]
 
 [tool.pytest.ini_options]
@@ -29,6 +30,9 @@ testpaths = ["tests"]
 markers = [
   "candidate_build_only: packaging test executed only by the optional project-local candidate build job",
 ]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["/AGENTS.md"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/proofline", "src/proofline_home"]

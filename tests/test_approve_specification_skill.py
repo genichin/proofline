@@ -16,7 +16,7 @@ def test_approval_skill_has_single_user_authorized_workflow() -> None:
 
     assert metadata["name"] == "proofline-approve-specification"
     assert metadata["description"].startswith("Use when ")
-    assert metadata["version"] == "3.1.0"
+    assert metadata["version"] == "3.2.0"
     for required in (
         "사용자만",
         "명시적인 approval",
