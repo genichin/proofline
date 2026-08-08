@@ -8,7 +8,7 @@
 - 프로젝트 설정은 `proofline.yaml`, 영속 project artifact는 `.proofline/`에 둔다.
 - 현재 canonical artifact 범위는 Line, Discovery, REQ와 AC뿐이다.
 - Canonical artifact는 Git으로 추적하되 ProofLine validator의 보증 범위는 검증 대상 tree의 구조와 내용이다.
-- User-level `~/.proofline/`은 manifest, contracts, operations, templates와 skills를 보관하며 project artifact topology에 포함되지 않는다.
+- 설치된 `proofline_resources`는 immutable contract·template·operation·skill 원본이며 project artifact topology에 포함되지 않는다. 등록된 agent skill의 변경 상태는 운영체제 기본 사용자 상태 디렉터리에 둔다.
 - 임시 파일, 실행 log와 cache를 canonical tree에 저장하지 않는다.
 - Symbolic link, 절대 경로와 `..`을 이용한 저장소 경계 이탈은 허용하지 않는다.
 

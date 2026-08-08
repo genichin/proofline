@@ -12,7 +12,7 @@ permissions:
 env:
   PROOFLINE_CLEAN_RUNNER_PLAN_ID: candidate-clean-runner-v1
   PROOFLINE_CLEAN_RUNNER_PLAN_RESOURCE: .github/resources/candidate-clean-runner-plan-v1.json
-  PROOFLINE_CLEAN_RUNNER_STEP_ORDER: verify-wheel,verify-checksum,create-environment,install-candidate,provision-harness,contract-probe
+  PROOFLINE_CLEAN_RUNNER_STEP_ORDER: verify-wheel,verify-checksum,create-environment,install-candidate,provision-test-dependencies,contract-probe
   PROOFLINE_CLEAN_RUNNER_ENDPOINT: https://pypi.org/simple
   PROOFLINE_CLEAN_RUNNER_VERSION_SOURCE: uv.lock
   PROOFLINE_CLEAN_RUNNER_NETWORK_MODE: online-offline
@@ -194,7 +194,7 @@ jobs:
       - name: Run tracked Windows candidate gate
         shell: powershell
         run: |
-          # Contract: operations inventory/bytes/manifest SHA256 is verified by the tracked gate.
+          # Contract: package skill inventory and local no-mutation status are verified by the tracked gate.
           $Containment = Join-Path $env:RUNNER_TEMP "proofline-windows-gate-state"
           $env:PYTHONDONTWRITEBYTECODE = "1"
           $env:UV_CACHE_DIR = Join-Path $Containment "cache"

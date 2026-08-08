@@ -2,11 +2,11 @@
 
 이 문서는 canonical artifact와 파생 산출물의 경계, 보존·폐기 및 프로젝트 설정을 정의한다. Canonical 경로는 [산출물 디렉터리 구조](../artifact-layout.md)가 소유한다.
 
-## User-level harness
+## Package resources and agent state
 
-ProofLine의 manifest, contracts, operations, templates와 skills는 `~/.proofline/`에 저장한다. `docs/operations/*.md`는 wheel과 HOME에 exact bytes로 대응하며 `manifest.yaml`이 path와 SHA-256을 기록한다. 이 resource는 project lifecycle artifact가 아니며 project `.proofline/`에 복제하지 않는다.
+ProofLine의 contract, operation, template와 `proofline-*` skill 기준 원본은 설치된 package에 immutable resource로 포함한다. ProofLine은 별도의 관리 대상 `~/.proofline/` user harness를 생성·읽기·갱신·삭제하지 않는다. 과거 버전이 만든 해당 tree는 opaque retained data로 보존한다.
 
-Project `.proofline/`은 Line, Discovery, REQ와 AC의 canonical root이다. `proofline init`은 user-level harness만 초기화하며 current project를 변경하지 않는다. Fresh project scaffold는 `proofline.yaml`, `.proofline/identities.json`, `.proofline/lines/.gitkeep`과 `.proofline/criteria/.gitkeep`을 초기화하며 Git commit, branch 또는 remote를 조작하지 않는다. Existing project는 명시적 `proofline project init`으로 current canonical Line·AC path의 max+1 allocator를 migration한다.
+등록된 agent skill의 설치별 manifest는 운영체제 기본 사용자 상태 위치에 저장하고 실제 agent target에는 검증된 skill 파일만 복사한다. Project `.proofline/`은 Line, Discovery, REQ와 AC의 canonical root이며 agent state나 package resource를 복제하지 않는다. Fresh project scaffold는 `proofline.yaml`, `.proofline/identities.json`, `.proofline/lines/.gitkeep`과 `.proofline/criteria/.gitkeep`을 초기화하며 Git commit, branch 또는 remote를 조작하지 않는다. Existing project는 명시적 `proofline project init`으로 current canonical Line·AC path의 max+1 allocator를 migration한다.
 
 Project migration, Line 생성과 Requirement 생성은 같은 Git common-directory process lock 아래에서 preflight, staged validation, commit과 process-level rollback을 수행한다. 각 no-replace rename과 allocator file 교체는 개별 filesystem operation 단위로 atomic하지만 여러 rename 전체가 crash 또는 전원 손실에도 하나의 atomic operation이라는 보장은 아니다. 정상 process 예외에서는 writer가 자신이 생성한 inode, bytes와 exact topology를 다시 확인한 artifact만 rollback하며 ownership을 확인할 수 없으면 외부 데이터를 보존하고 advanced allocator도 유지한다.
 

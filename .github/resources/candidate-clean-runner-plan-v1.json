@@ -81,7 +81,7 @@
           "publication_prerequisite": "none"
         },
         {
-          "step_id": "provision-harness",
+          "step_id": "provision-test-dependencies",
           "argv": ["uv", "pip", "install", "--python", "{python}", "--index-url", "https://pypi.org/simple", "colorama==0.4.6", "iniconfig==2.3.0", "packaging==26.2", "pluggy==1.6.0", "pygments==2.20.0", "pytest==9.1.1"],
           "endpoint": "https://pypi.org/simple",
           "version_source": "uv.lock",
@@ -133,7 +133,7 @@
           "publication_prerequisite": "none"
         },
         {
-          "step_id": "provision-harness",
+          "step_id": "provision-test-dependencies",
           "argv": ["uv", "pip", "install", "--python", "{python}", "--index-url", "https://pypi.org/simple", "colorama==0.4.6", "iniconfig==2.3.0", "packaging==26.2", "pluggy==1.6.0", "pygments==2.20.0", "pytest==9.1.1"],
           "endpoint": "https://pypi.org/simple",
           "version_source": "uv.lock",
