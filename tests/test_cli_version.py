@@ -30,8 +30,8 @@ def test_retired_home_cli_options_are_not_accepted() -> None:
     assert exc.value.code == 2
 
 
-def test_manifest_version_is_v080() -> None:
+def test_manifest_version_is_v090() -> None:
     manifest = tomllib.loads(
         (Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
     )
-    assert manifest["project"]["version"] == "0.8.0"
+    assert manifest["project"]["version"] == "0.9.0"

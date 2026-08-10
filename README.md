@@ -4,16 +4,16 @@ ProofLine은 AI agent와 함께 변경 사양을 Line, Discovery, REQ, AC로 관
 
 ## 설치
 
-공개 `v0.7.0`에서 HOME harness를 폐기한 `v0.8.0`으로 전환할 때는 immutable exact-tag installer를 사용합니다. 이 전환은 package만 교체하며 과거 `~/.proofline/`, project `.proofline/`, agent skill registry와 agent target을 읽거나 변경하지 않습니다.
+공개 `v0.8.0`에서 프로젝트 design document 관리용 `proofline-maintain-design-docs` skill과 template을 포함한 `v0.9.0`으로 전환할 때는 immutable exact-tag installer를 사용합니다. 이 전환은 package만 교체하며 과거 `~/.proofline/`, project `.proofline/`, agent skill registry와 agent target을 읽거나 변경하지 않습니다.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.8.0/install.sh | sh -s -- --force
+curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.9.0/install.sh | sh -s -- --force
 ```
 
 ```powershell
 $InstallerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("proofline-install-" + [guid]::NewGuid().ToString("N") + ".ps1")
 try {
-    Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/genichin/proofline/v0.8.0/install.ps1" -OutFile $InstallerPath
+    Invoke-WebRequest -UseBasicParsing -Uri "https://raw.githubusercontent.com/genichin/proofline/v0.9.0/install.ps1" -OutFile $InstallerPath
     & $InstallerPath -Force
 } finally {
     if (Test-Path -LiteralPath $InstallerPath) { Remove-Item -LiteralPath $InstallerPath -Force }

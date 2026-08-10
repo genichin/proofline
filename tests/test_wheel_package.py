@@ -103,7 +103,7 @@ def test_built_wheel_design_skill_payload_reaches_registered_agent_targets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     wheel = _wheel(tmp_path)
-    payload = updater.skill_payload_from_wheel(wheel, "0.8.0")
+    payload = updater.skill_payload_from_wheel(wheel, "0.9.0")
     relative_paths = (
         "proofline-maintain-design-docs/SKILL.md",
         "proofline-maintain-design-docs/templates/interface-contract.md",
@@ -139,6 +139,25 @@ def test_built_wheel_design_skill_payload_reaches_registered_agent_targets(
             assert (target.root / relative).read_bytes() == (
                 source_root / relative
             ).read_bytes()
+
+
+def test_built_wheel_skill_inventory_is_v080_parser_compatible(
+    tmp_path: Path,
+) -> None:
+    wheel = _wheel(tmp_path)
+    with zipfile.ZipFile(wheel) as archive:
+        skill_files = [
+            name
+            for name in archive.namelist()
+            if name.startswith("skills/") and not name.endswith("/")
+        ]
+
+    assert "skills/__init__.py" not in skill_files
+    assert skill_files
+    assert all(
+        Path(name.removeprefix("skills/")).parts[0].startswith("proofline-")
+        for name in skill_files
+    )
 
 
 def test_installed_wheel_has_no_init_and_reports_local_status(tmp_path: Path) -> None:
