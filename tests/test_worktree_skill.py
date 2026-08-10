@@ -175,7 +175,7 @@ def test_approval_skill_offers_worktree_as_optional_next_action() -> None:
     _, frontmatter, body = text.split("---", 2)
     metadata = yaml.safe_load(frontmatter)
 
-    assert metadata["version"] == "3.2.0"
+    assert metadata["version"] == "3.3.0"
     assert "proofline-create-worktree" in body
     assert "optional next action" in body
     assert "main에서 직접 구현" in body

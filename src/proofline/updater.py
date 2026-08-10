@@ -245,6 +245,8 @@ def skill_payload_from_wheel(wheel: Path, version: str) -> SkillPayload:
                 if not info.filename.startswith(prefix) or info.is_dir():
                     continue
                 relative = info.filename.removeprefix(prefix)
+                if relative == "__init__.py":
+                    continue
                 path = Path(relative)
                 if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
                     raise UpdateError("target wheel contains an unsafe skill path")

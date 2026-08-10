@@ -11,6 +11,9 @@ from pathlib import Path
 
 import pytest
 
+from proofline import agent_skills, updater
+from proofline.agent_skills import AgentTarget
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -67,6 +70,13 @@ def test_built_wheel_contains_exact_skill_and_contract_resources(
         names = set(archive.namelist())
         assert "proofline_schema_v1_templates/project/identities.json" in names
         assert "skills/proofline-start-requirement/SKILL.md" in names
+        assert "skills/proofline-maintain-design-docs/SKILL.md" in names
+        assert (
+            "skills/proofline-maintain-design-docs/templates/interface-contract.md"
+            in names
+        )
+        assert "skills/proofline-maintain-design-docs/templates/data-model.md" in names
+        assert "skills/proofline-maintain-design-docs/templates/runtime-flow.md" in names
         assert (
             "skills/proofline-create-worktree/scripts/inspect_worktree_readiness.py"
             in names
@@ -86,6 +96,49 @@ def test_built_wheel_contains_exact_skill_and_contract_resources(
                     )
                     == source.read_bytes()
                 )
+
+
+def test_built_wheel_design_skill_payload_reaches_registered_agent_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wheel = _wheel(tmp_path)
+    payload = updater.skill_payload_from_wheel(wheel, "0.8.0")
+    relative_paths = (
+        "proofline-maintain-design-docs/SKILL.md",
+        "proofline-maintain-design-docs/templates/interface-contract.md",
+        "proofline-maintain-design-docs/templates/data-model.md",
+        "proofline-maintain-design-docs/templates/runtime-flow.md",
+    )
+    source_root = ROOT / "skills"
+
+    for agent, scope, layout in (
+        ("hermes", "default", "grouped"),
+        ("codex", "user", "flat"),
+    ):
+        target = AgentTarget(agent, scope, layout, tmp_path / f"{agent}-skills")
+        registry = tmp_path / f"{agent}-registry"
+        monkeypatch.setattr(
+            agent_skills,
+            "state_root",
+            lambda environ=None, root=registry: root,
+        )
+        monkeypatch.setattr(
+            agent_skills,
+            "resolve_target",
+            lambda selected, requested_scope=None, environ=None, value=target: value,
+        )
+        monkeypatch.setattr(
+            agent_skills,
+            "load_packaged_payload",
+            lambda value=payload: value,
+        )
+
+        assert agent_skills.setup(agent, scope).status == "healthy"
+        for relative in relative_paths:
+            assert (target.root / relative).read_bytes() == (
+                source_root / relative
+            ).read_bytes()
 
 
 def test_installed_wheel_has_no_init_and_reports_local_status(tmp_path: Path) -> None:

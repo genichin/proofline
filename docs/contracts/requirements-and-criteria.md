@@ -97,8 +97,10 @@ draft ───────→ approved
 
 - `confirmed` Discovery만 같은 Line의 REQ 승인 근거가 될 수 있다.
 - 사용자만 REQ와 대상 AC의 의미를 승인할 수 있다.
+- REQ가 `Constraints`의 `Normative Design Documents`에 exact project-relative path를 열거하면 각 exact document contents를 REQ와 전체 criteria AC와 함께 제시한다. 목록이 없는 REQ도 유효하다.
+- Design documents는 별도 lifecycle status나 approval metadata를 갖지 않는다.
 - 사용자의 명시적 approval 뒤 REQ와 대상 AC를 계약상 status로 전환하고 current canonical tree를 검증한다.
-- Approved REQ 또는 대상 AC의 의미를 바꾸려면 REQ를 `draft`로 전환해 함께 재검토하고 재승인한다.
+- Approved REQ, 대상 AC 또는 referenced design-document의 기술 의미를 바꾸려면 관련 REQ와 영향받는 AC를 `draft`로 전환해 변경 문서와 함께 재검토하고 재승인한다.
 - `withdrawn`은 terminal status이다. 같은 변경을 다시 진행하려면 새 Line과 Discovery/REQ를 만든다.
 - 작업·검증·배포 상태는 REQ `status`에 기록하지 않는다.
 
@@ -161,7 +163,7 @@ criteria:
 ## Non-Goals
 ```
 
-`Constraints`는 필요할 때 `Scope`와 `Non-Goals` 사이에 추가할 수 있는 유일한 선택 H2이다. REQ 본문은 AC의 Criterion 또는 Verification을 복제하지 않는다.
+`Constraints`는 필요할 때 `Scope`와 `Non-Goals` 사이에 추가할 수 있는 유일한 선택 H2이다. Implementation-facing technical design을 승인 baseline에 포함할 때 `Constraints` 아래 `### Normative Design Documents` 목록에 repository 안의 existing regular Markdown file인 exact project-relative path를 열거한다. 이 목록과 design documents는 `.proofline/` schema가 아니며 목록 부재는 validation 실패가 아니다. REQ 본문은 AC의 Criterion 또는 Verification을 복제하지 않는다.
 
 ## AC 문서 schema
 
