@@ -71,6 +71,7 @@ def test_built_wheel_contains_exact_skill_and_contract_resources(
         assert "proofline_schema_v1_templates/project/identities.json" in names
         assert "skills/proofline-start-requirement/SKILL.md" in names
         assert "skills/proofline-maintain-design-docs/SKILL.md" in names
+        assert "skills/proofline-review-specification/SKILL.md" in names
         assert (
             "skills/proofline-maintain-design-docs/templates/interface-contract.md"
             in names
@@ -98,13 +99,14 @@ def test_built_wheel_contains_exact_skill_and_contract_resources(
                 )
 
 
-def test_built_wheel_design_skill_payload_reaches_registered_agent_targets(
+def test_built_wheel_changed_skill_payload_reaches_registered_agent_targets(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     wheel = _wheel(tmp_path)
     payload = updater.skill_payload_from_wheel(wheel, "0.9.0")
     relative_paths = (
+        "proofline-review-specification/SKILL.md",
         "proofline-maintain-design-docs/SKILL.md",
         "proofline-maintain-design-docs/templates/interface-contract.md",
         "proofline-maintain-design-docs/templates/data-model.md",

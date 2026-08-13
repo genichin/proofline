@@ -16,6 +16,7 @@ SKILLS = (
     "skills/proofline-start-requirement/SKILL.md",
     "skills/proofline-approve-specification/SKILL.md",
     "skills/proofline-maintain-design-docs/SKILL.md",
+    "skills/proofline-review-specification/SKILL.md",
 )
 KOREAN_GUIDANCE = "사람이 작성하는 본문은 원칙적으로 한국어로 작성"
 ENGLISH_EXCEPTIONS = (
