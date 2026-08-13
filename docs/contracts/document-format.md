@@ -2,6 +2,8 @@
 
 이 문서는 Line, Discovery, REQ와 AC의 공통 YAML frontmatter, Markdown, metadata와 placeholder 규칙을 정의한다. 경로와 identity는 [산출물 디렉터리 구조](../artifact-layout.md)를 따른다.
 
+`line-NNNN/evidence/*.md`는 UTF-8 regular Markdown이어야 하지만 canonical artifact가 아니므로 이 문서의 frontmatter, heading, metadata와 placeholder 규칙을 적용하지 않는다. Validator는 해당 파일을 UTF-8로 안전하게 읽을 수 있는지만 확인하고 canonical artifact로 승격하거나 lifecycle 의미를 추론하지 않는다.
+
 ## 공통 형식
 
 Canonical artifact는 UTF-8 Markdown과 YAML frontmatter를 사용한다.

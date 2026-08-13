@@ -22,7 +22,7 @@ Project migration, Line 생성과 Requirement 생성은 같은 Git common-direct
 - Canonical 상태, validation 또는 approval의 입력으로 사용하지 않는다.
 - 내용이 충돌하면 `.proofline/criteria/ac-*.md`를 우선한다.
 
-Canonical tree에는 임시 파일, cache, 원시 대화·debug log, credential, token과 프로젝트 외 참고 자료를 저장하지 않는다.
+Canonical tree에는 임시 파일, cache, 원시 대화·debug log, credential, token과 프로젝트 외 참고 자료를 저장하지 않는다. 예외적으로 각 `line-NNNN/evidence/`에는 해당 Line의 판단·진행·완료와 관련해 사람이 선별한 UTF-8 Markdown 참고·증적 문서를 보존할 수 있다. 이 비정식 문서는 canonical 상태나 완료의 근거가 아니며 원시 log·cache·secret 저장소로 사용하지 않는다.
 
 ## 보존과 폐기
 

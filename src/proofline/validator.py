@@ -66,6 +66,13 @@ LEGACY_RETAINED_PATHS = (
     re.compile(r"^\.proofline/lines/line-((?!0000)\d{4})/legacy-migration-\1\.md$"),
 )
 
+EVIDENCE_DIRECTORY = re.compile(
+    r"^\.proofline/lines/line-(?!0000)\d{4}/evidence$"
+)
+EVIDENCE_PATH = re.compile(
+    r"^\.proofline/lines/line-(?!0000)\d{4}/evidence/[^/]+\.md$"
+)
+
 LEGACY_CRITERIA_KEYS = {"create", "update", "retire"}
 CURRENT_CRITERIA_KEYS = LEGACY_CRITERIA_KEYS | {"satisfy"}
 
@@ -80,6 +87,10 @@ def _artifact_kind(path: Path) -> str | None:
 
 def _is_legacy_retained_path(relative: str) -> bool:
     return any(pattern.fullmatch(relative) for pattern in LEGACY_RETAINED_PATHS)
+
+
+def _is_evidence_path(relative: str) -> bool:
+    return EVIDENCE_PATH.fullmatch(relative) is not None
 
 
 def _headings(body: str) -> tuple[list[str], list[str]]:
@@ -176,6 +187,7 @@ def _validate_topology(root: Path) -> list[ValidationError]:
         re.compile(r"^\.proofline/(?:lines|criteria)$"),
         re.compile(r"^\.proofline/lines/line-(?!0000)\d{4}$"),
         re.compile(r"^\.proofline/lines/line-(?!0000)\d{4}/micro-specs$"),
+        EVIDENCE_DIRECTORY,
     )
     markers = SUPPORT_MARKERS
     artifact_root = root / ".proofline"
@@ -302,6 +314,20 @@ def _validate_topology(root: Path) -> list[ValidationError]:
         if stat.S_ISREG(state.st_mode) and (
             path.suffix == ".md" or relative in {ALLOCATOR_PATH, LEGACY_PATH}
         ):
+            if _is_evidence_path(relative):
+                try:
+                    snapshot = read_regular_beneath(root, relative)
+                    if snapshot.identity != (state.st_dev, state.st_ino):
+                        raise OSError("evidence changed while opening")
+                    snapshot.data.decode("utf-8")
+                except (OSError, UnicodeError):
+                    errors.append(
+                        ValidationError(
+                            relative,
+                            "evidence.read",
+                            "비정식 evidence를 UTF-8 text로 읽을 수 없습니다.",
+                        )
+                    )
             continue
         errors.append(
             ValidationError(
@@ -344,6 +370,8 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
         ):
             continue
         if _is_legacy_retained_path(relative):
+            continue
+        if _is_evidence_path(relative):
             continue
         kind = _artifact_kind(path)
         if kind is None:

@@ -6,7 +6,7 @@
 
 - 모든 경로는 적용 대상 Git 저장소 root를 기준으로 한다.
 - 프로젝트 설정은 `proofline.yaml`, 영속 project artifact는 `.proofline/`에 둔다.
-- 현재 canonical artifact 범위는 Line, Discovery, REQ와 AC뿐이다.
+- 현재 canonical artifact 범위는 Line, Discovery, REQ와 AC뿐이다. 각 Line의 `evidence/`는 비정식 참고 문서용 예약 경계이며 canonical artifact가 아니다.
 - Canonical artifact는 Git으로 추적하되 ProofLine validator의 보증 범위는 검증 대상 tree의 구조와 내용이다.
 - 설치된 `proofline_resources`는 immutable contract·template·operation·skill 원본이며 project artifact topology에 포함되지 않는다. 등록된 agent skill의 변경 상태는 운영체제 기본 사용자 상태 디렉터리에 둔다.
 - 임시 파일, 실행 log와 cache를 canonical tree에 저장하지 않는다.
@@ -40,6 +40,7 @@ Line directory  .proofline/lines/line-<NNNN>/
 Line artifact   .proofline/lines/line-<NNNN>/line-<NNNN>.md
 Discovery       .proofline/lines/line-<NNNN>/dcy-<NNNN>.md
 REQ             .proofline/lines/line-<NNNN>/req-<NNNN>.md
+Evidence        .proofline/lines/line-<NNNN>/evidence/*.md
 AC              .proofline/criteria/ac-<NNNN>.md
 ```
 
@@ -62,7 +63,9 @@ AC              .proofline/criteria/ac-<NNNN>.md
     │   └── line-0001/
     │       ├── line-0001.md
     │       ├── dcy-0001.md
-    │       └── req-0001.md
+    │       ├── req-0001.md
+    │       └── evidence/
+    │           └── implementation-progress.md
     └── criteria/
         ├── .gitkeep
         ├── ac-0001.md
@@ -70,6 +73,8 @@ AC              .proofline/criteria/ac-<NNNN>.md
 ```
 
 `.proofline/identities.json`은 exact `schema_version`, `next_line_number`, `next_ac_number` key를 가진 유일한 신규 allocation authority다. Counter `10000`은 소진 sentinel이며 실제 할당 범위는 `0001`부터 `9999`까지다. AC는 특정 Line directory에 복사하거나 소유시키지 않는다. `.proofline/lines/.gitkeep`과 `.proofline/criteria/.gitkeep`은 empty directory 보존용 zero-byte support marker이며 lifecycle artifact가 아니다.
+
+`evidence/`에는 바로 아래 UTF-8 regular Markdown file만 허용한다. 경로 자체가 비정식 문서임을 나타내므로 별도 frontmatter를 요구하지 않는다. Nested directory, symlink, non-Markdown과 non-regular file은 허용하지 않으며 Line root의 임의 파일·directory 허용으로 확장하지 않는다. 파일명이나 내용이 canonical ID, status, `PASS`, `approved`, `delivered`, `released`처럼 보여도 canonical registry·reference·allocator·lifecycle·approval·worktree readiness·파생 요구사항 입력으로 해석하지 않는다.
 
 ## Opaque retained data compatibility
 

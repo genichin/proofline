@@ -104,7 +104,7 @@ def test_built_wheel_changed_skill_payload_reaches_registered_agent_targets(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     wheel = _wheel(tmp_path)
-    payload = updater.skill_payload_from_wheel(wheel, "0.9.0")
+    payload = updater.skill_payload_from_wheel(wheel, "0.9.1")
     relative_paths = (
         "proofline-review-specification/SKILL.md",
         "proofline-maintain-design-docs/SKILL.md",
