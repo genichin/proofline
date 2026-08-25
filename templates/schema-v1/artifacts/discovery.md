@@ -11,25 +11,30 @@ status: draft
 
 ## Evidence
 
-- {{NEEDS_EVIDENCE: 문제와 현재 상태를 입증하는 저장소 경로, 실행 결과, 관찰 또는 외부 근거를 기록한다}}
+- `E-001` {{NEEDS_EVIDENCE: 문제와 현재 상태를 입증하는 저장소 경로, 실행 결과, 관찰 또는 외부 근거를 기록한다}}
+- `E-002` {{NEEDS_EVIDENCE: 추가 근거가 있으면 연속 번호로 기록한다}}
 
 ## Scope
 
-- {{TODO: 이번 Discovery에서 다룰 동작과 경계 및 create/update/retire/satisfy/release evidence/housekeeping 분류를 작성한다}}
+- `S-001` {{TODO: 이번 Discovery에서 다룰 동작과 경계 및 create/update/retire/satisfy/release evidence/housekeeping 분류를 작성한다}}
+- `S-002` {{TODO: 추가 범위가 있으면 연속 번호로 기록한다}}
 
 ## Out of Scope
 
-- {{TODO: 의도적으로 제외하는 범위를 작성하거나 제외 범위가 없으면 `없음`으로 교체한다}}
+- `OS-001` {{TODO: 의도적으로 제외하는 범위를 작성한다}}
+- `OS-002` {{TODO: 추가 제외 범위가 있으면 연속 번호로 기록하고, 제외 범위가 없으면 `없음`으로 교체한다}}
 
 ## Risks and Unknowns
 
 ### Risks
 
-- {{TODO: 주요 위험·제약·의존성과 영향 및 완화 방향을 작성하거나 이 H3를 제거한다}}
+- `R-001` {{TODO: 주요 위험·제약·의존성과 영향 및 완화 방향을 작성한다}}
+- `R-002` {{TODO: 추가 위험이 있으면 연속 번호로 기록하거나 이 H3를 제거한다}}
 
 ### Assumptions
 
-- {{UNKNOWN: 현재 판단의 전제와 확인 방법을 작성하거나 이 H3를 제거한다}}
+- `A-001` {{UNKNOWN: 현재 판단의 전제와 확인 방법을 작성한다}}
+- `A-002` {{UNKNOWN: 추가 전제가 있으면 연속 번호로 기록하거나 이 H3를 제거한다}}
 
 ### Open Questions
 
