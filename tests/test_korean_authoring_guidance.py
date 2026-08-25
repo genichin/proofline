@@ -18,7 +18,7 @@ SKILLS = (
     "skills/proofline-maintain-design-docs/SKILL.md",
     "skills/proofline-review-specification/SKILL.md",
 )
-KOREAN_GUIDANCE = "사람이 작성하는 본문은 원칙적으로 한국어로 작성"
+KOREAN_GUIDANCE = "본문은 원칙적으로 한국어로 작성한다"
 ENGLISH_EXCEPTIONS = (
     "H1 제목·구조적 heading, ID, status, YAML key, CLI, 코드, path, "
     "고유 기술 용어 및 영어가 의미를 더 정확하게 전달하는 내용은 영어로 유지"

@@ -31,7 +31,7 @@ Draft artifact도 H1과 필수 H2를 모두 가져야 한다. 미완성 section�
 
 ## Authored-content language guidance
 
-사람이 작성하는 본문은 원칙적으로 한국어로 작성한다. H1 제목·구조적 heading, ID, status, YAML key, CLI, 코드, path, 고유 기술 용어 및 영어가 의미를 더 정확하게 전달하는 내용은 영어로 유지할 수 있다.
+본문은 원칙적으로 한국어로 작성한다. 영어를 단순히 단어만 한국어로 대체하는것이 아닌 자연스러운 한국어 표현으로 작성하여야한다. H1 제목·구조적 heading, ID, status, YAML key, CLI, 코드, path, 고유 기술 용어 및 영어가 의미를 더 정확하게 전달하는 내용은 영어로 유지할 수 있다.
 
 이 원칙은 authoring guidance이며 자연어 validation gate가 아니다. Validator, QC와 CI는 artifact의 한국어 여부만으로 구조적으로 유효한 artifact를 실패시키지 않는다. Source template·contract·skill과 wheel·initialized HOME resource의 지침 및 bytes 정합은 검사할 수 있지만 개별 artifact 본문의 언어를 PASS/FAIL 조건으로 사용하지 않는다.
 
