@@ -19,13 +19,13 @@ Canonical artifact는 UTF-8 Markdown과 YAML frontmatter를 사용한다.
 - Frontmatter는 첫 줄의 `---`로 시작하고 `---`로 종료한다.
 - 모든 artifact의 `id`는 파일명과 일치해야 한다.
 - Line 내부 artifact 번호는 상위 `line-<NNNN>/` 번호와 일치해야 한다.
-- Status-bearing artifact의 status와 reference는 각 artifact contract가 정의한 값과 canonical artifact만 사용한다. Line은 status를 갖지 않는다.
+- Status-bearing artifact의 status와 reference는 각 artifact contract가 정의한 값과 canonical artifact만 사용한다. Line의 선택 `status`는 정보 표시이며 lifecycle status가 아니다.
 - `created_at`, `updated_at`, `author`, `owner`, `branch` 등 Git 또는 외부 시스템이 소유하는 metadata는 추가하지 않는다.
 - 정의되지 않은 frontmatter key와 `x-*` extension은 금지한다.
 
 ## Markdown 규칙
 
-Line은 frontmatter-only이다. Discovery, REQ와 AC는 정확히 하나의 H1을 가지며 각 artifact contract가 정의한 필수 H2를 이름과 순서대로 한 번씩 사용한다. H3 이하 heading, list와 checklist는 소유 H2 안에서 사용할 수 있다.
+Line은 선택 활동 본문을 가질 수 있다. Discovery, REQ와 AC는 정확히 하나의 H1을 가지며 각 artifact contract가 정의한 필수 H2를 이름과 순서대로 한 번씩 사용한다. H3 이하 heading, list와 checklist는 소유 H2 안에서 사용할 수 있다.
 
 Draft artifact도 H1과 필수 H2를 모두 가져야 한다. 미완성 section은 비우지 않고 허용된 governance placeholder를 사용한다. `confirmed`, `approved`, `active` 또는 `retired`로 전환하기 전에는 필수 section에 실질적인 내용이 있고 placeholder가 없어야 한다. `withdrawn` artifact는 철회 시점의 미완성 내용을 보존할 수 있다.
 

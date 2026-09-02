@@ -101,4 +101,4 @@ def test_structurally_valid_english_authored_content_is_not_rejected(tmp_path: P
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stderr == ""
+    assert "line.status.missing" in result.stderr

@@ -60,5 +60,27 @@ def test_cli_validates_minimal_fixture_without_modifying_inputs() -> None:
         if path.is_file()
     }
     assert result.returncode == 0, result.stderr
-    assert result.stderr == ""
+    assert result.stderr == (
+        "warning: .proofline/lines/line-0001/line-0001.md: "
+        "line.status.missing: Line status가 없습니다.\n"
+    )
     assert after == before
+
+
+def test_cli_does_not_warn_when_line_status_exists(tmp_path: Path) -> None:
+    import shutil
+
+    fixture = tmp_path / "project"
+    shutil.copytree(FIXTURE, fixture)
+    line = fixture / ".proofline/lines/line-0001/line-0001.md"
+    line.write_text(
+        line.read_text(encoding="utf-8").replace(
+            "id: line-0001", "id: line-0001\nstatus: custom"
+        ),
+        encoding="utf-8",
+    )
+
+    result = run_validate(fixture)
+
+    assert result.returncode == 0
+    assert result.stderr == ""

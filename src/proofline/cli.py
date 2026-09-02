@@ -30,7 +30,7 @@ from proofline.requirement_writer import (
     initialize_requirement,
 )
 from proofline.updater import UpdateError, UpdateResult, run_update  # noqa: F401
-from proofline.validator import validate_project
+from proofline.validator import validate_project, validate_project_warnings
 
 
 class _VersionAction(argparse.Action):
@@ -110,6 +110,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "validate":
         root = Path.cwd()
         errors = validate_project(root)
+        warnings = validate_project_warnings(root)
+        for warning in warnings:
+            print(
+                f"warning: {warning.path}: {warning.code}: {warning.message}",
+                file=sys.stderr,
+            )
         for error in errors:
             print(f"{error.path}: {error.code}: {error.message}", file=sys.stderr)
         return 1 if errors else 0

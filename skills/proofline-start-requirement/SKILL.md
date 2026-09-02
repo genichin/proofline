@@ -14,7 +14,7 @@ metadata:
 
 ## Preconditions
 
-- Matching `line-NNNN`은 id-only Line이어야 한다.
+- Matching `line-NNNN`은 stable `id`와 선택 표시 `status`·활동 본문 또는 허용된 legacy metadata만 가져야 한다.
 - Matching Discovery는 사용자가 확인한 `confirmed` 상태여야 한다.
 - 같은 Line의 `req-NNNN.md`는 없어야 한다.
 - 이 skill은 REQ나 AC를 승인하지 않는다.

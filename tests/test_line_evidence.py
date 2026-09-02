@@ -198,6 +198,55 @@ def run_installed(executable: Path, project: Path) -> tuple[int, str]:
     return completed.returncode, completed.stderr
 
 
+def test_installed_wheel_line_status_and_body_matrix(
+    tmp_path: Path, installed_proofline: Path
+) -> None:
+    project = tmp_path / "installed-line-status"
+    project.mkdir()
+    subprocess.run(
+        ["git", "init", "-q", "-b", "main"], cwd=project, check=True
+    )
+    initialized = subprocess.run(
+        [str(installed_proofline), "project", "init"],
+        cwd=project,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert initialized.returncode == 0, initialized.stderr
+    created = subprocess.run(
+        [str(installed_proofline), "line", "init", "--title", "Wheel matrix"],
+        cwd=project,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert created.returncode == 0, created.stderr
+
+    line = project / ".proofline/lines/line-0001/line-0001.md"
+    assert line.read_text(encoding="utf-8") == (
+        '---\nid: "line-0001"\nstatus: discovery\n---\n'
+    )
+
+    line.write_text(
+        "---\nid: line-0001\nstatus: arbitrary-value\n---\n\n"
+        "# Activity\n\n- 로그: [activity-log.md](evidence/activity-log.md)\n",
+        encoding="utf-8",
+    )
+    code, stderr = run_installed(installed_proofline, project)
+    assert code == 0
+    assert "line.status.missing" not in stderr
+
+    line.write_text(
+        "---\nid: line-0001\nunknown: value\n---\n",
+        encoding="utf-8",
+    )
+    code, stderr = run_installed(installed_proofline, project)
+    assert code == 1
+    assert "line.status.missing" in stderr
+    assert "artifact.unknown-field" in stderr
+
+
 def test_installed_wheel_cli_matches_source_evidence_matrix(
     tmp_path: Path, installed_proofline: Path
 ) -> None:
@@ -206,7 +255,9 @@ def test_installed_wheel_cli_matches_source_evidence_matrix(
     valid_evidence.mkdir()
     (valid_evidence / "claim.md").write_text("approved PASS\n", encoding="utf-8")
     assert validate_project(valid) == []
-    assert run_installed(installed_proofline, valid) == (0, "")
+    code, stderr = run_installed(installed_proofline, valid)
+    assert code == 0
+    assert "line.status.missing" in stderr
 
     invalid_utf8 = make_project(tmp_path / "invalid-utf8")
     invalid_path = invalid_utf8 / ".proofline/lines/line-0001/evidence/invalid.md"

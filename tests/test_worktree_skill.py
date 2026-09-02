@@ -153,6 +153,22 @@ def test_worktree_skill_contract_is_optional_and_create_only() -> None:
         "Main에서는",
         "다른 agent·subagent에게 인계하기로 선택한 경우에만",
         "현재 agent가 생성된 worktree에서 계속하기로 선택하면",
+        ".proofline/lines/line-NNNN/evidence/activity-log.md",
+        "계획",
+        "TODO",
+        "진행 상황",
+        "blocker",
+        "주요 결정",
+        "검증 결과",
+        "다음 행동",
+        "기존 chronology",
+        "외부 동시 변경",
+        "자동 삭제",
+        "요약 교체",
+        "분할하지 않는다",
+        "비정본 참고 문서",
+        "상대 링크",
+        "원시 transcript",
     ):
         assert required in body
     for forbidden in (
@@ -168,6 +184,48 @@ def test_worktree_skill_contract_is_optional_and_create_only() -> None:
     helper = HELPER.read_text(encoding="utf-8")
     assert "--show-object-format" not in helper
     assert "OID_LENGTH" not in helper
+
+
+def test_documented_activity_log_append_preserves_chronology_and_relative_link(
+    tmp_path: Path,
+) -> None:
+    line = tmp_path / ".proofline/lines/line-0001"
+    evidence = line / "evidence"
+    evidence.mkdir(parents=True)
+    log = evidence / "activity-log.md"
+    initial = b"# Activity Log\n\n## initial\n\n- existing bytes\n"
+    log.write_bytes(initial)
+
+    observed = log.read_bytes()
+    first = b"\n## first agent append\n\n- next action: verify\n"
+    assert log.read_bytes() == observed
+    with log.open("ab") as stream:
+        stream.write(first)
+
+    stale = log.read_bytes()
+    external = b"\n## external append\n\n- blocker: none\n"
+    with log.open("ab") as stream:
+        stream.write(external)
+    assert log.read_bytes() != stale
+
+    latest = log.read_bytes()
+    second = b"\n## second agent append\n\n- result: PASS\n"
+    assert log.read_bytes() == latest
+    with log.open("ab") as stream:
+        stream.write(second)
+
+    body = (
+        "---\nid: line-0001\nstatus: implementation\n---\n\n"
+        "# Activity\n\n"
+        "- 최근 활동: 검증 완료\n"
+        "- 로그: [activity-log.md](evidence/activity-log.md)\n"
+    )
+    (line / "line-0001.md").write_text(body, encoding="utf-8")
+
+    assert log.read_bytes() == initial + first + external + second
+    assert log.read_bytes().index(first) < log.read_bytes().index(external)
+    assert log.read_bytes().index(external) < log.read_bytes().index(second)
+    assert "(evidence/activity-log.md)" in body
 
 
 def test_approval_skill_offers_worktree_as_optional_next_action() -> None:

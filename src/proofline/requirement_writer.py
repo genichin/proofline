@@ -235,8 +235,13 @@ def _initialize_requirement(project_root: Path, line_id: str, manifest_path: Pat
         req_path = root / f".proofline/lines/{line_id}/req-{suffix}.md"
         line_frontmatter, _, line_snapshot = _frontmatter(line_path, require_h1=False)
         discovery_frontmatter, title, discovery_snapshot = _frontmatter(discovery_path)
-        if line_frontmatter != {"id": line_id}:
-            raise RequirementInitError("line.binding.invalid", line_path.relative_to(root).as_posix(), "id-only matching Line이 필요합니다.")
+        line_fields = {"id", "status", "execution_status", "implementation_history"}
+        if line_frontmatter.get("id") != line_id or set(line_frontmatter) - line_fields:
+            raise RequirementInitError(
+                "line.binding.invalid",
+                line_path.relative_to(root).as_posix(),
+                "matching Line identity와 허용된 표시·호환 metadata가 필요합니다.",
+            )
         if discovery_frontmatter.get("id") != f"dcy-{suffix}" or discovery_frontmatter.get("status") != "confirmed":
             raise RequirementInitError("discovery.unconfirmed", discovery_path.relative_to(root).as_posix(), "matching confirmed Discovery가 필요합니다.")
         if os.path.lexists(req_path):

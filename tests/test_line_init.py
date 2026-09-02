@@ -60,7 +60,9 @@ def test_line_init_auto_allocates_consecutive_ids_and_valid_artifacts(tmp_path: 
     second = initialize_line(root, "Second")
     assert first.line_id == "line-0001"
     assert second.line_id == "line-0002"
-    assert (root / first.paths[0]).read_text().startswith('---\nid: "line-0001"')
+    assert (root / first.paths[0]).read_text() == (
+        '---\nid: "line-0001"\nstatus: discovery\n---\n'
+    )
     assert "# 첫 Line" in (root / first.paths[1]).read_text()
     assert decode_allocator((root / ".proofline/identities.json").read_bytes()) == IdentityAllocator(3, 1)
     assert validate_project(root) == []

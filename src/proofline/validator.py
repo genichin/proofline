@@ -19,6 +19,13 @@ class ValidationError:
     message: str
 
 
+@dataclass(frozen=True, order=True)
+class ValidationWarning:
+    path: str
+    code: str
+    message: str
+
+
 ARTIFACT_FIELDS = {
     "line": {"id"},
     "dcy": {"id", "status"},
@@ -26,8 +33,8 @@ ARTIFACT_FIELDS = {
     "ac": {"id", "status"},
 }
 
-LEGACY_OPTIONAL_FIELDS = {
-    "line": {"execution_status", "implementation_history"},
+ARTIFACT_OPTIONAL_FIELDS = {
+    "line": {"status", "execution_status", "implementation_history"},
 }
 
 ARTIFACT_STATUSES = {
@@ -112,7 +119,7 @@ def _headings(body: str) -> tuple[list[str], list[str]]:
 
 def _headings_are_valid(kind: str, body: str) -> bool:
     if kind == "line":
-        return not body.strip()
+        return True
     h1, h2 = _headings(body)
     if len(h1) != 1:
         return False
@@ -447,7 +454,7 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
                     f"필수 YAML 머리말 항목이 없습니다: {', '.join(sorted(missing))}",
                 )
             )
-        allowed_fields = ARTIFACT_FIELDS[kind] | LEGACY_OPTIONAL_FIELDS.get(kind, set())
+        allowed_fields = ARTIFACT_FIELDS[kind] | ARTIFACT_OPTIONAL_FIELDS.get(kind, set())
         if set(frontmatter) - allowed_fields:
             errors.append(
                 ValidationError(
@@ -562,6 +569,39 @@ def _validate_artifacts(root: Path) -> list[ValidationError]:
                 )
     errors.extend(_validate_criteria_bindings(root, artifacts))
     return errors
+
+
+def validate_project_warnings(root: Path) -> list[ValidationWarning]:
+    warnings: list[ValidationWarning] = []
+    lines_root = root / ".proofline/lines"
+    try:
+        candidates = sorted(lines_root.glob("line-*/line-*.md"))
+    except OSError:
+        return warnings
+    for path in candidates:
+        relative = path.relative_to(root).as_posix()
+        if ARTIFACT_PATHS["line"].fullmatch(relative) is None:
+            continue
+        try:
+            state = path.stat(follow_symlinks=False)
+            if stat.S_ISLNK(state.st_mode) or not stat.S_ISREG(state.st_mode):
+                continue
+            lines = read_regular_beneath(root, relative).data.decode("utf-8").splitlines()
+            if not lines or lines[0] != "---" or "---" not in lines[1:]:
+                continue
+            closing = lines.index("---", 1)
+            frontmatter = safe_load_unique("\n".join(lines[1:closing]))
+        except (OSError, UnicodeError, yaml.YAMLError):
+            continue
+        if isinstance(frontmatter, dict) and "status" not in frontmatter:
+            warnings.append(
+                ValidationWarning(
+                    relative,
+                    "line.status.missing",
+                    "Line status가 없습니다.",
+                )
+            )
+    return warnings
 
 
 def _git_output(root: Path, *arguments: str) -> bytes | None:

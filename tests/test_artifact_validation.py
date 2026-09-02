@@ -145,6 +145,17 @@ def test_line_accepts_opaque_deprecated_metadata(tmp_path: Path) -> None:
     assert _validate_schema_candidate(project) == []
 
 
+def test_line_accepts_arbitrary_informational_status(tmp_path: Path) -> None:
+    project = copy_valid_project(tmp_path)
+    artifact = project / ".proofline/lines/line-0001/line-0001.md"
+    artifact.write_text(
+        '---\nid: "line-0001"\nstatus: any-project-label\n---\n',
+        encoding="utf-8",
+    )
+
+    assert _validate_schema_candidate(project) == []
+
+
 def test_line_rejects_noncanonical_field(tmp_path: Path) -> None:
     project = copy_valid_project(tmp_path)
     artifact = project / ".proofline/lines/line-0001/line-0001.md"
@@ -262,12 +273,17 @@ def test_invalid_placeholder_name_is_rejected_in_draft(tmp_path: Path) -> None:
     assert_error(project, artifact, "artifact.placeholder")
 
 
-def test_line_artifact_body_is_rejected(tmp_path: Path) -> None:
+def test_line_artifact_accepts_activity_summary_and_relative_link(tmp_path: Path) -> None:
     project = copy_valid_project(tmp_path)
     artifact = project / ".proofline/lines/line-0001/line-0001.md"
-    artifact.write_text(artifact.read_text(encoding="utf-8") + "\n# 본문\n", encoding="utf-8")
+    artifact.write_text(
+        artifact.read_text(encoding="utf-8")
+        + "\n# Activity\n\n- 최근 활동: 구현 시작\n"
+        + "- 로그: [activity-log.md](evidence/activity-log.md)\n",
+        encoding="utf-8",
+    )
 
-    assert_error(project, artifact, "artifact.headings")
+    assert _validate_schema_candidate(project) == []
 
 
 def test_malformed_artifact_frontmatter_is_reported(tmp_path: Path) -> None:

@@ -34,6 +34,8 @@ def test_approval_skill_has_single_user_authorized_workflow() -> None:
         "exact document contents",
         "별도 lifecycle status",
         "관련 REQ와 영향받는 AC를 `draft`",
+        ".proofline/lines/line-NNNN/evidence/activity-log.md",
+        "main에서 직접 구현",
     ):
         assert required in body
     for removed in (

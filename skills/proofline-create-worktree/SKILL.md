@@ -49,6 +49,12 @@ JSON과 reasons를 사용자에게 제시한 뒤 다음 선택을 기다린다.
 
 어느 선택도 자동 선택하거나 필수로 만들지 않는다.
 
+## Implementation Activity Log
+
+Worktree 생성 여부와 관계없이 구현을 시작하고 의미 있게 진행·중단·검증·인계할 때 `.proofline/lines/line-NNNN/evidence/activity-log.md`에 사용자 참고용 항목을 append한다. 각 항목에는 시각, 작성 주체 또는 세션, 구분, 계획·TODO·진행 상황·blocker·주요 결정·검증 결과 중 해당 내용과 다음 행동을 간결하게 기록한다. 기존 chronology와 외부 동시 변경을 덮어쓰지 않으며 변경이 감지되면 최신 내용을 다시 읽고 append한다. 원시 transcript, 내부 추론, debug log, credential과 개인정보는 기록하지 않는다.
+
+로그가 생성된 Line 본문에는 최근 활동 요약과 `evidence/activity-log.md` 상대 링크를 표시한다. 로그는 비정본 참고 문서이며 validation, 구현 완료 또는 delivery 판정의 입력이 아니다. 같은 파일에 append하고 자동 삭제·기간 만료·요약 교체·분할하지 않는다.
+
 ## Collision Boundary
 
 Target local branch, target filesystem path 또는 target branch/path registration collision이 있으면 mutation command를 실행하지 않고 충돌을 보고한다. `recommendation: review`의 다른 reason은 먼저 사용자에게 제시하고, **사용자가 명시적으로 생성을 선택**한 경우에만 다음 절차를 진행할 수 있다.

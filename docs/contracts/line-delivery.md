@@ -10,17 +10,20 @@ Line은 하나의 변경 논의에서 Discovery와 REQ를 묶는 안정적인 id
 .proofline/lines/line-<NNNN>/line-<NNNN>.md
 ```
 
-Line은 작업, 검증, 통합 또는 delivery 상태를 소유하지 않는다. 이러한 운영 상태와 절차는 적용 프로젝트가 필요에 따라 별도 시스템에서 관리하며 ProofLine validator의 보증 범위가 아니다.
+Line은 작업, 검증, 통합 또는 delivery 상태를 보증하지 않는다. 선택 `status`와 활동 본문은 사람이 현재 진행 단계와 최근 활동을 빠르게 확인하기 위한 정보 표시이며 완료 증거 또는 gate가 아니다.
 
 ## Line 문서 schema
 
 ```yaml
 ---
 id: line-0001
+status: discovery
 ---
 ```
 
-필수 field는 `id` 하나이다. `id`는 파일명과 상위 Line directory 번호에 일치해야 한다. Line artifact는 frontmatter-only이며 닫는 delimiter 뒤에는 공백과 마지막 newline 외의 내용을 기록하지 않는다.
+필수 field는 `id` 하나이며 `status`는 선택 field이다. `status`의 권장 값은 `discovery`, `specification`, `implementation`, `verification`, `release`, `retired`이고 일반적인 표시 순서는 이 목록의 순서다. Validator는 값이나 transition을 검사하지 않으며 field가 없으면 validation을 실패시키지 않는 `line.status.missing` warning만 출력한다. `id`는 파일명과 상위 Line directory 번호에 일치해야 한다.
+
+Line은 활동 로그가 생성된 경우 최근 활동 요약과 `evidence/activity-log.md` 상대 링크를 담은 선택 Markdown 본문을 가질 수 있다. 본문과 링크의 존재·최신성·내용은 validator warning 또는 error의 입력이 아니다.
 
 ## Opaque retained metadata
 

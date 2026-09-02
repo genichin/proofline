@@ -32,6 +32,14 @@ def test_start_line_skill_requires_scaffold_before_evidence_authoring() -> None:
         assert f"`{heading}`" in text
 
 
+def test_start_line_skill_describes_initial_informational_status() -> None:
+    text = SKILL.read_text(encoding="utf-8")
+
+    assert "`id`와 정보 표시용 `status: discovery`" in text
+    assert "Line artifact는 stable `id`만 가진다" not in text
+    assert "Line artifact는 `id`만 가진다" not in text
+
+
 def test_start_line_skill_preserves_governance_authority() -> None:
     text = SKILL.read_text()
     assert "Open Question" in text

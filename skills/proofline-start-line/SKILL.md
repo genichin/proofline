@@ -61,7 +61,7 @@ proofline line init --title "TITLE"
 .proofline/identities.json  # next_line_number 전진
 ```
 
-Line artifact는 stable `id`만 가지며 Discovery는 `status: draft`로 생성된다. CLI는 Discovery의 실질적 내용을 판단하지 않는다. 생성 직후 `proofline validate`를 실행한다.
+Line artifact는 stable `id`와 정보 표시용 `status: discovery`를 가지며 Discovery는 `status: draft`로 생성된다. CLI는 Discovery의 실질적 내용을 판단하지 않는다. 생성 직후 `proofline validate`를 실행한다.
 
 ### 3. 직접 evidence를 먼저 조사한다
 
@@ -157,7 +157,7 @@ Version·tag·checksum 같은 release-specific 표현은 review warning으로 �
 - [ ] 사용자가 제목을 명시했다.
 - [ ] Dry-run이 통과했다.
 - [ ] 두 canonical artifact가 생성되고 identity allocator만 함께 갱신됐다.
-- [ ] Line artifact는 `id`만 가진다.
+- [ ] Line artifact는 `id`와 정보 표시용 `status: discovery`를 가진다.
 - [ ] 직접 evidence를 확인한 뒤 Discovery를 작성했다.
 - [ ] create/update/retire/satisfy/release evidence/housekeeping 분류와 가장 가까운 active AC를 검토했다.
 - [ ] 필수 section이 실질적 내용을 갖거나 허용된 draft placeholder를 사용한다.

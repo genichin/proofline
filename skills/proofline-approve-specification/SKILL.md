@@ -51,6 +51,7 @@ Design documents는 별도 lifecycle status 또는 approval metadata를 갖지 �
 6. `proofline validate`로 current canonical tree를 검증한다.
 7. 승인된 REQ·AC path와 status, referenced design-document path 및 validation 결과를 사용자에게 보고한다.
 8. 구현을 계속할 경우 `proofline-create-worktree`를 **optional next action**으로 제시한다. 사용자는 worktree 생성, main에서 직접 구현 또는 여기서 중단을 선택할 수 있으며 worktree를 approval·validator·QC·CI의 필수 gate로 만들지 않는다.
+9. Main에서 직접 구현하거나 worktree에서 구현을 시작하면 `.proofline/lines/line-NNNN/evidence/activity-log.md`에 계획, TODO, 진행 상황, 검증 결과와 다음 행동을 사용자 참고용으로 append한다. 기존 chronology를 덮어쓰지 않고 원시 transcript·내부 추론·credential을 기록하지 않는다.
 
 승인된 design-document 기술 의미를 변경하려면 관련 REQ와 영향받는 AC를 `draft`로 되돌려 변경 문서와 함께 재검토·재승인한다. Agent는 document edit만으로 이 회귀나 재승인을 자동 수행하지 않는다.
 
