@@ -19,7 +19,7 @@ def test_installer_is_valid_posix_shell() -> None:
 
 def test_current_installer_is_exact_package_only_transition() -> None:
     text = INSTALLER.read_text()
-    assert 'VERSION="0.9.1"' in text
+    assert 'VERSION="0.10.0"' in text
     assert "uv venv --no-config" in text
     assert "uv pip install --no-config --python" in text
     assert "uv tool install --force --no-config" in text
@@ -49,11 +49,12 @@ def test_installer_checksum_and_stage_precede_mutation() -> None:
     assert checksum < stage < mutation
 
 
-def test_readme_documents_exact_v090_to_v091_transition() -> None:
+def test_readme_documents_exact_v091_to_v0100_transition() -> None:
     text = README.read_text()
-    command = "curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.9.1/install.sh | sh -s -- --force"
+    command = "curl -fsSL https://raw.githubusercontent.com/genichin/proofline/v0.10.0/install.sh | sh -s -- --force"
     assert command in text
-    assert "v0.9.0" in text
-    assert "line-NNNN/evidence/" in text
+    assert "v0.9.1" in text
+    assert "status: discovery" in text
+    assert "activity-log.md" in text
     assert "package만 교체" in text
     assert "과거 `~/.proofline/`" in text

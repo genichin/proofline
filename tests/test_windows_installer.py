@@ -14,8 +14,8 @@ PLAN = ROOT / ".github/resources/candidate-clean-runner-plan-v1.json"
 def test_native_installers_match_current_release() -> None:
     windows = WINDOWS_INSTALLER.read_text()
     posix = POSIX_INSTALLER.read_text()
-    assert '$VERSION = "0.9.1"' in windows
-    assert 'VERSION="0.9.1"' in posix
+    assert '$VERSION = "0.10.0"' in windows
+    assert 'VERSION="0.10.0"' in posix
     assert "genichin/proofline" in windows and "genichin/proofline" in posix
 
 
@@ -42,7 +42,7 @@ def test_windows_installer_is_checksum_first_and_fail_closed() -> None:
 def test_readme_uses_immutable_windows_installer_file() -> None:
     text = README.read_text()
     assert (
-        "https://raw.githubusercontent.com/genichin/proofline/v0.9.1/install.ps1"
+        "https://raw.githubusercontent.com/genichin/proofline/v0.10.0/install.ps1"
         in text
     )
     assert "[System.IO.Path]::GetTempPath()" in text
